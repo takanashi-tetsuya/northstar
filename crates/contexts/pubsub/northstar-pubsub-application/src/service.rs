@@ -16,23 +16,24 @@ use crate::{
     validate_pubsub_purge_node_command, validate_pubsub_retract_command,
     validate_pubsub_set_affiliations_command, validate_pubsub_set_subscriptions_command,
     validate_pubsub_subscribe_command, validate_pubsub_unsubscribe_command,
-    validate_pubsub_update_subscription_options_command, PepCommitLegacyBookmarksCommand,
-    PepCommitLegacyBookmarksResult, PepConfigureNodeCommand, PepConfigureNodeResult,
-    PepCreateNodeCommand, PepCreateNodeResult, PepDeleteNodeCommand, PepDeleteNodeResult,
-    PepPublishItemsCommand, PepPublishItemsResult, PepPurgeNodeCommand, PepPurgeNodeResult,
-    PepRetractCommand, PepRetractResult, PepSetAffiliationsCommand, PepSetAffiliationsResult,
-    PepSubscribeCommand, PepSubscribeResult, PepUnsubscribeBatchCommand, PepUnsubscribeBatchResult,
-    PepUnsubscribeCommand, PepUnsubscribeResult, PubSubAuthorizeSubscriptionCommand,
-    PubSubAuthorizeSubscriptionResult, PubSubCollectionDiscoChild, PubSubCollectionEdgeCommand,
-    PubSubCollectionEdgeOperation, PubSubCollectionEdgeResult, PubSubConfigureNodeCommand,
-    PubSubConfigureNodeResult, PubSubCreateNodeCommand, PubSubCreateNodeResult,
-    PubSubDeleteNodeCommand, PubSubDeleteNodeResult, PubSubMutationAdmission, PubSubMutationPermit,
-    PubSubOwnerRead, PubSubOwnerReadKind, PubSubPublishCommand, PubSubPublishResult,
-    PubSubPurgeNodeCommand, PubSubPurgeNodeResult, PubSubRetractCommand, PubSubRetractResult,
-    PubSubRootDiscoQuery, PubSubRootDiscoResult, PubSubSetAffiliationsCommand,
-    PubSubSetAffiliationsResult, PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsResult,
-    PubSubSubscribeCommand, PubSubSubscribeResult, PubSubSubscriptionOptionsPrecheck,
-    PubSubUnsubscribeCommand, PubSubUnsubscribeResult, PubSubUpdateSubscriptionOptionsCommand,
+    validate_pubsub_update_subscription_options_command, AutoCreatePublishOutcome,
+    PepCommitLegacyBookmarksCommand, PepCommitLegacyBookmarksResult, PepConfigureNodeCommand,
+    PepConfigureNodeResult, PepCreateNodeCommand, PepCreateNodeResult, PepDeleteNodeCommand,
+    PepDeleteNodeResult, PepPublishItemsCommand, PepPublishItemsResult, PepPurgeNodeCommand,
+    PepPurgeNodeResult, PepRetractCommand, PepRetractResult, PepSetAffiliationsCommand,
+    PepSetAffiliationsResult, PepSubscribeCommand, PepSubscribeResult, PepUnsubscribeBatchCommand,
+    PepUnsubscribeBatchResult, PepUnsubscribeCommand, PepUnsubscribeResult,
+    PubSubAuthorizeSubscriptionCommand, PubSubAuthorizeSubscriptionResult,
+    PubSubCollectionDiscoChild, PubSubCollectionEdgeCommand, PubSubCollectionEdgeOperation,
+    PubSubCollectionEdgeResult, PubSubConfigureNodeCommand, PubSubConfigureNodeResult,
+    PubSubCreateNodeCommand, PubSubCreateNodeResult, PubSubDeleteNodeCommand,
+    PubSubDeleteNodeResult, PubSubMutationAdmission, PubSubMutationPermit, PubSubOwnerRead,
+    PubSubOwnerReadKind, PubSubPublishCommand, PubSubPublishResult, PubSubPurgeNodeCommand,
+    PubSubPurgeNodeResult, PubSubRetractCommand, PubSubRetractResult, PubSubRootDiscoQuery,
+    PubSubRootDiscoResult, PubSubSetAffiliationsCommand, PubSubSetAffiliationsResult,
+    PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsResult, PubSubSubscribeCommand,
+    PubSubSubscribeResult, PubSubSubscriptionOptionsPrecheck, PubSubUnsubscribeCommand,
+    PubSubUnsubscribeResult, PubSubUpdateSubscriptionOptionsCommand,
     PubSubUpdateSubscriptionOptionsResult,
 };
 use anyhow::Result;
@@ -160,6 +161,19 @@ impl<R> PubSubService<R> {
     }
 }
 
+fn publish_result(outcome: PublishItemsOutcome, items: &[(String, String)]) -> PubSubPublishResult {
+    let outcome = match outcome {
+        PublishItemsOutcome::Published => PubSubPublishOutcome::Published {
+            item_ids: items.iter().map(|(id, _)| id.clone()).collect(),
+        },
+        PublishItemsOutcome::Conflict => PubSubPublishOutcome::Conflict,
+        PublishItemsOutcome::QuotaExceeded => PubSubPublishOutcome::QuotaExceeded,
+        PublishItemsOutcome::Forbidden => PubSubPublishOutcome::Forbidden,
+        PublishItemsOutcome::PreconditionFailed => PubSubPublishOutcome::PreconditionNotMet,
+    };
+    PubSubPublishResult { outcome }
+}
+
 impl<
         R: PubSubNodeQueryRepository
             + PubSubNodeMutationRepository
@@ -195,28 +209,45 @@ impl<
             if let Some(outcome) = publish_validation_outcome(&requested_config, write.items) {
                 return Ok(PubSubPublishResult { outcome });
             }
-            match self
-                .create_node(
-                    write.node,
-                    write.publisher_jid,
-                    &requested_config,
-                    write.max_nodes_per_owner,
-                )
-                .await?
-            {
-                CreateNodeOutcome::Created | CreateNodeOutcome::Conflict => {}
-                CreateNodeOutcome::QuotaExceeded => {
+            let outcome = {
+                let _permit = self
+                    .admit_mutation(&[write.publisher_jid, write.node], true)
+                    .await?;
+                self.repository
+                    .create_node_and_publish_items(
+                        write.node,
+                        write.publisher_jid,
+                        &requested_config,
+                        write.max_nodes_per_owner,
+                        write.items,
+                        write.max_storage_bytes_per_owner,
+                    )
+                    .await?
+            };
+            match outcome {
+                AutoCreatePublishOutcome::Published => {
+                    return Ok(publish_result(PublishItemsOutcome::Published, write.items));
+                }
+                AutoCreatePublishOutcome::NodeExists
+                | AutoCreatePublishOutcome::Create(CreateNodeOutcome::Conflict) => {}
+                AutoCreatePublishOutcome::Create(CreateNodeOutcome::QuotaExceeded) => {
                     return Ok(PubSubPublishResult {
                         outcome: PubSubPublishOutcome::QuotaExceeded,
                     });
                 }
-                CreateNodeOutcome::InvalidOptions
-                | CreateNodeOutcome::Forbidden
-                | CreateNodeOutcome::CollectionLimitExceeded
-                | CreateNodeOutcome::Cycle => {
+                AutoCreatePublishOutcome::Create(
+                    CreateNodeOutcome::InvalidOptions
+                    | CreateNodeOutcome::Forbidden
+                    | CreateNodeOutcome::CollectionLimitExceeded
+                    | CreateNodeOutcome::Cycle
+                    | CreateNodeOutcome::Created,
+                ) => {
                     return Ok(PubSubPublishResult {
                         outcome: PubSubPublishOutcome::Conflict,
                     });
+                }
+                AutoCreatePublishOutcome::Publish(outcome) => {
+                    return Ok(publish_result(outcome, write.items));
                 }
             }
             node = self.get_node(write.node).await?;
@@ -247,18 +278,7 @@ impl<
                 write.max_storage_bytes_per_owner,
             )
             .await?;
-        let pubsub_outcome = match outcome {
-            PublishItemsOutcome::Published => PubSubPublishOutcome::Published {
-                item_ids: write.items.iter().map(|(id, _)| id.clone()).collect(),
-            },
-            PublishItemsOutcome::Conflict => PubSubPublishOutcome::Conflict,
-            PublishItemsOutcome::QuotaExceeded => PubSubPublishOutcome::QuotaExceeded,
-            PublishItemsOutcome::Forbidden => PubSubPublishOutcome::Forbidden,
-            PublishItemsOutcome::PreconditionFailed => PubSubPublishOutcome::PreconditionNotMet,
-        };
-        Ok(PubSubPublishResult {
-            outcome: pubsub_outcome,
-        })
+        Ok(publish_result(outcome, write.items))
     }
     pub async fn execute_pubsub_subscribe(
         &self,

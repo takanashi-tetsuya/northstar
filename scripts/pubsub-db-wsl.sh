@@ -247,6 +247,16 @@ run_exact_ignored \
 run_exact_ignored \
   pubsub::integration::audience::mutation_audiences_are_serialized_with_subscribe_and_unsubscribe
 run_exact_ignored \
+  pubsub::integration::auto_create_publish::auto_create_publish_storage_quota_rolls_back_creation
+run_exact_ignored \
+  pubsub::integration::auto_create_publish::auto_create_publish_commits_node_items_and_ordered_events_together
+run_exact_ignored \
+  pubsub::integration::auto_create_publish::auto_create_publish_yields_to_explicit_create_during_owner_lock_wait
+run_exact_ignored \
+  pubsub::integration::auto_create_publish::auto_create_publish_outbox_capacity_rolls_back_creation
+run_exact_ignored \
+  pubsub::integration::auto_create_publish::auto_create_publish_preserves_collection_options_precondition
+run_exact_ignored \
   pubsub::integration::access_policy::concurrent_config_updates_use_a_locked_expected_snapshot
 run_exact_ignored \
   pubsub::integration::digest_lease::lease_expiry_is_evaluated_after_a_graph_lock_wait

@@ -661,6 +661,17 @@ pub enum PublishItemsOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AutoCreatePublishOutcome {
+    Published,
+    /// The transaction found an existing node and made no changes.
+    NodeExists,
+    /// Creation failed and the transaction rolled back.
+    Create(CreateNodeOutcome),
+    /// Publication failed and the transaction rolled back, including creation.
+    Publish(PublishItemsOutcome),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RetractItemsOutcome {
     Retracted,
     NotFound,

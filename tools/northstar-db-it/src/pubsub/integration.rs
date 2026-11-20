@@ -17,6 +17,8 @@ use uuid::Uuid;
 mod access_policy;
 #[path = "integration/audience_tests.rs"]
 mod audience;
+#[path = "integration/auto_create_publish_tests.rs"]
+mod auto_create_publish;
 #[path = "integration/bookmark_tests.rs"]
 mod bookmarks;
 #[path = "integration/collection_graph_tests.rs"]

@@ -351,3 +351,6 @@ async fn collection_graph_admission_serializes_distinct_owners_without_pool_wait
         .await
         .unwrap();
 }
+
+#[cfg(test)]
+mod auto_create_publish;

@@ -9,6 +9,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 mod affiliation;
+mod auto_create;
 mod collection;
 mod digest;
 mod disco;
@@ -17,6 +18,7 @@ mod node;
 mod subscription;
 
 pub use self::affiliation::*;
+pub use self::auto_create::*;
 pub use self::collection::*;
 pub use self::digest::*;
 pub use self::disco::*;

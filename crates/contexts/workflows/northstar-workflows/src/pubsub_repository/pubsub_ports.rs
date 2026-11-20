@@ -1,6 +1,7 @@
 //! PostgreSQL implementations of the PubSub node, item, subscription and affiliation repository ports.
 
 use super::*;
+use northstar_pubsub_application::AutoCreatePublishOutcome;
 
 impl PubSubNodeMutationRepository for PostgresPubSubRepository {
     async fn delete_node_as_owner_with_redirect_and_outbox(
@@ -333,6 +334,28 @@ impl PubSubItemMutationRepository for PostgresPubSubRepository {
         }
         .await;
         outcome.map_err(map_database_busy)
+    }
+    async fn create_node_and_publish_items(
+        &self,
+        node: &str,
+        publisher_jid: &str,
+        config: &PubSubNodeConfig,
+        max_nodes_per_owner: i64,
+        items: &[(String, String)],
+        max_storage_bytes_per_owner: i64,
+    ) -> Result<AutoCreatePublishOutcome> {
+        northstar_pubsub_postgres::create_node_and_publish_items_with_renderer(
+            &self.pool,
+            node,
+            publisher_jid,
+            config,
+            max_nodes_per_owner,
+            items,
+            max_storage_bytes_per_owner,
+            &self.renderer,
+        )
+        .await
+        .map_err(map_database_busy)
     }
     async fn retract_items(
         &self,

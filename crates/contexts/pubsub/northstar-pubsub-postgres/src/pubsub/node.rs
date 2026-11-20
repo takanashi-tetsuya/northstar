@@ -32,27 +32,84 @@ pub async fn create_node_with_renderer(
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     let creator_jid = northstar_xmpp_types::jid::canonical_bare_key(creator_jid)?;
     let association_whitelist = canonical_bare_jids(&config.children_association_whitelist)?;
+    lock_node_owner_quota(&mut transaction, &creator_jid).await?;
+    let outcome = match create_node_in_transaction(
+        &mut transaction,
+        node,
+        &creator_jid,
+        config,
+        &association_whitelist,
+        max_nodes_per_owner,
+        renderer,
+        false,
+    )
+    .await?
+    {
+        CreateNodeInTransactionOutcome::Created(created) => {
+            transaction.commit().await?;
+            return Ok(CreateNodeOutcome::Created(created.id));
+        }
+        CreateNodeInTransactionOutcome::NodeExists => CreateNodeOutcome::Conflict,
+        CreateNodeInTransactionOutcome::Failed(outcome) => outcome,
+    };
+    transaction.rollback().await?;
+    Ok(outcome)
+}
+
+pub(super) async fn lock_node_owner_quota(
+    transaction: &mut Transaction<'_, Postgres>,
+    creator_jid: &str,
+) -> Result<()> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(&creator_jid)
-        .execute(&mut *transaction)
+        .bind(creator_jid)
+        .execute(&mut **transaction)
         .await?;
+    Ok(())
+}
+
+pub(super) async fn lock_collection_graph(
+    transaction: &mut Transaction<'_, Postgres>,
+) -> Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('pubsub-collection-graph', 0))")
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
+pub(super) enum CreateNodeInTransactionOutcome {
+    Created(Box<PubSubNode>),
+    NodeExists,
+    Failed(CreateNodeOutcome),
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn create_node_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    node: &str,
+    creator_jid: &str,
+    config: &PubSubNodeConfig,
+    association_whitelist: &[String],
+    max_nodes_per_owner: i64,
+    renderer: &dyn PubSubMutationOutboxRenderer,
+    for_publish: bool,
+) -> Result<CreateNodeInTransactionOutcome> {
+    use CreateNodeInTransactionOutcome::{Created, Failed, NodeExists};
+
     let node_exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pubsub_nodes WHERE node = $1)")
             .bind(node)
-            .fetch_one(&mut *transaction)
+            .fetch_one(&mut **transaction)
             .await?;
     if node_exists {
-        transaction.rollback().await?;
-        return Ok(CreateNodeOutcome::Conflict);
+        return Ok(NodeExists);
     }
     let node_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM pubsub_nodes WHERE creator_jid = $1")
-            .bind(&creator_jid)
-            .fetch_one(&mut *transaction)
+            .bind(creator_jid)
+            .fetch_one(&mut **transaction)
             .await?;
     if node_count >= max_nodes_per_owner {
-        transaction.rollback().await?;
-        return Ok(CreateNodeOutcome::QuotaExceeded);
+        return Ok(Failed(CreateNodeOutcome::QuotaExceeded));
     }
     if config.node_type == "leaf" && !config.children.is_empty()
         || config.children.len() > config.children_max as usize
@@ -69,52 +126,47 @@ pub async fn create_node_with_renderer(
             .len()
             != config.children.len()
     {
-        transaction.rollback().await?;
-        return Ok(CreateNodeOutcome::InvalidOptions);
+        return Ok(Failed(CreateNodeOutcome::InvalidOptions));
     }
     let mut parent_ids = Vec::with_capacity(config.collections.len());
     let mut child_ids = Vec::with_capacity(config.children.len());
-    if !config.collections.is_empty() || !config.children.is_empty() {
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('pubsub-collection-graph', 0))")
-            .execute(&mut *transaction)
-            .await?;
+    // A combined publish needs the graph lock before the create event is
+    // enqueued, even when the new node has no edges.
+    if for_publish || !config.collections.is_empty() || !config.children.is_empty() {
+        lock_collection_graph(transaction).await?;
         for parent_name in &config.collections {
             let Some(parent) = sqlx::query("SELECT id, node_type, children_max, children_association_policy, children_association_whitelist FROM pubsub_nodes WHERE node = $1 FOR UPDATE")
                 .bind(parent_name)
-                .fetch_optional(&mut *transaction)
+                .fetch_optional(&mut **transaction)
                 .await?
             else {
-                transaction.rollback().await?;
-                return Ok(CreateNodeOutcome::InvalidOptions);
+                return Ok(Failed(CreateNodeOutcome::InvalidOptions));
             };
             if parent.get::<String, _>("node_type") != "collection" {
-                transaction.rollback().await?;
-                return Ok(CreateNodeOutcome::InvalidOptions);
+                return Ok(Failed(CreateNodeOutcome::InvalidOptions));
             }
             let parent_id: Uuid = parent.get("id");
             let owner: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pubsub_affiliations WHERE node_id = $1 AND jid = $2 AND affiliation = 'owner')")
                 .bind(parent_id)
-                .bind(&creator_jid)
-                .fetch_one(&mut *transaction)
+                .bind(creator_jid)
+                .fetch_one(&mut **transaction)
                 .await?;
             let policy: String = parent.get("children_association_policy");
             let whitelist: Vec<String> = parent.get("children_association_whitelist");
             if !(owner
                 || policy == "all"
-                || policy == "whitelist" && whitelist.iter().any(|jid| jid == &creator_jid))
+                || policy == "whitelist" && whitelist.iter().any(|jid| jid == creator_jid))
             {
-                transaction.rollback().await?;
-                return Ok(CreateNodeOutcome::Forbidden);
+                return Ok(Failed(CreateNodeOutcome::Forbidden));
             }
             let count: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM pubsub_collection_members WHERE collection_node_id = $1",
             )
             .bind(parent_id)
-            .fetch_one(&mut *transaction)
+            .fetch_one(&mut **transaction)
             .await?;
             if count >= parent.get::<i32, _>("children_max") as i64 {
-                transaction.rollback().await?;
-                return Ok(CreateNodeOutcome::CollectionLimitExceeded);
+                return Ok(Failed(CreateNodeOutcome::CollectionLimitExceeded));
             }
             parent_ids.push(parent_id);
         }
@@ -123,23 +175,19 @@ pub async fn create_node_with_renderer(
                 "SELECT id FROM pubsub_nodes WHERE node = $1 FOR UPDATE",
             )
             .bind(child_name)
-            .fetch_optional(&mut *transaction)
+            .fetch_optional(&mut **transaction)
             .await?
             else {
-                transaction.rollback().await?;
-                return Ok(CreateNodeOutcome::InvalidOptions);
+                return Ok(Failed(CreateNodeOutcome::InvalidOptions));
             };
-            match requester_owns_locked_collection_child(&mut transaction, child_id, &creator_jid)
-                .await?
+            match requester_owns_locked_collection_child(transaction, child_id, creator_jid).await?
             {
                 Some(true) => {}
                 Some(false) => {
-                    transaction.rollback().await?;
-                    return Ok(CreateNodeOutcome::Forbidden);
+                    return Ok(Failed(CreateNodeOutcome::Forbidden));
                 }
                 None => {
-                    transaction.rollback().await?;
-                    return Ok(CreateNodeOutcome::InvalidOptions);
+                    return Ok(Failed(CreateNodeOutcome::InvalidOptions));
                 }
             }
             child_ids.push(child_id);
@@ -152,11 +200,10 @@ pub async fn create_node_with_renderer(
                     ) SELECT $2 = $1 OR EXISTS(SELECT 1 FROM descendants WHERE id = $2)")
                     .bind(child_id)
                     .bind(parent_id)
-                    .fetch_one(&mut *transaction)
+                    .fetch_one(&mut **transaction)
                     .await?;
                 if would_cycle {
-                    transaction.rollback().await?;
-                    return Ok(CreateNodeOutcome::Cycle);
+                    return Ok(Failed(CreateNodeOutcome::Cycle));
                 }
             }
         }
@@ -167,7 +214,7 @@ pub async fn create_node_with_renderer(
     )
     .bind(id)
     .bind(node)
-    .bind(&creator_jid)
+    .bind(creator_jid)
     .bind(&config.access_model)
     .bind(&config.publish_model)
     .bind(config.max_items)
@@ -187,68 +234,63 @@ pub async fn create_node_with_renderer(
     .bind(config.max_payload_size)
     .bind(config.children_max)
     .bind(&config.children_association_policy)
-    .bind(&association_whitelist)
-    .execute(&mut *transaction)
+    .bind(association_whitelist)
+    .execute(&mut **transaction)
     .await?;
     if inserted.rows_affected() == 0 {
-        transaction.rollback().await?;
-        return Ok(CreateNodeOutcome::Conflict);
+        return Ok(Failed(CreateNodeOutcome::Conflict));
     }
 
     sqlx::query(
         "INSERT INTO pubsub_affiliations (node_id, jid, affiliation) VALUES ($1, $2, 'owner')",
     )
     .bind(id)
-    .bind(&creator_jid)
-    .execute(&mut *transaction)
+    .bind(creator_jid)
+    .execute(&mut **transaction)
     .await?;
     // The new node is the child for every `collections` edge. Keep this
     // apparently redundant check at the common edge-authorization boundary:
     // it prevents future create-path changes from bypassing child ownership.
     if !parent_ids.is_empty() {
-        match requester_owns_locked_collection_child(&mut transaction, id, &creator_jid).await? {
+        match requester_owns_locked_collection_child(transaction, id, creator_jid).await? {
             Some(true) => {}
             Some(false) => {
-                transaction.rollback().await?;
-                return Ok(CreateNodeOutcome::Forbidden);
+                return Ok(Failed(CreateNodeOutcome::Forbidden));
             }
             None => {
-                transaction.rollback().await?;
-                return Ok(CreateNodeOutcome::InvalidOptions);
+                return Ok(Failed(CreateNodeOutcome::InvalidOptions));
             }
         }
     }
     for parent_id in &parent_ids {
-        if edge_exceeds_max_depth(&mut transaction, *parent_id, id).await? {
-            transaction.rollback().await?;
-            return Ok(CreateNodeOutcome::InvalidOptions);
+        if edge_exceeds_max_depth(transaction, *parent_id, id).await? {
+            return Ok(Failed(CreateNodeOutcome::InvalidOptions));
         }
         sqlx::query("INSERT INTO pubsub_collection_members (collection_node_id, child_node_id) VALUES ($1, $2)")
             .bind(parent_id)
             .bind(id)
-            .execute(&mut *transaction)
+            .execute(&mut **transaction)
             .await?;
     }
     for child_id in &child_ids {
-        if edge_exceeds_max_depth(&mut transaction, id, *child_id).await? {
-            transaction.rollback().await?;
-            return Ok(CreateNodeOutcome::InvalidOptions);
+        if edge_exceeds_max_depth(transaction, id, *child_id).await? {
+            return Ok(Failed(CreateNodeOutcome::InvalidOptions));
         }
         sqlx::query("INSERT INTO pubsub_collection_members (collection_node_id, child_node_id) VALUES ($1, $2)")
             .bind(id)
             .bind(child_id)
-            .execute(&mut *transaction)
+            .execute(&mut **transaction)
             .await?;
     }
     // Snapshot from the newly-created node once. A common ancestor reached
     // through multiple direct parents must receive one create event for its
     // one subscription, not one event per graph path.
-    lock_notification_authority(&mut transaction, &[id]).await?;
-    let event_time = locked_event_time(&mut transaction).await?;
+    lock_notification_authority(transaction, &[id]).await?;
+    let event_time = locked_event_time(transaction).await?;
     sqlx::query("UPDATE pubsub_nodes SET created_at=$2, updated_at=$2 WHERE id=$1")
         .bind(id)
         .bind(event_time)
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     sqlx::query(
         "UPDATE pubsub_collection_members SET created_at=$2
@@ -256,18 +298,16 @@ pub async fn create_node_with_renderer(
     )
     .bind(id)
     .bind(event_time)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    let created = get_node_by_id_in_transaction(&mut transaction, id)
+    let created = get_node_by_id_in_transaction(transaction, id)
         .await?
         .expect("newly created PubSub node disappeared inside its transaction");
     let audience =
-        notification_audience_in_transaction(&mut transaction, &created, "nodes", event_time)
-            .await?;
+        notification_audience_in_transaction(transaction, &created, "nodes", event_time).await?;
     let outbox = renderer.render_create(&created, &audience, Uuid::new_v4(), event_time)?;
-    enqueue_locked_mutation_outbox(&mut transaction, &outbox, event_time).await?;
-    transaction.commit().await?;
-    Ok(CreateNodeOutcome::Created(id))
+    enqueue_locked_mutation_outbox(transaction, &outbox, event_time).await?;
+    Ok(Created(Box::new(created)))
 }
 
 pub async fn get_node(pool: &PgPool, node: &str) -> Result<Option<PubSubNode>> {

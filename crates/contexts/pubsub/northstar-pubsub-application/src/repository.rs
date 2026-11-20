@@ -6,6 +6,7 @@ use crate::{
     PepUnsubscribeResult,
 };
 use anyhow::Result;
+pub use northstar_pubsub_core::AutoCreatePublishOutcome;
 use northstar_pubsub_core::*;
 use uuid::Uuid;
 pub trait PubSubNodeQueryRepository: Send + Sync {
@@ -176,6 +177,15 @@ pub trait PubSubItemMutationRepository: Send + Sync {
         items: &[(String, String)],
         max_storage_bytes_per_owner: i64,
     ) -> impl std::future::Future<Output = Result<PublishItemsOutcome>> + Send;
+    fn create_node_and_publish_items(
+        &self,
+        node: &str,
+        publisher_jid: &str,
+        config: &PubSubNodeConfig,
+        max_nodes_per_owner: i64,
+        items: &[(String, String)],
+        max_storage_bytes_per_owner: i64,
+    ) -> impl std::future::Future<Output = Result<AutoCreatePublishOutcome>> + Send;
     fn retract_items(
         &self,
         node_id: Uuid,

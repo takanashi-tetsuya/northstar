@@ -93,39 +93,73 @@ pub async fn publish_items_with_renderer(
 ) -> Result<PublishItemsOutcome> {
     let publisher_jid = northstar_xmpp_types::jid::canonical_bare_key(publisher_jid)?;
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
+    lock_creator_storage_quota(&mut transaction, &node.creator_jid).await?;
+    let outcome = publish_items_in_transaction(
+        &mut transaction,
+        node,
+        &publisher_jid,
+        items,
+        max_storage_bytes_per_owner,
+        renderer,
+        None,
+    )
+    .await?;
+    if outcome == PublishItemsOutcome::Published {
+        transaction.commit().await?;
+    } else {
+        transaction.rollback().await?;
+    }
+    Ok(outcome)
+}
+
+pub(super) async fn lock_creator_storage_quota(
+    transaction: &mut Transaction<'_, Postgres>,
+    creator_jid: &str,
+) -> Result<()> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 1))")
-        .bind(&node.creator_jid)
-        .execute(&mut *transaction)
+        .bind(creator_jid)
+        .execute(&mut **transaction)
         .await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('pubsub-collection-graph', 0))")
-        .execute(&mut *transaction)
-        .await?;
+    Ok(())
+}
+
+pub(super) async fn publish_items_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    node: &PubSubNode,
+    publisher_jid: &str,
+    items: &[(String, String)],
+    max_storage_bytes_per_owner: i64,
+    renderer: &dyn PubSubMutationOutboxRenderer,
+    auto_create_config: Option<&PubSubNodeConfig>,
+) -> Result<PublishItemsOutcome> {
+    super::node::lock_collection_graph(transaction).await?;
     // Subscription, collection and configuration mutations all lock their
     // affected node row before changing authorization. Locking the source and
     // every ancestor first makes the audience and item mutation one
     // linearizable event-time snapshot.
-    lock_notification_authority(&mut transaction, &[node.id]).await?;
-    let event_time = locked_event_time(&mut transaction).await?;
-    let Some(fresh) = get_node_by_id_in_transaction(&mut transaction, node.id).await? else {
-        transaction.rollback().await?;
+    lock_notification_authority(transaction, &[node.id]).await?;
+    let event_time = locked_event_time(transaction).await?;
+    let Some(fresh) = get_node_by_id_in_transaction(transaction, node.id).await? else {
         return Ok(PublishItemsOutcome::Conflict);
     };
     if !publish_preconditions_match(node, &fresh) {
-        transaction.rollback().await?;
         return Ok(PublishItemsOutcome::PreconditionFailed);
     }
     let (authorized, _) =
-        locked_publish_authorization(&mut transaction, &fresh, &publisher_jid, event_time).await?;
+        locked_publish_authorization(transaction, &fresh, publisher_jid, event_time).await?;
     if !authorized {
-        transaction.rollback().await?;
         return Ok(PublishItemsOutcome::Forbidden);
     }
+    // Auto-create used to check the requested options against the reloaded
+    // node. Preserve that comparison, including options for collection edges.
+    if auto_create_config.is_some_and(|config| config != &fresh.config()) {
+        return Ok(PublishItemsOutcome::PreconditionFailed);
+    }
     let audience =
-        notification_audience_in_transaction(&mut transaction, &fresh, "items", event_time).await?;
+        notification_audience_in_transaction(transaction, &fresh, "items", event_time).await?;
     let outbox = renderer.render_items(&fresh, items, &audience, Uuid::new_v4(), event_time)?;
     if !fresh.persist_items {
-        enqueue_locked_mutation_outbox(&mut transaction, &outbox, event_time).await?;
-        transaction.commit().await?;
+        enqueue_locked_mutation_outbox(transaction, &outbox, event_time).await?;
         return Ok(PublishItemsOutcome::Published);
     }
     // `clock_timestamp()` is shared by the whole locked mutation so that the
@@ -140,7 +174,7 @@ pub async fn publish_items_with_renderer(
     )
     .bind(fresh.id)
     .bind(event_time)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await?;
     for (ordinal, (item_id, xml_payload)) in items.iter().enumerate() {
         let item_time = first_item_time + northstar_time::Duration::microseconds(ordinal as i64);
@@ -152,13 +186,12 @@ pub async fn publish_items_with_renderer(
             .bind(Uuid::new_v4())
             .bind(fresh.id)
             .bind(item_id)
-            .bind(&publisher_jid)
+            .bind(publisher_jid)
             .bind(xml_payload)
             .bind(item_time)
-            .execute(&mut *transaction)
+            .execute(&mut **transaction)
             .await?;
         if result.rows_affected() == 0 {
-            transaction.rollback().await?;
             return Ok(PublishItemsOutcome::Conflict);
         }
     }
@@ -167,20 +200,18 @@ pub async fn publish_items_with_renderer(
     )
     .bind(fresh.id)
     .bind(fresh.max_items)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     let stored_bytes: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(octet_length(i.xml_payload)), 0)::BIGINT FROM pubsub_items i JOIN pubsub_nodes n ON n.id = i.node_id WHERE n.creator_jid = $1",
     )
     .bind(&fresh.creator_jid)
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await?;
     if stored_bytes > max_storage_bytes_per_owner {
-        transaction.rollback().await?;
         return Ok(PublishItemsOutcome::QuotaExceeded);
     }
-    enqueue_locked_mutation_outbox(&mut transaction, &outbox, event_time).await?;
-    transaction.commit().await?;
+    enqueue_locked_mutation_outbox(transaction, &outbox, event_time).await?;
     Ok(PublishItemsOutcome::Published)
 }
 

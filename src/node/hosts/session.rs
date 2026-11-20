@@ -131,6 +131,10 @@ impl SessionAccountHost for ServerNode {
         self.auth.authentication_service()
     }
 
+    fn mam_enabled(&self) -> bool {
+        self.http.discovery().policy().mam_enabled
+    }
+
     fn challenge_issue_service(
         &self,
     ) -> &northstar_abuse_application::challenge::ChallengeIssueService<

@@ -1073,11 +1073,10 @@ async fn protocol_receipt_handoff_retains_the_attempt_captured_before_a_later_fr
     );
 }
 
-#[tokio::test(start_paused = true)]
-async fn bind2_defers_the_same_busy_replay_until_transport_publication() {
+fn prepare_inline_bind2(
+    session: &mut ProtocolSession<TestHost>,
+) -> northstar_auth_application::authentication::AuthenticatedAccount {
     use crate::wire::sasl2::{parse_authenticate, Sasl2Context};
-    let host = TestHost::new();
-    let mut session = host.session();
     let document = roxmltree::Document::parse(
         "<authenticate xmlns='urn:xmpp:sasl:2' mechanism='PLAIN'><bind xmlns='urn:xmpp:bind:0'><tag>captured</tag></bind></authenticate>",
     ).unwrap();
@@ -1091,17 +1090,37 @@ async fn bind2_defers_the_same_busy_replay_until_transport_publication() {
         authenticated_generation: Some(2),
         inherited_fast_chain: None,
     });
-    let user = northstar_auth_application::authentication::AuthenticatedAccount {
+    northstar_auth_application::authentication::AuthenticatedAccount {
         id: Uuid::from_u128(303),
         username: "fixture".to_owned(),
         auth_generation: 2,
-    };
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn bind2_defers_the_same_busy_replay_until_transport_publication() {
+    let host = TestHost::new();
+    let mut session = host.session();
+    let user = prepare_inline_bind2(&mut session);
     let action = session.complete_sasl2(user, None, false).await.unwrap();
     let Action::SendManyThenActivate(replies) = action else {
         panic!("Bind 2 must return a sealed success")
     };
     assert_eq!(host.repository.replay_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        host.repository
+            .archive_boundary_calls
+            .load(Ordering::SeqCst),
+        1
+    );
+    assert!(session.bind2_mam_catchup);
     let (bytes, holder) = replies.into_parts();
+    assert!(bytes[0].contains(concat!(
+        "<metadata xmlns='urn:xmpp:mam:2'>",
+        "<start id='00000000-0000-0000-0000-000000000001' timestamp='2023-11-14T22:13:20.000Z'/>",
+        "<end id='00000000-0000-0000-0000-000000000002' timestamp='2023-11-14T22:13:21.000Z'/>",
+        "</metadata>"
+    )));
     holder.recording().unwrap();
     let owner = holder
         .write(bytes[0].clone(), |_| async { Ok(()) })
@@ -1140,4 +1159,67 @@ async fn bind2_defers_the_same_busy_replay_until_transport_publication() {
         .routable
         .load(Ordering::Acquire));
     session.finalize().await;
+}
+
+#[tokio::test]
+async fn bind2_without_mam_skips_archive_metadata_and_catchup() {
+    let host = TestHost::with_auth_profile(false, false);
+    let mut session = host.session();
+    let user = prepare_inline_bind2(&mut session);
+    let action = session.complete_sasl2(user, None, false).await.unwrap();
+    let Action::SendManyThenActivate(replies) = action else {
+        panic!("Bind 2 must return a sealed success");
+    };
+    let (bytes, holder) = replies.into_parts();
+    let document = roxmltree::Document::parse(&bytes[0]).unwrap();
+    let bound = document
+        .root_element()
+        .children()
+        .find(|node| node.has_tag_name(("urn:xmpp:bind:0", "bound")))
+        .unwrap();
+    assert!(!bound
+        .children()
+        .any(|node| node.has_tag_name(("urn:xmpp:mam:2", "metadata"))));
+    assert_eq!(
+        host.repository
+            .archive_boundary_calls
+            .load(Ordering::SeqCst),
+        0
+    );
+    assert!(!session.bind2_mam_catchup);
+    let key = session.full_jid.as_deref().unwrap();
+    assert!(!host.routes.get(key).unwrap().bind2_mam_catchup);
+    holder.recording().unwrap();
+    let owner = holder
+        .write(bytes[0].clone(), |_| async { Ok(()) })
+        .await
+        .unwrap();
+    assert!(
+        session
+            .publish_committed_authentication_and_route(owner)
+            .await
+    );
+    session.finalize().await;
+}
+
+#[tokio::test]
+async fn bind2_without_mam_rejects_a_stale_account_generation() {
+    let host = TestHost::with_auth_profile(false, true);
+    let mut session = host.session();
+    let user = prepare_inline_bind2(&mut session);
+    let Action::Send(reply) = session.complete_sasl2(user, None, false).await.unwrap() else {
+        panic!("a stale account must receive a SASL2 failure");
+    };
+    assert_eq!(
+        reply,
+        crate::wire::sasl2::failure_xml("credentials-expired", None)
+    );
+    assert_eq!(
+        host.repository
+            .archive_boundary_calls
+            .load(Ordering::SeqCst),
+        0
+    );
+    assert!(host.routes.is_empty());
+    assert!(host.events.lock().unwrap().is_empty());
 }

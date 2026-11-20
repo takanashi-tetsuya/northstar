@@ -293,7 +293,10 @@ impl<H: SessionHost> ProtocolSession<H> {
             self.user_agent_id = None;
             return Ok(Action::Send(failure_xml("not-authorized", None)));
         }
+        let mam_enabled = self.host.mam_enabled();
         let bind_plan = if let Some(bind) = context.request.bind.clone() {
+            use northstar_auth_application::authentication::AuthenticationResult;
+
             let tag = match bind.tag.as_deref() {
                 Some(tag) if !tag.is_empty() => {
                     match northstar_xmpp_types::jid::prepare_resourcepart(tag) {
@@ -310,44 +313,47 @@ impl<H: SessionHost> ProtocolSession<H> {
             let resource = tag
                 .map(|tag| format!("{tag}/{generated}"))
                 .unwrap_or(generated);
-            let boundaries = match self
-                .host
-                .authentication_service()
-                .bind2_archive_boundaries(user.id, expected_auth_generation)
-                .await
-            {
-                northstar_auth_application::authentication::AuthenticationResult::Authenticated(
-                    boundaries,
-                ) => boundaries,
-                northstar_auth_application::authentication::AuthenticationResult::Disabled
-                | northstar_auth_application::authentication::AuthenticationResult::StaleGeneration
-                | northstar_auth_application::authentication::AuthenticationResult::ExpiredCredentials
-                | northstar_auth_application::authentication::AuthenticationResult::ReplayedCredentials => {
-                    self.sasl_state = None;
-                    self.user_agent_id = None;
-                    return Ok(Action::Send(failure_xml("credentials-expired", None)));
+            let boundaries = if mam_enabled {
+                match self
+                    .host
+                    .authentication_service()
+                    .bind2_archive_boundaries(user.id, expected_auth_generation)
+                    .await
+                {
+                    AuthenticationResult::Authenticated(boundaries) => boundaries,
+                    AuthenticationResult::Disabled
+                    | AuthenticationResult::StaleGeneration
+                    | AuthenticationResult::ExpiredCredentials
+                    | AuthenticationResult::ReplayedCredentials => {
+                        self.sasl_state = None;
+                        self.user_agent_id = None;
+                        return Ok(Action::Send(failure_xml("credentials-expired", None)));
+                    }
+                    AuthenticationResult::UnknownCredentials => {
+                        self.sasl_state = None;
+                        self.user_agent_id = None;
+                        return Ok(Action::Send(failure_xml("not-authorized", None)));
+                    }
+                    AuthenticationResult::IntegrityFailure => {
+                        self.host
+                            .sasl2_authentication_telemetry()
+                            .integrity_failed();
+                        tracing::error!(user_id = %user.id, "credential integrity failure during Bind2 preflight");
+                        self.sasl_state = None;
+                        self.user_agent_id = None;
+                        return Ok(Action::Send(failure_xml("temporary-auth-failure", None)));
+                    }
+                    AuthenticationResult::BackendFailure(error) => {
+                        self.host.sasl2_authentication_telemetry().backend_failed();
+                        tracing::error!(?error, "could not preflight Bind 2 MAM metadata");
+                        self.sasl_state = None;
+                        self.user_agent_id = None;
+                        return Ok(Action::Send(failure_xml("temporary-auth-failure", None)));
+                    }
                 }
-                northstar_auth_application::authentication::AuthenticationResult::UnknownCredentials => {
-                    self.sasl_state = None;
-                    self.user_agent_id = None;
-                    return Ok(Action::Send(failure_xml("not-authorized", None)));
-                }
-                northstar_auth_application::authentication::AuthenticationResult::IntegrityFailure => {
-                    self.host
-                        .sasl2_authentication_telemetry()
-                        .integrity_failed();
-                    tracing::error!(user_id = %user.id, "credential integrity failure during Bind2 preflight");
-                    self.sasl_state = None;
-                    self.user_agent_id = None;
-                    return Ok(Action::Send(failure_xml("temporary-auth-failure", None)));
-                }
-                northstar_auth_application::authentication::AuthenticationResult::BackendFailure(error) => {
-                    self.host.sasl2_authentication_telemetry().backend_failed();
-                    tracing::error!(?error, "could not preflight Bind 2 MAM metadata");
-                    self.sasl_state = None;
-                    self.user_agent_id = None;
-                    return Ok(Action::Send(failure_xml("temporary-auth-failure", None)));
-                }
+            } else {
+                // The account-generation preflight above applies to every SASL2 bind.
+                (None, None)
             };
             Some((bind, resource, boundaries))
         } else {
@@ -512,7 +518,13 @@ impl<H: SessionHost> ProtocolSession<H> {
         let mut bound_xml = String::new();
         let authorization_identifier = if let Some((bind, resource, boundaries)) = bind_plan {
             let jid = match self
-                .bind_resource_sasl2_internal(&user, resource, Some(&fast_plan), self.user_agent_id)
+                .bind_resource_sasl2_internal(
+                    &user,
+                    resource,
+                    Some(&fast_plan),
+                    self.user_agent_id,
+                    mam_enabled,
+                )
                 .await
             {
                 Ok(Ok((jid, issued))) => {
@@ -592,23 +604,25 @@ impl<H: SessionHost> ProtocolSession<H> {
                     ),
                 }
             }
-            self.bind2_mam_catchup = true;
-            // This queue only duplicates MAM for Bind 2. Defer its deletion
-            // until the resource is successfully active, and never convert a
-            // post-acceptance cleanup outage into a false SASL failure.
-            let replay_service = self.host.replay_service().clone();
-            let user_id = user.id;
-            let outbound = self.outbound.clone();
-            let replay_full_jid = jid.clone();
-            self.defer_after_transport("bind2-offline-replay", async move {
-                crate::replay::replay_bind2_offline(
-                    replay_service,
-                    outbound,
-                    user_id,
-                    replay_full_jid,
-                )
-                .await;
-            })?;
+            self.bind2_mam_catchup = mam_enabled;
+            if mam_enabled {
+                // This queue only duplicates MAM for Bind 2. Defer its deletion
+                // until the resource is successfully active, and never convert a
+                // post-acceptance cleanup outage into a false SASL failure.
+                let replay_service = self.host.replay_service().clone();
+                let user_id = user.id;
+                let outbound = self.outbound.clone();
+                let replay_full_jid = jid.clone();
+                self.defer_after_transport("bind2-offline-replay", async move {
+                    crate::replay::replay_bind2_offline(
+                        replay_service,
+                        outbound,
+                        user_id,
+                        replay_full_jid,
+                    )
+                    .await;
+                })?;
+            }
             bound_xml = XmlElement::namespaced("bound", BIND2_NS)
                 .validated_fragment(&bound_inner)?
                 .finish();

@@ -399,11 +399,15 @@ impl<R: HttpRepositories> FromRef<UploadEnabledRoute<R>>
     }
 }
 
-pub(super) fn public_query_routes<R: HttpRepositories>(queries: ApiQueryContext<R>) -> Router {
-    Router::new()
-        .route("/api/v1/me", get(me::<R>))
-        .route("/api/v1/history", get(history::<R>))
-        .with_state(queries)
+pub(super) fn public_query_routes<R: HttpRepositories>(
+    queries: ApiQueryContext<R>,
+    mam_enabled: bool,
+) -> Router {
+    let mut router = Router::new().route("/api/v1/me", get(me::<R>));
+    if mam_enabled {
+        router = router.route("/api/v1/history", get(history::<R>));
+    }
+    router.with_state(queries)
 }
 
 pub(super) fn public_authorized_routes<H: HttpHost>(state: &Arc<H>) -> Router {

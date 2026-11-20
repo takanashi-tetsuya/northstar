@@ -3,6 +3,8 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone)]
 pub(super) struct UnusedRepository {
     pub(super) events: Arc<Mutex<Vec<&'static str>>>,
+    pub(super) stale_generation: bool,
+    pub(super) archive_boundary_calls: Arc<std::sync::atomic::AtomicUsize>,
     pub(super) binding: Arc<Mutex<Option<String>>>,
     pub(super) replay_calls: Arc<std::sync::atomic::AtomicUsize>,
     pub(super) replay_finished: Arc<tokio::sync::Notify>,
@@ -168,7 +170,11 @@ mod authentication_ports {
         async fn generation_state(&self, _fence: AuthenticationFence) -> AuthenticationResult<()> {
             assert_eq!(_fence.user_id, Uuid::from_u128(303));
             assert_eq!(_fence.auth_generation, 2);
-            AuthenticationResult::Authenticated(())
+            if self.stale_generation {
+                AuthenticationResult::StaleGeneration
+            } else {
+                AuthenticationResult::Authenticated(())
+            }
         }
 
         #[allow(clippy::too_many_arguments)]
@@ -179,7 +185,17 @@ mod authentication_ports {
         ) -> AuthenticationResult<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)> {
             assert_eq!(_user_id, Uuid::from_u128(303));
             assert_eq!(_expected_auth_generation, 2);
-            AuthenticationResult::Authenticated((None, None))
+            self.archive_boundary_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let start = ArchiveBoundary {
+                id: Uuid::from_u128(1),
+                created_at: northstar_time::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            };
+            let end = ArchiveBoundary {
+                id: Uuid::from_u128(2),
+                created_at: northstar_time::DateTime::from_timestamp(1_700_000_001, 0).unwrap(),
+            };
+            AuthenticationResult::Authenticated((Some(start), Some(end)))
         }
 
         #[allow(clippy::too_many_arguments)]

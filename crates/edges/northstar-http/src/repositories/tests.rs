@@ -9,6 +9,104 @@ use northstar_operations_core::api_mutations::{
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+#[tokio::test]
+async fn history_route_follows_effective_mam_profile() {
+    use crate::contexts::api_queries::{ApiQueryRuntime, StreamPresenceDirectory};
+    use crate::contexts::ApiQueryContext;
+    use axum::http::StatusCode;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const EXPECT_MAM: &str = "NORTHSTAR_HTTP_TEST_EXPECT_MAM";
+    let Ok(expected) = std::env::var(EXPECT_MAM) else {
+        // Config reads process-wide variables. Exercise each profile in an
+        // isolated test process so other tests and the caller's env stay independent.
+        let development = include_str!("../../../../../.env.development.example")
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .filter_map(|line| line.split_once('='))
+            .map(|(name, value)| (name, value.trim_matches('"')));
+        for (mam, rsm, expected) in [
+            ("true", "true", "true"),
+            ("false", "true", "false"),
+            ("true", "false", "false"),
+        ] {
+            let child = tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "repositories::tests::history_route_follows_effective_mam_profile",
+                    "--nocapture",
+                ])
+                .env_clear()
+                .envs(development.clone())
+                .env("XEP_0313_ENABLED", mam)
+                .env("XEP_0059_ENABLED", rsm)
+                .env(EXPECT_MAM, expected)
+                .output()
+                .await
+                .unwrap();
+            assert!(
+                child.status.success()
+                    && String::from_utf8_lossy(&child.stdout).contains("1 passed"),
+                "MAM={mam} RSM={rsm}: {} {}",
+                String::from_utf8_lossy(&child.stdout),
+                String::from_utf8_lossy(&child.stderr),
+            );
+        }
+        return;
+    };
+
+    let config = northstar_config::Config::from_env().unwrap();
+    let mam_enabled = config.server_disco_features().contains(&"urn:xmpp:mam:2");
+    assert_eq!(mam_enabled, expected.parse::<bool>().unwrap());
+    let queries = ApiQueryContext::<Repositories>::new(
+        operations::api_queries::ApiQueryService::new(Unused),
+        Arc::new(crate::cursor::CursorKeyring::new(&[1; 32], None).unwrap()),
+        ApiQueryRuntime {
+            domain: config.domain.clone(),
+            node_id: "test".into(),
+            require_encrypted_archive: config.require_encrypted_archive,
+            federation_configured: false,
+            configured_registration_mode: northstar_config::RegistrationMode::Closed,
+            registration_dependency_locked: false,
+            registration_closed: Arc::default(),
+            island_mode: Arc::default(),
+            presence: Arc::new(StreamPresenceDirectory::new(Arc::default(), Arc::default())),
+            metrics: Arc::default(),
+            started_at: std::time::Instant::now(),
+        },
+    );
+    let router =
+        crate::route_composition::public_query_routes::<Repositories>(queries, mam_enabled);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let history_status = if mam_enabled {
+            StatusCode::UNAUTHORIZED
+        } else {
+            StatusCode::NOT_FOUND
+        };
+        for (path, status) in [
+            ("/api/v1/history", history_status),
+            ("/api/v1/me", StatusCode::UNAUTHORIZED),
+        ] {
+            let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+            let request =
+                format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+            stream.write_all(request.as_bytes()).await.unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).await.unwrap();
+            assert!(
+                response.starts_with(&format!("HTTP/1.1 {} ", status.as_u16())),
+                "{response}"
+            );
+        }
+    })
+    .await;
+    server.abort();
+    result.unwrap();
+}
+
 type Mutation = anyhow::Result<ApiMutationOutcome<StoredApiResponse>>;
 
 // Unrelated ports must fail loudly if a scoped handler starts using them.

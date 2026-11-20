@@ -21,6 +21,8 @@ pub trait SessionAccountHost: Send + Sync + 'static {
     fn authentication_service(
         &self,
     ) -> &northstar_auth_application::authentication::AuthenticationService<Self::AuthenticationStore>;
+    /// Effective XEP-0313 availability for inline Bind 2.
+    fn mam_enabled(&self) -> bool;
     /// See `ServerNode::challenge_issue_service`.
     fn challenge_issue_service(
         &self,

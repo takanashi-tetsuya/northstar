@@ -463,6 +463,7 @@ impl ServerNode {
                 require_encrypted_archive: config.require_encrypted_archive,
                 federation_configured: config.federation_enabled,
                 rest_api_enabled: config.rest_api_enabled,
+                mam_enabled: config.xmpp_extension_enabled(northstar_xep_0313::XEP_ID),
                 websocket_enabled: config.websocket_enabled,
                 bosh_enabled: config.bosh_enabled,
                 web_client_enabled: config.web_client_enabled,

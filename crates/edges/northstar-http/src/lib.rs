@@ -407,6 +407,7 @@ pub fn public_router<H: HttpHost>(state: Arc<H>, xmpp_transports: Router) -> Rou
             .merge(authentication_routes(&state, true))
             .merge(public_query_routes::<H::Repositories>(
                 state.api_query_context(),
+                policy.mam_enabled,
             ))
             .merge(public_authorized_routes(&state))
             .merge(personal_credential_routes(&state))

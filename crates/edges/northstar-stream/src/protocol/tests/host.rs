@@ -101,6 +101,9 @@ mod host_ports {
         > {
             &self.authentication
         }
+        fn mam_enabled(&self) -> bool {
+            self.mam_enabled
+        }
         #[allow(clippy::too_many_arguments)]
         fn challenge_issue_service(
             &self,
@@ -999,6 +1002,7 @@ mod host_ports {
 
 pub(super) struct TestHost {
     pub(super) repository: UnusedRepository,
+    mam_enabled: bool,
     pub(super) events: Arc<Mutex<Vec<&'static str>>>,
     pub(super) routes: Arc<dashmap::DashMap<String, crate::local_routes::session::OnlineSession>>,
     workers: Arc<northstar_runtime::workers::WorkerRegistry>,
@@ -1038,15 +1042,22 @@ impl TestHost {
     }
 
     pub(super) fn new() -> Arc<Self> {
+        Self::with_auth_profile(true, false)
+    }
+
+    pub(super) fn with_auth_profile(mam_enabled: bool, stale_generation: bool) -> Arc<Self> {
         let events = Arc::new(Mutex::new(Vec::new()));
         let repository = UnusedRepository {
             events: Arc::clone(&events),
+            stale_generation,
+            archive_boundary_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             binding: Arc::new(Mutex::new(None)),
             replay_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             replay_finished: Arc::new(tokio::sync::Notify::new()),
         };
         Arc::new(Self {
             events,
+            mam_enabled,
             routes: Arc::new(dashmap::DashMap::new()),
             workers: northstar_runtime::workers::WorkerRegistry::new(),
             counter: AtomicU64::new(0),

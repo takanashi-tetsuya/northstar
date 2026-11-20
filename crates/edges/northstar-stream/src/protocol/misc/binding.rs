@@ -80,7 +80,7 @@ impl<H: SessionHost> ProtocolSession<H> {
         resource: String,
     ) -> Result<std::result::Result<String, ResourceBindingFailure>> {
         let result = self
-            .bind_resource_sasl2_internal(user, resource, None, self.user_agent_id)
+            .bind_resource_sasl2_internal(user, resource, None, self.user_agent_id, false)
             .await?;
         let (jid, _) = match result {
             Ok(result) => result,
@@ -99,6 +99,7 @@ impl<H: SessionHost> ProtocolSession<H> {
         resource: String,
         fast_plan: Option<&northstar_auth_application::authentication::FastCommitPlan>,
         login_device: Option<uuid::Uuid>,
+        bind2_mam_catchup: bool,
     ) -> Result<
         std::result::Result<
             (
@@ -174,7 +175,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                 post_actions: self.post_actions.clone(),
                 recovery_replay_inflight_epoch: Arc::new(AtomicU64::new(0)),
                 recovery_replay_completed_epoch: Arc::new(AtomicU64::new(0)),
-                bind2_mam_catchup: fast_plan.is_some(),
+                bind2_mam_catchup,
                 mix_presence_gate: Arc::clone(&self.presence.mix_presence_gate),
                 mix_presence_fallback_suppressed: Arc::clone(
                     &self.presence.mix_presence_fallback_suppressed,

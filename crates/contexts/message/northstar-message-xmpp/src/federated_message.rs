@@ -1,14 +1,16 @@
 //! Delivery of federated `<message/>` stanzas: an S2S inbound message to a local account.
 
+use crate::messaging::archive_admission::archive_candidate;
 use crate::ports::FederatedMessageHost;
 use anyhow::Result;
 use northstar_federation_core::wire::{s2s_stanza_error, same_s2s_domain};
 use northstar_message_application::messaging::{
-    DirectMessageRoutePort, DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome,
-    DirectRouteRejection, DirectRouteRequest, DirectRouteTarget, DurableAdmissionOutcome,
-    FullJidFallbackPort, IdentityAuthority, LocalDelivery, LocalRecipientDecision, MessageIdentity,
-    MessagePostCommit, OfflineAdmissionOutcome, OfflineMessageAdmission, OnlineRoutePort,
-    OnlineRouteResult, PersonalMessageDestination, ValidatedPersonalMessage,
+    ArchiveCandidate, ArchiveDirection, DirectMessageRoutePort, DirectMessageRouter,
+    DirectRouteDelivery, DirectRouteOutcome, DirectRouteRejection, DirectRouteRequest,
+    DirectRouteTarget, DurableAdmissionOutcome, FullJidFallbackPort, IdentityAuthority,
+    LocalDelivery, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
+    OfflineAdmissionOutcome, OfflineMessageAdmission, OnlineRoutePort, OnlineRouteResult,
+    PersonalMessageDestination, ValidatedPersonalMessage,
 };
 use northstar_message_application::retractions::{
     ArchiveWrite, DeliveryProjection, OwnerProjection, RetractionCommand, RetractionOutcome,
@@ -386,19 +388,25 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
     } else {
         annotated.clone()
     };
-    // MAM policy lookup is read-only and must finish before any delivery
-    // queue or offline transaction accepts the stanza. Once accepted, later
-    // archive/retraction failures are log-only to prevent duplicate retries.
-    let archive_allowed = state
-        .message_service()
-        .archive_enabled(
-            recipient.id,
-            &canonical_from,
-            mam_storage_eligible(root),
-            encrypted,
-            personal_retraction,
-        )
-        .await?;
+    // The history transaction decides this candidate's MAM policy. A
+    // volatile route can accept the stanza first, with log-only failure
+    // handling for the subsequent history write.
+    let archive_write = ArchiveWrite {
+        id: stable_id,
+        owner_id: recipient.id,
+        peer_jid: &canonical_from,
+        stanza: &archive,
+        encrypted,
+        stanza_id: root.attribute("id"),
+    };
+    let candidate = archive_candidate(
+        archive_write.clone(),
+        ArchiveDirection::Inbound,
+        !personal_retraction
+            && state
+                .message_service()
+                .archive_content_eligible(mam_storage_eligible(root), encrypted),
+    );
     let mut history_committed = false;
     let mut durable_c2s_delivery = None;
     let mut live_claim_id = None;
@@ -416,17 +424,6 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
             // changes cannot accidentally create a non-recoverable write.
             anyhow::bail!("durable inbound message lost its persistence projection");
         }
-        let writes = archive_allowed
-            .then_some(ArchiveWrite {
-                id: stable_id,
-                owner_id: recipient.id,
-                peer_jid: &canonical_from,
-                stanza: &archive,
-                encrypted,
-                stanza_id: root.attribute("id"),
-            })
-            .into_iter()
-            .collect::<Vec<_>>();
         let identity_parts = authoritative_remote_stanza_identity(root, authenticated_domain);
         let identity =
             identity_parts
@@ -449,7 +446,7 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
         let delivery = ValidatedPersonalMessage {
             local_actor_id: None,
             identity,
-            archives: &writes,
+            archives: candidate.as_slice(),
             destination: PersonalMessageDestination::Local(LocalDelivery {
                 delivery_id: stable_id,
                 recipient_id: recipient.id,
@@ -457,7 +454,6 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
                 sender_jid: &canonical_from,
                 stanza: &delayed,
                 encrypted,
-                mam_backed: archive_allowed,
             }),
         };
         let eligibility =
@@ -469,11 +465,14 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
             .map(|admitted| (admitted.commit, admitted.mode, admitted.live_claim_id))
         {
             Ok((
-                DurableAdmissionOutcome::Stored { post_commit, .. },
+                DurableAdmissionOutcome::Stored {
+                    archive_written,
+                    post_commit,
+                },
                 post_commit_mode,
                 admitted_claim_id,
             )) => {
-                history_committed = archive_allowed;
+                history_committed = archive_written;
                 let MessagePostCommit::RouteLocalDelivery { delivery_id, .. } = post_commit else {
                     state.record_s2s_post_accept_failure();
                     tracing::warn!(%stable_id, "committed S2S ingress returned a non-local delivery plan");
@@ -570,17 +569,6 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
                 northstar_message_core::FullNoMatchRoute::FallbackChat => {}
             }
         }
-        let writes = archive_allowed
-            .then_some(ArchiveWrite {
-                id: stable_id,
-                owner_id: recipient.id,
-                peer_jid: &canonical_from,
-                stanza: &archive,
-                encrypted,
-                stanza_id: root.attribute("id"),
-            })
-            .into_iter()
-            .collect::<Vec<_>>();
         let delayed = add_delay_from(
             &annotated,
             northstar_time::Utc::now(),
@@ -597,7 +585,7 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
             max_messages: limits.max_messages,
             max_bytes: limits.max_bytes,
             ttl_days: limits.ttl_days,
-            mam_backed: archive_allowed,
+            mam_backed: true,
         };
         match state
             .retraction_service()
@@ -612,7 +600,7 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
                     action_id: &command.action_id,
                     semantic_payload: &command.semantic_payload,
                 },
-                &writes,
+                std::slice::from_ref(&archive_write),
                 Some(&delivery),
                 None,
             )
@@ -700,21 +688,8 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
     }
 
     if delivered {
-        if !history_committed {
-            finalize_accepted_inbound_history(
-                state,
-                root,
-                AcceptedInboundHistory {
-                    recipient_id: recipient.id,
-                    canonical_from: &canonical_from,
-                    stable_id,
-                    archive_allowed,
-                    archive: &archive,
-                    encrypted,
-                    route: "s2s-online",
-                },
-            )
-            .await;
+        if durable_c2s_delivery.is_none() {
+            finalize_accepted_inbound_history(state, root, candidate.as_ref(), "s2s-online").await;
         }
         let remote_muc_private_message =
             is_remote_muc_private_message(root, from, authenticated_domain);
@@ -777,7 +752,8 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
                 sender_jid: from,
                 stanza: &delayed,
                 encrypted,
-                mam_backed: archive_allowed,
+                // No durable history admission preceded this fallback.
+                mam_backed: false,
                 identity: None,
             })
             .await?;
@@ -796,22 +772,7 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
             }
             return Ok(inbound_message_error(root, "wait", "resource-constraint"));
         }
-        if !history_committed {
-            finalize_accepted_inbound_history(
-                state,
-                root,
-                AcceptedInboundHistory {
-                    recipient_id: recipient.id,
-                    canonical_from: &canonical_from,
-                    stable_id,
-                    archive_allowed,
-                    archive: &archive,
-                    encrypted,
-                    route: "s2s-offline",
-                },
-            )
-            .await;
-        }
+        finalize_accepted_inbound_history(state, root, candidate.as_ref(), "s2s-offline").await;
         if state.message_service().direct_mode() == DirectPostCommitMode::Live {
             if let Err(error) = state.dispatch_push_notification(recipient.id).await {
                 state.record_s2s_post_accept_failure();
@@ -826,41 +787,12 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
 /// Complete ordinary best-effort history after a legacy online/offline route.
 /// Personal retractions are deliberately excluded: their authorization,
 /// tombstones, action MAM, and delivery outbox commit before fanout.
-struct AcceptedInboundHistory<'a> {
-    recipient_id: uuid::Uuid,
-    canonical_from: &'a str,
-    stable_id: uuid::Uuid,
-    archive_allowed: bool,
-    archive: &'a str,
-    encrypted: bool,
-    route: &'static str,
-}
-
 async fn finalize_accepted_inbound_history<H: FederatedMessageHost>(
     state: &H,
     root: roxmltree::Node<'_, '_>,
-    history: AcceptedInboundHistory<'_>,
+    candidate: Option<&ArchiveCandidate<'_>>,
+    route: &'static str,
 ) {
-    let AcceptedInboundHistory {
-        recipient_id,
-        canonical_from,
-        stable_id,
-        archive_allowed,
-        archive,
-        encrypted,
-        route,
-    } = history;
-    let writes = archive_allowed
-        .then_some(ArchiveWrite {
-            id: stable_id,
-            owner_id: recipient_id,
-            peer_jid: canonical_from,
-            stanza: archive,
-            encrypted,
-            stanza_id: root.attribute("id"),
-        })
-        .into_iter()
-        .collect::<Vec<_>>();
     debug_assert!(
         northstar_message_core::retraction::personal_retraction_command(root)
             .ok()
@@ -868,7 +800,15 @@ async fn finalize_accepted_inbound_history<H: FederatedMessageHost>(
             .is_none(),
         "personal retraction reached post-delivery history finalization"
     );
-    let history_result = state.message_service().admit_history(&writes).await;
+    let Some(candidate) = candidate else {
+        return;
+    };
+    let stable_id = candidate.projection.id;
+    let recipient_id = candidate.projection.owner_id;
+    let history_result = state
+        .message_service()
+        .admit_history(std::slice::from_ref(candidate))
+        .await;
     if let Err(error) = history_result {
         state.record_s2s_post_accept_failure();
         tracing::warn!(?error, %stable_id, %route, %recipient_id, "accepted inbound message history transaction failed");

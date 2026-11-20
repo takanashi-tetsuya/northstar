@@ -152,7 +152,6 @@ mod tests {
             sender_jid: "bob@remote.test/device",
             stanza: "<message/>",
             encrypted: false,
-            mam_backed: false,
         }
     }
 

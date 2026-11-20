@@ -6,10 +6,8 @@ fn durable_results_do_not_expose_repository_row_ids() {
     assert_eq!(
         map_history_outcome(
             PersonalHistoryAdmission::Stored(vec![Uuid::new_v4()]),
-            true,
             MessagePostCommit::WakeFederationOutbox,
-        )
-        .unwrap(),
+        ),
         DurableAdmissionOutcome::Stored {
             archive_written: true,
             post_commit: MessagePostCommit::WakeFederationOutbox,
@@ -18,11 +16,24 @@ fn durable_results_do_not_expose_repository_row_ids() {
     assert_eq!(
         map_history_outcome(
             PersonalHistoryAdmission::Replay(vec![]),
-            false,
             MessagePostCommit::WakeFederationOutbox,
-        )
-        .unwrap(),
+        ),
         DurableAdmissionOutcome::Replay
+    );
+}
+
+#[test]
+fn stored_delivery_can_have_no_written_archives() {
+    let post_commit = MessagePostCommit::RouteLocalDelivery {
+        delivery_id: Uuid::from_u128(1),
+        recipient_id: Uuid::from_u128(2),
+    };
+    assert_eq!(
+        map_history_outcome(PersonalHistoryAdmission::Stored(Vec::new()), post_commit),
+        DurableAdmissionOutcome::Stored {
+            archive_written: false,
+            post_commit,
+        }
     );
 }
 

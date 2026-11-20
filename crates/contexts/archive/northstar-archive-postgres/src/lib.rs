@@ -6,9 +6,8 @@
 use anyhow::Result;
 use northstar_archive_application::MAX_MAM_PAGE_SIZE;
 use northstar_archive_core::{
-    classify_mam_blocked_jids, decide_mam_archive_admission, finish_mam_page, mam_referenced_ids,
-    resolve_mam_query, MamArchiveAdmissionFacts, MamBlockedIdentitySource, MamBlockedPattern,
-    MamQueryBounds,
+    classify_mam_blocked_jids, finish_mam_page, mam_referenced_ids, resolve_mam_query,
+    MamBlockedIdentitySource, MamBlockedPattern, MamQueryBounds,
 };
 use northstar_xep_0313::MAX_PREFS_JIDS;
 use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
@@ -16,9 +15,11 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 mod account_fence;
+mod admission_facts;
 mod mam_query;
 
 pub use self::account_fence::{authorize_mam_account, mam_account_is_current};
+pub use self::admission_facts::archive_admission_facts_in_transaction;
 pub use self::mam_query::*;
 
 pub use northstar_archive_core::{
@@ -198,27 +199,13 @@ pub async fn archive_allowed(pool: &PgPool, owner_id: Uuid, peer_jid: &str) -> R
     let peer_bare = northstar_xmpp_types::jid::canonical_bare_key(&peer_jid)?;
     // Read every policy input in one statement. The pure domain rule chooses
     // full JID, bare JID, then account default without mixing snapshots.
-    let row = sqlx::query(
-        "SELECT
-             (SELECT policy FROM mam_preference_jids WHERE user_id=$1 AND jid=$2) AS full_policy,
-             (SELECT policy FROM mam_preference_jids WHERE user_id=$1 AND jid=$3) AS bare_policy,
-             (SELECT default_policy FROM mam_preferences WHERE user_id=$1) AS default_policy,
-             EXISTS(SELECT 1 FROM roster_items WHERE owner_id=$1 AND contact_jid=$3) AS roster_member",
-    )
-    .bind(owner_id)
-    .bind(&peer_jid)
-    .bind(&peer_bare)
-    .fetch_one(pool)
-    .await?;
-    let full_policy: Option<String> = row.try_get("full_policy")?;
-    let bare_policy: Option<String> = row.try_get("bare_policy")?;
-    let default_policy: Option<String> = row.try_get("default_policy")?;
-    Ok(decide_mam_archive_admission(MamArchiveAdmissionFacts {
-        full_jid_policy: full_policy.as_deref(),
-        bare_jid_policy: bare_policy.as_deref(),
-        default_policy: default_policy.as_deref(),
-        roster_member: row.try_get("roster_member")?,
-    }))
+    let row = sqlx::query(admission_facts::ARCHIVE_ADMISSION_FACTS)
+        .bind(&[owner_id][..])
+        .bind(&[peer_jid][..])
+        .bind(&[peer_bare][..])
+        .fetch_one(pool)
+        .await?;
+    admission_facts::decide_archive_admission(row)
 }
 
 #[cfg(any(test, feature = "test-support"))]

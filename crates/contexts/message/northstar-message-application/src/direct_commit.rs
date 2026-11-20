@@ -37,7 +37,11 @@ impl DirectCommandFacts {
             actor_id,
             recipient_id: destination.recipient_id,
             delivery_id: destination.delivery_id,
-            archive_ids: command.archives.iter().map(|archive| archive.id).collect(),
+            archive_ids: command
+                .archives
+                .iter()
+                .map(|candidate| candidate.projection.id)
+                .collect(),
             eligibility,
         })
     }
@@ -200,9 +204,12 @@ impl Execution {
                 archive_ids,
                 live_claim_id,
             } => {
+                let mut candidates = effect.command.archive_ids.iter();
                 if *recipient_id != effect.command.recipient_id
                     || *delivery_id != effect.command.delivery_id
-                    || *archive_ids != effect.command.archive_ids
+                    || !archive_ids
+                        .iter()
+                        .all(|id| candidates.any(|candidate| candidate == id))
                     || live_claim_id.is_some_and(|claim| claim != *delivery_id)
                     || (prepared.admitted_mode != DirectPostCommitMode::Live
                         && live_claim_id.is_some())
@@ -385,7 +392,6 @@ mod tests {
                 sender_jid: "alice@example.test/device",
                 stanza: "stored-private-payload",
                 encrypted: false,
-                mam_backed: false,
             }),
         }
     }
@@ -729,6 +735,54 @@ mod tests {
         let finished = observer.snapshot();
         assert_eq!(observer.received(prepared), Err(Rejected::AlreadyCompleted));
         assert_eq!(observer.snapshot(), finished);
+    }
+
+    #[test]
+    fn stored_archive_evidence_must_be_an_ordered_subset_of_candidates() {
+        let sender = Uuid::from_u128(10);
+        let recipient = Uuid::from_u128(20);
+        for (archive_ids, expected) in [
+            (vec![], Ok(())),
+            (vec![sender, recipient], Ok(())),
+            (vec![recipient], Ok(())),
+            (vec![recipient, sender], Err(Rejected::Knowledge)),
+            (vec![sender, sender], Err(Rejected::Knowledge)),
+            (vec![Uuid::nil()], Err(Rejected::Knowledge)),
+        ] {
+            let mut command =
+                DirectCommandFacts::for_local(&command(), DirectSpoolEligibility::LiveOnly)
+                    .unwrap();
+            command.archive_ids = vec![sender, recipient];
+            let recipient_id = command.recipient_id;
+            let delivery_id = command.delivery_id;
+            let mut execution = Execution::new(
+                Correlation {
+                    operation: Uuid::from_u128(90),
+                    effect: 3,
+                    generation: 0,
+                    attempt: 1,
+                },
+                command,
+            );
+            let effect = execution.effect().clone();
+            execution.start(&effect).unwrap();
+            assert_eq!(
+                execution.enter_commit(
+                    &effect,
+                    PreparedCommit {
+                        correlation: effect.correlation(),
+                        outcome: TransactionOutcome::Stored {
+                            recipient_id,
+                            delivery_id,
+                            archive_ids,
+                            live_claim_id: None,
+                        },
+                        admitted_mode: DirectPostCommitMode::Live,
+                    },
+                ),
+                expected
+            );
+        }
     }
 
     #[test]

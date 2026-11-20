@@ -1,6 +1,6 @@
 use super::projection::{
-    DelayedLocalProjection, LocalArchivePolicy, LocalOriginalProjection, LocalProjectionAuthority,
-    OriginalDirectMessage,
+    DelayedLocalProjection, LocalArchiveEligibility, LocalOriginalProjection,
+    LocalProjectionAuthority, OriginalDirectMessage,
 };
 use anyhow::Result;
 use northstar_abuse_policy::message_admission::MessageAdmissionStart;
@@ -18,9 +18,10 @@ use northstar_message_application::message_admission::{
 };
 use northstar_message_application::messaging::direct_workflow::PreparedHandoffNext;
 use northstar_message_application::messaging::{
-    ArchiveWrite, DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome, DirectRouteRequest,
-    DirectRouteTarget, DurableAdmissionOutcome, IdentityAuthority, LocalDelivery, MessageIdentity,
-    MessagePostCommit, PersonalMessageDestination, ValidatedPersonalMessage,
+    ArchiveCandidate, ArchiveDirection, ArchiveWrite, DirectMessageRouter, DirectRouteDelivery,
+    DirectRouteOutcome, DirectRouteRequest, DirectRouteTarget, DurableAdmissionOutcome,
+    IdentityAuthority, LocalDelivery, MessageIdentity, MessagePostCommit,
+    PersonalMessageDestination, ValidatedPersonalMessage,
 };
 use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
 use northstar_xmpp_types::jid_text::bare_jid;
@@ -106,7 +107,6 @@ fn command<'a>(
             sender_jid: source.sender,
             stanza: &delayed.stanza,
             encrypted: local.encrypted,
-            mam_backed: delayed.archive_policy.recipient_enabled,
         }),
     }
 }
@@ -133,7 +133,7 @@ async fn preparation_preserves_full_bare_delayed_live_self_and_unrated_controls(
         assert_eq!(source.rated_payload().is_some(), rated);
         let owner = owner(&source).await;
         let local = source.project_local(authority(target, own), false, None);
-        let delayed = local.delayed(northstar_time::DateTime::from_timestamp(100, 0).unwrap(), LocalArchivePolicy::default());
+        let delayed = local.delayed(northstar_time::DateTime::from_timestamp(100, 0).unwrap(), LocalArchiveEligibility::default());
         assert_ne!(delayed.stanza, local.recipient_delivery);
         if own { assert_eq!(local.sender_archive, local.recipient_delivery); }
         let command = command(&local, &delayed);
@@ -183,7 +183,7 @@ async fn independently_changed_actor_origin_full_target_or_source_payload_cannot
         let local = changed.project_local(authority(target, false), false, None);
         let delayed = local.delayed(
             northstar_time::DateTime::from_timestamp(100, 0).unwrap(),
-            LocalArchivePolicy::default(),
+            LocalArchiveEligibility::default(),
         );
         let before = owner.snapshot();
         assert!(delayed
@@ -211,7 +211,7 @@ async fn changed_prepared_identity_payload_or_stored_projection_is_rejected_befo
     let local = source.project_local(authority(source.target, false), false, None);
     let delayed = local.delayed(
         northstar_time::DateTime::from_timestamp(100, 0).unwrap(),
-        LocalArchivePolicy::default(),
+        LocalArchiveEligibility::default(),
     );
     for field in 0..3 {
         let owner = owner(&source).await;
@@ -257,7 +257,7 @@ async fn valid_unrated_frame_does_not_acquire_the_rated_normalized_payload_limit
     let local = source.project_local(authority(source.target, false), false, None);
     let delayed = local.delayed(
         northstar_time::DateTime::from_timestamp(100, 0).unwrap(),
-        LocalArchivePolicy::default(),
+        LocalArchiveEligibility::default(),
     );
     assert!(delayed.stanza.len() > 1_048_576);
     delayed
@@ -293,33 +293,39 @@ async fn exact_policy_projection_set_and_mam_flag_reject_missing_duplicate_or_ch
         {
             let delayed = local.delayed(
                 northstar_time::DateTime::from_timestamp(100, 0).unwrap(),
-                LocalArchivePolicy {
-                    sender_enabled,
-                    recipient_enabled,
+                LocalArchiveEligibility {
+                    sender_eligible: sender_enabled,
+                    recipient_eligible: recipient_enabled,
                 },
             );
-            let sender = ArchiveWrite {
-                id: local.authority.sender_stable_id,
-                owner_id: source.actor_id,
-                peer_jid: target,
-                stanza: &local.sender_archive_stanza,
-                encrypted: false,
-                stanza_id: None,
+            let sender = ArchiveCandidate {
+                direction: ArchiveDirection::Outbound,
+                projection: ArchiveWrite {
+                    id: local.authority.sender_stable_id,
+                    owner_id: source.actor_id,
+                    peer_jid: target,
+                    stanza: &local.sender_archive_stanza,
+                    encrypted: false,
+                    stanza_id: None,
+                },
             };
-            let recipient = ArchiveWrite {
-                id: local.authority.recipient_stable_id,
-                owner_id: local.authority.recipient_id,
-                peer_jid: source.sender,
-                stanza: &local.recipient_archive_stanza,
-                encrypted: false,
-                stanza_id: None,
+            let recipient = ArchiveCandidate {
+                direction: ArchiveDirection::Inbound,
+                projection: ArchiveWrite {
+                    id: local.authority.recipient_stable_id,
+                    owner_id: local.authority.recipient_id,
+                    peer_jid: source.sender,
+                    stanza: &local.recipient_archive_stanza,
+                    encrypted: false,
+                    stanza_id: None,
+                },
             };
             let mut writes = Vec::new();
             if sender_enabled {
                 writes.push(sender.clone());
             }
             if recipient_enabled && !own {
-                writes.push(recipient);
+                writes.push(recipient.clone());
             }
             let mut valid = command(&local, &delayed);
             valid.archives = &writes;
@@ -332,20 +338,25 @@ async fn exact_policy_projection_set_and_mam_flag_reject_missing_duplicate_or_ch
                     .bind(owner.clone(), missing, DirectSpoolEligibility::Eligible)
                     .is_err());
             }
-            let duplicated = vec![sender.clone(), sender];
+            let duplicated = [sender.clone(), sender];
             let mut duplicate = valid;
             duplicate.archives = &duplicated;
             assert!(delayed
                 .bind(owner.clone(), duplicate, DirectSpoolEligibility::Eligible)
                 .is_err());
-            let mut changed_mam = valid;
-            let PersonalMessageDestination::Local(mut destination) = changed_mam.destination else {
-                unreachable!()
-            };
-            destination.mam_backed = !recipient_enabled;
-            changed_mam.destination = PersonalMessageDestination::Local(destination);
+            let mut changed_candidates = writes.clone();
+            if let Some(first) = changed_candidates.first_mut() {
+                first.direction = match first.direction {
+                    ArchiveDirection::Outbound => ArchiveDirection::Inbound,
+                    ArchiveDirection::Inbound => ArchiveDirection::Outbound,
+                };
+            } else {
+                changed_candidates.push(recipient);
+            }
+            let mut forged = valid;
+            forged.archives = &changed_candidates;
             assert!(delayed
-                .bind(owner.clone(), changed_mam, DirectSpoolEligibility::Eligible)
+                .bind(owner.clone(), forged, DirectSpoolEligibility::Eligible)
                 .is_err());
             assert_eq!(owner.snapshot(), before);
             let prepared = delayed
@@ -355,11 +366,7 @@ async fn exact_policy_projection_set_and_mam_flag_reject_missing_duplicate_or_ch
                 prepared.command().archives.len(),
                 usize::from(sender_enabled) + usize::from(recipient_enabled && !own)
             );
-            let PersonalMessageDestination::Local(destination) = prepared.command().destination
-            else {
-                unreachable!()
-            };
-            assert_eq!(destination.mam_backed, recipient_enabled);
+            assert_eq!(prepared.command().archives, writes.as_slice());
         }
     }
 }
@@ -454,7 +461,7 @@ async fn actual_original_to_router_preserves_live_payload_after_delayed_command_
             let continuation = {
                 let delayed = local.delayed(
                     northstar_time::DateTime::from_timestamp(100, 0).unwrap(),
-                    LocalArchivePolicy::default(),
+                    LocalArchiveEligibility::default(),
                 );
                 let prepared = delayed
                     .bind(

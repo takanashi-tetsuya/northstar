@@ -229,6 +229,7 @@ pub(super) async fn run_original(
     sequence: Sequence,
 ) -> Result<OriginalRun> {
     use northstar_message_application::messaging::direct_workflow::commit_prepared_application;
+    use northstar_message_application::messaging::{ArchiveCandidate, ArchiveDirection};
     use northstar_stream::frame_execution::FrameExecution;
     use northstar_stream::transport::ClientTransport;
     let original = &case.originals[index];
@@ -344,30 +345,36 @@ pub(super) async fn run_original(
             let delayed = local.delayed(
                 northstar_time::DateTime::parse_from_rfc3339(&original.at_utc)?
                     .with_timezone(&northstar_time::Utc),
-                LocalArchivePolicy {
-                    sender_enabled: policy.sender_archive,
-                    recipient_enabled: policy.recipient_archive,
+                LocalArchiveEligibility {
+                    sender_eligible: policy.sender_archive,
+                    recipient_eligible: policy.recipient_archive,
                 },
             );
             let mut archives = Vec::with_capacity(2);
             if policy.sender_archive {
-                archives.push(ArchiveWrite {
-                    id: ids.sender_stable_id.0,
-                    owner_id: source.actor_id,
-                    peer_jid: source.target,
-                    stanza: &local.sender_archive_stanza,
-                    encrypted: local.encrypted,
-                    stanza_id: source.stanza_id,
+                archives.push(ArchiveCandidate {
+                    direction: ArchiveDirection::Outbound,
+                    projection: ArchiveWrite {
+                        id: ids.sender_stable_id.0,
+                        owner_id: source.actor_id,
+                        peer_jid: source.target,
+                        stanza: &local.sender_archive_stanza,
+                        encrypted: local.encrypted,
+                        stanza_id: source.stanza_id,
+                    },
                 });
             }
             if policy.recipient_archive && case.identities.recipient_id.0 != source.actor_id {
-                archives.push(ArchiveWrite {
-                    id: ids.recipient_stable_id.0,
-                    owner_id: case.identities.recipient_id.0,
-                    peer_jid: source.sender,
-                    stanza: &local.recipient_archive_stanza,
-                    encrypted: local.encrypted,
-                    stanza_id: source.stanza_id,
+                archives.push(ArchiveCandidate {
+                    direction: ArchiveDirection::Inbound,
+                    projection: ArchiveWrite {
+                        id: ids.recipient_stable_id.0,
+                        owner_id: case.identities.recipient_id.0,
+                        peer_jid: source.sender,
+                        stanza: &local.recipient_archive_stanza,
+                        encrypted: local.encrypted,
+                        stanza_id: source.stanza_id,
+                    },
                 });
             }
             let identity = source.origin_id.as_deref().map(|value| MessageIdentity {
@@ -389,7 +396,6 @@ pub(super) async fn run_original(
                     sender_jid: source.sender,
                     stanza: &delayed.stanza,
                     encrypted: local.encrypted,
-                    mam_backed: policy.recipient_archive,
                 }),
             };
             projection = Some(wire::Projection {
@@ -402,6 +408,7 @@ pub(super) async fn run_original(
                 archives: command
                     .archives
                     .iter()
+                    .map(|candidate| &candidate.projection)
                     .map(|archive| wire::ArchiveEvidence {
                         archive_id: wire::Id(archive.id),
                         owner_id: wire::Id(archive.owner_id),
@@ -424,11 +431,11 @@ pub(super) async fn run_original(
                     DirectSpoolEligibility::LiveOnly => "LiveOnly",
                 },
                 encrypted: destination.encrypted,
-                mam_backed: destination.mam_backed,
+                mam_backed: policy.recipient_archive,
                 archive_ids: command
                     .archives
                     .iter()
-                    .map(|archive| wire::Id(archive.id))
+                    .map(|candidate| wire::Id(candidate.projection.id))
                     .collect(),
                 identity: command.identity.map(|identity| wire::IdentityEvidence {
                     authority: "LocalOrigin",

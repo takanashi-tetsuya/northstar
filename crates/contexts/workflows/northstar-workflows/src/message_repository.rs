@@ -68,7 +68,6 @@ impl PostgresMessageRepository {
             .as_ref()
             .map(|identity| db_history_identity(&self.content_identity, identity))
             .transpose()?;
-        let archives = persistence_archive_writes(request.archives);
         let (outcome, post_commit, post_commit_mode, live_claim_id) = match request.destination {
             PersonalMessageDestination::Federation(destination) => {
                 anyhow::ensure!(
@@ -92,7 +91,7 @@ impl PostgresMessageRepository {
                     .admit_direct_history(
                         &self.pool,
                         identity.as_ref(),
-                        &archives,
+                        request.archives,
                         Some(&outbox),
                         None,
                         (eligibility, None),
@@ -121,13 +120,13 @@ impl PostgresMessageRepository {
                         stanza: destination.stanza,
                         target_full_jid: target_full_jid.as_deref(),
                         encrypted: destination.encrypted,
-                        policy: offline_store_policy(self.offline, destination.mam_backed),
+                        policy: self.offline_policy(false),
                     };
                 let (outcome, mode, live_claim_id) = self
                     .admit_direct_history(
                         &self.pool,
                         identity.as_ref(),
-                        &archives,
+                        request.archives,
                         None,
                         Some(&delivery),
                         (eligibility, observer),
@@ -145,7 +144,7 @@ impl PostgresMessageRepository {
             }
         };
         Ok(DirectPersonalMessageAdmission {
-            commit: map_history_outcome(outcome, request.writes_history(), post_commit)?,
+            commit: map_history_outcome(outcome, post_commit),
             mode: post_commit_mode,
             live_claim_id,
         })
@@ -157,7 +156,7 @@ impl PostgresMessageRepository {
         identity: Option<
             &northstar_message_postgres::personal_history::PersonalHistoryIdentity<'_>,
         >,
-        archives: &[northstar_message_postgres::personal_history::PersonalArchiveWrite<'_>],
+        candidates: &[ArchiveCandidate<'_>],
         outbox: Option<
             &northstar_message_postgres::personal_history::PersonalS2sOutboxAdmission<'_>,
         >,
@@ -171,52 +170,19 @@ impl PostgresMessageRepository {
         Option<Uuid>,
     )> {
         let (eligibility, observer) = admission;
-        if let Some(observer) = observer {
-            anyhow::ensure!(
-                outbox.is_none(),
-                "local direct observer cannot witness an outbox"
-            );
-            let delivery = delivery
-                .ok_or_else(|| anyhow::anyhow!("local direct observer requires delivery"))?;
-            return crate::personal_history::admit_personal_history_observed_direct(
-                pool,
-                identity,
-                archives,
-                delivery,
-                self.cluster.as_deref(),
-                eligibility,
-                observer,
-            )
-            .await;
-        }
-        let Some(cluster) = self.cluster.as_deref() else {
-            // Standalone repository fixtures and single-node operation retain
-            // the existing transaction behavior without a cluster fence.
-            let outcome = match (outbox, delivery) {
-                (Some(outbox), None) => {
-                    crate::personal_history::admit_outbound_personal_history(
-                        pool, identity, archives, outbox,
-                    )
-                    .await?
-                }
-                (None, Some(delivery)) => {
-                    crate::personal_history::admit_personal_history_and_c2s_delivery(
-                        pool, identity, archives, delivery,
-                    )
-                    .await?
-                }
-                _ => anyhow::bail!("personal message requires exactly one durable destination"),
-            };
-            return Ok((outcome, DirectPostCommitMode::Live, None));
-        };
-        crate::personal_history::admit_personal_history_with_direct_fence(
+        crate::personal_history::admit_candidate_history(
             pool,
             identity,
-            archives,
+            candidates,
             outbox,
             delivery,
-            cluster,
-            eligibility,
+            crate::personal_history::DirectCommitContext {
+                cluster: self
+                    .cluster
+                    .as_deref()
+                    .map(|cluster| (cluster, eligibility)),
+                observer,
+            },
         )
         .await
     }
@@ -436,10 +402,6 @@ impl MessageRepository for PostgresMessageRepository {
         .await?)
     }
 
-    async fn archive_allowed(&self, owner_id: Uuid, peer_jid: &str) -> Result<bool> {
-        northstar_archive_postgres::archive_allowed(&self.pool, owner_id, peer_jid).await
-    }
-
     /// Atomically admit a local-room invitation addressed to a federated
     /// account. The sender's origin identity/MAM projection, S2S outbox and
     /// members-only affiliation share one transaction. Exact replay therefore
@@ -456,7 +418,6 @@ impl MessageRepository for PostgresMessageRepository {
             .as_ref()
             .map(|identity| self.db_identity(identity))
             .transpose()?;
-        let archives = persistence_archive_writes(request.archives);
         let outbox = northstar_message_postgres::personal_history::PersonalS2sOutboxAdmission {
             local_actor_id: request.local_actor_id,
             target_domain: request.target_domain,
@@ -469,7 +430,7 @@ impl MessageRepository for PostgresMessageRepository {
         let history = match crate::personal_history::admit_personal_history_in_transaction(
             &mut transaction,
             identity.as_ref(),
-            &archives,
+            request.archives,
             Some(&outbox),
             None,
         )
@@ -556,7 +517,6 @@ impl MessageRepository for PostgresMessageRepository {
             .as_ref()
             .map(|identity| self.db_identity(identity))
             .transpose()?;
-        let archives = persistence_archive_writes(request.archives);
         let target_full_jid = durable_target_full_jid(request.stanza)?;
         let delivery = northstar_message_postgres::personal_history::PersonalC2sDeliveryAdmission {
             id: request.delivery_id,
@@ -567,7 +527,7 @@ impl MessageRepository for PostgresMessageRepository {
             stanza: request.stanza,
             target_full_jid: target_full_jid.as_deref(),
             encrypted: request.encrypted,
-            policy: self.offline_policy(request.mam_backed),
+            policy: self.offline_policy(false),
         };
         let mut transaction = self.pool.begin().await?;
         if self.cluster.is_some() {
@@ -580,7 +540,7 @@ impl MessageRepository for PostgresMessageRepository {
         let history = match crate::personal_history::admit_personal_history_in_transaction(
             &mut transaction,
             identity.as_ref(),
-            &archives,
+            request.archives,
             None,
             Some(&delivery),
         )
@@ -610,6 +570,13 @@ impl MessageRepository for PostgresMessageRepository {
             return Ok(DurableMucInviteOutcome::Replay {
                 id: request.delivery_id,
             });
+        }
+        if matches!(
+            history,
+            northstar_message_postgres::personal_history::PersonalHistoryAdmission::AccountUnavailable
+        ) {
+            transaction.rollback().await?;
+            return Ok(DurableMucInviteOutcome::RecipientUnavailable);
         }
 
         let cluster_authority = request.cluster_authority.map(Into::into);
@@ -661,27 +628,33 @@ impl MessageRepository for PostgresMessageRepository {
         Ok(affiliation.into())
     }
 
-    async fn admit_history(&self, writes: &[ArchiveWrite<'_>]) -> Result<()> {
-        if writes.is_empty() {
-            return Ok(());
+    async fn admit_history(
+        &self,
+        candidates: &[ArchiveCandidate<'_>],
+    ) -> Result<ArchiveAdmissionOutcome> {
+        use northstar_message_postgres::personal_history::PersonalHistoryAdmission;
+
+        if candidates.is_empty() {
+            return Ok(ArchiveAdmissionOutcome::Projected(Vec::new()));
         }
-        let writes = persistence_archive_writes(writes);
-        if let Some(cluster) = self.cluster.as_deref() {
-            crate::personal_history::admit_personal_history_with_direct_fence(
+        let (outcome, _, _) = self
+            .admit_direct_history(
                 &self.pool,
                 None,
-                &writes,
+                candidates,
                 None,
                 None,
-                cluster,
-                DirectSpoolEligibility::LiveOnly,
+                (DirectSpoolEligibility::LiveOnly, None),
             )
-            .await
-            .map(|_| ())
-        } else {
-            crate::personal_history::admit_personal_history(&self.pool, None, &writes)
-                .await
-                .map(|_| ())
+            .await?;
+        match outcome {
+            PersonalHistoryAdmission::Stored(ids) => Ok(ArchiveAdmissionOutcome::Projected(ids)),
+            PersonalHistoryAdmission::AccountUnavailable => {
+                Ok(ArchiveAdmissionOutcome::AccountUnavailable)
+            }
+            PersonalHistoryAdmission::Replay(_) => {
+                anyhow::bail!("history without identity cannot replay")
+            }
         }
     }
 
@@ -796,24 +769,6 @@ fn validate_local_recipient_authority_for_domain(
     Ok(())
 }
 
-fn persistence_archive_writes<'a>(
-    writes: &[ArchiveWrite<'a>],
-) -> Vec<northstar_message_postgres::personal_history::PersonalArchiveWrite<'a>> {
-    writes
-        .iter()
-        .map(
-            |write| northstar_message_postgres::personal_history::PersonalArchiveWrite {
-                id: write.id,
-                owner_id: write.owner_id,
-                peer_jid: write.peer_jid,
-                stanza: write.stanza,
-                encrypted: write.encrypted,
-                stanza_id: write.stanza_id,
-            },
-        )
-        .collect()
-}
-
 /// Derive the only delivery class whose RFC 6121 resource selection must
 /// survive process/transport failure. Chat full-JID routing may fall back to
 /// the bare account, while bare and missing destinations are account scoped.
@@ -855,19 +810,18 @@ fn personal_message_commitment(kind: &str, identity: &MessageIdentity<'_>) -> Ve
 
 fn map_history_outcome(
     outcome: northstar_message_postgres::personal_history::PersonalHistoryAdmission,
-    archive_written: bool,
     post_commit: MessagePostCommit,
-) -> Result<DurableAdmissionOutcome> {
-    Ok(match outcome {
-        northstar_message_postgres::personal_history::PersonalHistoryAdmission::Stored(_) => DurableAdmissionOutcome::Stored {
-            archive_written,
+) -> DurableAdmissionOutcome {
+    use northstar_message_postgres::personal_history::PersonalHistoryAdmission;
+
+    match outcome {
+        PersonalHistoryAdmission::Stored(ids) => DurableAdmissionOutcome::Stored {
+            archive_written: !ids.is_empty(),
             post_commit,
         },
-        northstar_message_postgres::personal_history::PersonalHistoryAdmission::Replay(_) => DurableAdmissionOutcome::Replay,
-        northstar_message_postgres::personal_history::PersonalHistoryAdmission::AccountUnavailable => {
-            DurableAdmissionOutcome::AccountUnavailable
-        }
-    })
+        PersonalHistoryAdmission::Replay(_) => DurableAdmissionOutcome::Replay,
+        PersonalHistoryAdmission::AccountUnavailable => DurableAdmissionOutcome::AccountUnavailable,
+    }
 }
 
 #[cfg(test)]

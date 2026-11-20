@@ -1,7 +1,7 @@
 //! Personal history admission: archive writes, history identity fences and C2S/S2S delivery admission.
 
 use anyhow::Result;
-use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
+use northstar_message_core::{ArchiveCandidate, DirectPostCommitMode, DirectSpoolEligibility};
 use northstar_message_postgres::direct_cluster::DirectCommitCluster;
 use northstar_message_postgres::direct_spool_wake::record_direct_spool_wake_in_transaction;
 use northstar_message_postgres::personal_history::*;
@@ -22,9 +22,16 @@ pub async fn admit_personal_history(
     identity: Option<&PersonalHistoryIdentity<'_>>,
     writes: &[PersonalArchiveWrite<'_>],
 ) -> Result<PersonalHistoryAdmission> {
-    admit_personal_history_inner(pool, identity, writes, None, None, None)
-        .await
-        .map(|result| result.0)
+    admit_personal_history_inner(
+        pool,
+        identity,
+        HistoryArchives::Preselected(writes),
+        None,
+        None,
+        None,
+    )
+    .await
+    .map(|result| result.0)
 }
 
 /// Atomically commit all enabled MAM projections and the transient C2S
@@ -37,9 +44,16 @@ pub async fn admit_personal_history_and_c2s_delivery(
     writes: &[PersonalArchiveWrite<'_>],
     delivery: &PersonalC2sDeliveryAdmission<'_>,
 ) -> Result<PersonalHistoryAdmission> {
-    admit_personal_history_inner(pool, identity, writes, None, Some(delivery), None)
-        .await
-        .map(|result| result.0)
+    admit_personal_history_inner(
+        pool,
+        identity,
+        HistoryArchives::Preselected(writes),
+        None,
+        Some(delivery),
+        None,
+    )
+    .await
+    .map(|result| result.0)
 }
 
 /// Atomically admit one federated personal message and its optional sender
@@ -52,64 +66,97 @@ pub async fn admit_outbound_personal_history(
     writes: &[PersonalArchiveWrite<'_>],
     outbox: &PersonalS2sOutboxAdmission<'_>,
 ) -> Result<PersonalHistoryAdmission> {
-    admit_personal_history_inner(pool, identity, writes, Some(outbox), None, None)
-        .await
-        .map(|result| result.0)
-}
-
-pub async fn admit_personal_history_with_direct_fence(
-    pool: &PgPool,
-    identity: Option<&PersonalHistoryIdentity<'_>>,
-    writes: &[PersonalArchiveWrite<'_>],
-    outbox: Option<&PersonalS2sOutboxAdmission<'_>>,
-    delivery: Option<&PersonalC2sDeliveryAdmission<'_>>,
-    cluster: &dyn DirectCommitCluster,
-    eligibility: DirectSpoolEligibility,
-) -> Result<(PersonalHistoryAdmission, DirectPostCommitMode, Option<Uuid>)> {
     admit_personal_history_inner(
         pool,
         identity,
-        writes,
-        outbox,
-        delivery,
-        Some(DirectCommitContext {
-            cluster: Some((cluster, eligibility)),
-            observer: None,
-        }),
+        HistoryArchives::Preselected(writes),
+        Some(outbox),
+        None,
+        None,
     )
     .await
+    .map(|result| result.0)
 }
 
-pub struct DirectCommitContext<'a> {
-    pub cluster: Option<(&'a dyn DirectCommitCluster, DirectSpoolEligibility)>,
-    pub observer:
+pub(crate) struct DirectCommitContext<'a> {
+    pub(crate) cluster: Option<(&'a dyn DirectCommitCluster, DirectSpoolEligibility)>,
+    pub(crate) observer:
         Option<&'a dyn northstar_message_application::direct_commit::DirectCommitObserver>,
 }
 
-pub async fn admit_personal_history_observed_direct(
+pub(crate) async fn admit_candidate_history(
     pool: &PgPool,
     identity: Option<&PersonalHistoryIdentity<'_>>,
-    writes: &[PersonalArchiveWrite<'_>],
-    delivery: &PersonalC2sDeliveryAdmission<'_>,
-    cluster: Option<&dyn DirectCommitCluster>,
-    eligibility: DirectSpoolEligibility,
-    observer: &dyn northstar_message_application::direct_commit::DirectCommitObserver,
+    candidates: &[ArchiveCandidate<'_>],
+    outbox: Option<&PersonalS2sOutboxAdmission<'_>>,
+    delivery: Option<&PersonalC2sDeliveryAdmission<'_>>,
+    context: DirectCommitContext<'_>,
 ) -> Result<(PersonalHistoryAdmission, DirectPostCommitMode, Option<Uuid>)> {
     admit_personal_history_inner(
         pool,
         identity,
-        writes,
-        None,
-        Some(delivery),
-        Some(DirectCommitContext {
-            cluster: cluster.map(|cluster| (cluster, eligibility)),
-            observer: Some(observer),
-        }),
+        HistoryArchives::Candidates(candidates),
+        outbox,
+        delivery,
+        Some(context),
     )
     .await
 }
 
-pub fn direct_transaction_outcome(
+#[derive(Clone, Copy)]
+enum HistoryArchives<'a> {
+    Candidates(&'a [ArchiveCandidate<'a>]),
+    Preselected(&'a [PersonalArchiveWrite<'a>]),
+}
+
+impl<'a> HistoryArchives<'a> {
+    fn owners(self) -> Vec<Uuid> {
+        match self {
+            Self::Candidates(candidates) => candidates
+                .iter()
+                .map(|candidate| candidate.projection.owner_id)
+                .collect(),
+            Self::Preselected(writes) => writes.iter().map(|write| write.owner_id).collect(),
+        }
+    }
+
+    async fn select(
+        self,
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> Result<Vec<PersonalArchiveWrite<'a>>> {
+        let candidates = match self {
+            Self::Candidates(candidates) => candidates,
+            Self::Preselected(writes) => return Ok(writes.to_vec()),
+        };
+        let peers = candidates
+            .iter()
+            .map(|candidate| {
+                let projection = &candidate.projection;
+                (projection.owner_id, projection.peer_jid)
+            })
+            .collect::<Vec<_>>();
+        let allowed =
+            northstar_archive_postgres::archive_admission_facts_in_transaction(tx, &peers).await?;
+        Ok(candidates
+            .iter()
+            .zip(allowed)
+            .filter(|(_, allowed)| *allowed)
+            .map(|(candidate, _)| {
+                let projection = &candidate.projection;
+                PersonalArchiveWrite {
+                    id: projection.id,
+                    owner_id: projection.owner_id,
+                    peer_jid: projection.peer_jid,
+                    stanza: projection.stanza,
+                    encrypted: projection.encrypted,
+                    stanza_id: projection.stanza_id,
+                }
+            })
+            .collect())
+    }
+}
+
+fn direct_transaction_outcome(
     outcome: &PersonalHistoryAdmission,
     delivery: Option<&PersonalC2sDeliveryAdmission<'_>>,
     live_claim_id: Option<Uuid>,
@@ -133,10 +180,10 @@ pub fn direct_transaction_outcome(
     })
 }
 
-pub async fn admit_personal_history_inner(
+async fn admit_personal_history_inner(
     pool: &PgPool,
     identity: Option<&PersonalHistoryIdentity<'_>>,
-    writes: &[PersonalArchiveWrite<'_>],
+    archives: HistoryArchives<'_>,
     outbox: Option<&PersonalS2sOutboxAdmission<'_>>,
     c2s_delivery: Option<&PersonalC2sDeliveryAdmission<'_>>,
     context: Option<DirectCommitContext<'_>>,
@@ -150,14 +197,9 @@ pub async fn admit_personal_history_inner(
             cluster.fence_authority(&mut transaction, authority).await?;
         }
     }
-    let outcome = admit_personal_history_in_transaction(
-        &mut transaction,
-        identity,
-        writes,
-        outbox,
-        c2s_delivery,
-    )
-    .await?;
+    let outcome =
+        admit_history_in_transaction(&mut transaction, identity, archives, outbox, c2s_delivery)
+            .await?;
     // The short health gate admits this final turn before the exact PostgreSQL
     // authority recheck, and holds a counted permit through acknowledged
     // COMMIT. A concurrent health transition freezes new work immediately,
@@ -235,21 +277,36 @@ pub async fn admit_personal_history_inner(
 /// The caller owns commit/rollback. In particular, a replay does not commit
 /// the transaction here: a service may still need to roll back projections
 /// made by another repository before returning its typed replay result.
-pub async fn admit_personal_history_in_transaction(
+pub(crate) async fn admit_personal_history_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     identity: Option<&PersonalHistoryIdentity<'_>>,
-    writes: &[PersonalArchiveWrite<'_>],
+    candidates: &[ArchiveCandidate<'_>],
     outbox: Option<&PersonalS2sOutboxAdmission<'_>>,
     c2s_delivery: Option<&PersonalC2sDeliveryAdmission<'_>>,
 ) -> Result<PersonalHistoryAdmission> {
+    admit_history_in_transaction(
+        transaction,
+        identity,
+        HistoryArchives::Candidates(candidates),
+        outbox,
+        c2s_delivery,
+    )
+    .await
+}
+
+async fn admit_history_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    identity: Option<&PersonalHistoryIdentity<'_>>,
+    archives: HistoryArchives<'_>,
+    outbox: Option<&PersonalS2sOutboxAdmission<'_>>,
+    c2s_delivery: Option<&PersonalC2sDeliveryAdmission<'_>>,
+) -> Result<PersonalHistoryAdmission> {
+    let mut required_accounts = archives.owners();
     anyhow::ensure!(
-        (!writes.is_empty() || outbox.is_some() || c2s_delivery.is_some()) && writes.len() <= 2,
+        (!required_accounts.is_empty() || outbox.is_some() || c2s_delivery.is_some())
+            && required_accounts.len() <= 2,
         "personal history admission must contain an owner projection or durable delivery"
     );
-    let mut required_accounts = writes
-        .iter()
-        .map(|write| write.owner_id)
-        .collect::<Vec<_>>();
     if let Some(outbox) = outbox {
         required_accounts.push(outbox.local_actor_id);
     }
@@ -265,6 +322,9 @@ pub async fn admit_personal_history_in_transaction(
     {
         return Ok(PersonalHistoryAdmission::AccountUnavailable);
     }
+    // Account locks precede the one preference/roster snapshot; no policy
+    // row locks are needed. Only the selected rows become replay evidence.
+    let writes = archives.select(transaction).await?;
     anyhow::ensure!(
         identity.is_none() || !writes.is_empty() || outbox.is_some() || c2s_delivery.is_some(),
         "personal history identity requires a recoverable archive, S2S, or C2S projection"
@@ -272,7 +332,7 @@ pub async fn admit_personal_history_in_transaction(
     let mut normalized = Vec::with_capacity(writes.len());
     let mut owner_ids = HashSet::new();
     let mut archive_ids = HashSet::new();
-    for write in writes {
+    for write in &writes {
         anyhow::ensure!(
             owner_ids.insert(write.owner_id),
             "personal history admission contains duplicate owners"
@@ -403,9 +463,53 @@ pub async fn admit_personal_history_in_transaction(
         .await?;
     }
     if let Some((delivery, sender_jid)) = normalized_delivery {
-        insert_c2s_delivery_in_transaction(transaction, delivery, &sender_jid).await?;
+        let delivery = PersonalC2sDeliveryAdmission {
+            policy: northstar_message_core::OfflineStorePolicy {
+                mam_backed: recipient_archive_written(&writes, delivery.recipient_id),
+                ..delivery.policy
+            },
+            ..*delivery
+        };
+        insert_c2s_delivery_in_transaction(transaction, &delivery, &sender_jid).await?;
     }
     Ok(PersonalHistoryAdmission::Stored(
         writes.iter().map(|write| write.id).collect(),
     ))
+}
+
+fn recipient_archive_written(writes: &[PersonalArchiveWrite<'_>], recipient_id: Uuid) -> bool {
+    writes.iter().any(|write| write.owner_id == recipient_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mam_backing_requires_a_written_projection_owned_by_the_recipient() {
+        let sender = Uuid::from_u128(1);
+        let recipient = Uuid::from_u128(2);
+        let sender_projection = PersonalArchiveWrite {
+            id: Uuid::from_u128(3),
+            owner_id: sender,
+            peer_jid: "bob@example.test",
+            stanza: "<message/>",
+            encrypted: false,
+            stanza_id: None,
+        };
+        let recipient_projection = PersonalArchiveWrite {
+            id: Uuid::from_u128(4),
+            owner_id: recipient,
+            peer_jid: "alice@example.test/Phone",
+            ..sender_projection
+        };
+        assert!(!recipient_archive_written(&[], recipient));
+        let writes = [sender_projection];
+        assert!(!recipient_archive_written(&writes, recipient));
+        assert!(recipient_archive_written(&writes, sender));
+        assert!(recipient_archive_written(
+            &[recipient_projection],
+            recipient
+        ));
+    }
 }

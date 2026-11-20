@@ -17,9 +17,10 @@ use northstar_delivery_core::DurableDelivery;
 use northstar_message_core::direct_handoff::HandoffHandle;
 use northstar_message_core::route_item::{RouteEnqueue, RouteItem, RouteSendError};
 pub use northstar_message_core::{
-    ArchiveProjection as ArchiveWrite, DirectPersonalMessageAdmission, FederationDelivery,
-    IdentityAuthority, LocalDelivery, MessageCommit as DurableAdmissionOutcome, MessageIdentity,
-    MessagePostCommit, PersonalMessageDestination, ValidatedPersonalMessage,
+    ArchiveAdmissionOutcome, ArchiveCandidate, ArchiveDirection, ArchiveProjection as ArchiveWrite,
+    DirectPersonalMessageAdmission, FederationDelivery, IdentityAuthority, LocalDelivery,
+    MessageCommit as DurableAdmissionOutcome, MessageIdentity, MessagePostCommit,
+    PersonalMessageDestination, ValidatedPersonalMessage,
 };
 use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
 use northstar_room_core::{ClusterMucInviteAuthority, DurableMucInviteOutcome};
@@ -446,7 +447,7 @@ where
 pub struct RemoteMucInviteAdmission<'a> {
     pub local_actor_id: Uuid,
     pub identity: Option<MessageIdentity<'a>>,
-    pub archives: &'a [ArchiveWrite<'a>],
+    pub archives: &'a [ArchiveCandidate<'a>],
     pub room_id: Uuid,
     pub invitee_bare_jid: &'a str,
     pub target_domain: &'a str,
@@ -482,14 +483,13 @@ pub struct OfflineMessageAdmission<'a> {
 pub struct LocalMucInviteAdmission<'a> {
     pub local_actor_id: Uuid,
     pub identity: Option<MessageIdentity<'a>>,
-    pub archives: &'a [ArchiveWrite<'a>],
+    pub archives: &'a [ArchiveCandidate<'a>],
     pub delivery_id: Uuid,
     pub recipient_id: Uuid,
     pub recipient_bare_jid: &'a str,
     pub sender_jid: &'a str,
     pub stanza: &'a str,
     pub encrypted: bool,
-    pub mam_backed: bool,
     pub room_id: Uuid,
     pub cluster_authority: Option<&'a ClusterMucInviteAuthority>,
 }
@@ -538,11 +538,6 @@ pub trait MessageRepository:
         peer: &str,
         kind: PrivacyStanzaKind,
     ) -> impl Future<Output = Result<bool>> + Send;
-    fn archive_allowed(
-        &self,
-        owner_id: Uuid,
-        peer_jid: &str,
-    ) -> impl Future<Output = Result<bool>> + Send;
     fn admit_remote_muc_invite(
         &self,
         request: &RemoteMucInviteAdmission<'_>,
@@ -551,8 +546,10 @@ pub trait MessageRepository:
         &self,
         request: &LocalMucInviteAdmission<'_>,
     ) -> impl Future<Output = Result<DurableMucInviteOutcome>> + Send;
-    fn admit_history(&self, writes: &[ArchiveWrite<'_>])
-        -> impl Future<Output = Result<()>> + Send;
+    fn admit_history(
+        &self,
+        candidates: &[ArchiveCandidate<'_>],
+    ) -> impl Future<Output = Result<ArchiveAdmissionOutcome>> + Send;
     fn store_offline(
         &self,
         admission: OfflineMessageAdmission<'_>,
@@ -697,8 +694,14 @@ impl<R: MessageRepository> MessageService<R> {
         self.repository.admit_local_muc_invite(request).await
     }
 
-    pub async fn admit_history(&self, writes: &[ArchiveWrite<'_>]) -> Result<()> {
-        self.repository.admit_history(writes).await
+    pub async fn admit_history(
+        &self,
+        candidates: &[ArchiveCandidate<'_>],
+    ) -> Result<ArchiveAdmissionOutcome> {
+        if candidates.is_empty() {
+            return Ok(ArchiveAdmissionOutcome::Projected(Vec::new()));
+        }
+        self.repository.admit_history(candidates).await
     }
 
     pub async fn store_offline(
@@ -708,24 +711,9 @@ impl<R: MessageRepository> MessageService<R> {
         self.repository.store_offline(admission).await
     }
 
-    /// Combine stanza storage semantics, deployment encryption policy and the
-    /// account's MAM preference. Retractions are always history mutations and
-    /// therefore bypass ordinary content-storage eligibility.
-    pub async fn archive_enabled(
-        &self,
-        owner_id: Uuid,
-        peer_jid: &str,
-        stanza_storage_eligible: bool,
-        encrypted: bool,
-        retraction: bool,
-    ) -> Result<bool> {
-        if retraction {
-            return Ok(true);
-        }
-        if !stanza_storage_eligible || (self.require_encrypted_archive && !encrypted) {
-            return Ok(false);
-        }
-        self.repository.archive_allowed(owner_id, peer_jid).await
+    /// Retractions use their own history mutation port.
+    pub fn archive_content_eligible(&self, stanza_storage_eligible: bool, encrypted: bool) -> bool {
+        stanza_storage_eligible && (!self.require_encrypted_archive || encrypted)
     }
 
     /// Commit one validated personal-message command through its authoritative

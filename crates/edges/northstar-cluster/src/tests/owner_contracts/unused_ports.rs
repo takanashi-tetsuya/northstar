@@ -905,10 +905,6 @@ mod message {
             panic!("unused MessageRepository::privacy_allows_session port");
         }
 
-        async fn archive_allowed(&self, _owner_id: Uuid, _peer_jid: &str) -> Result<bool> {
-            panic!("unused MessageRepository::archive_allowed port");
-        }
-
         async fn admit_remote_muc_invite(
             &self,
             _request: &RemoteMucInviteAdmission<'_>,
@@ -923,7 +919,10 @@ mod message {
             panic!("unused MessageRepository::admit_local_muc_invite port");
         }
 
-        async fn admit_history(&self, _writes: &[ArchiveWrite<'_>]) -> Result<()> {
+        async fn admit_history(
+            &self,
+            _candidates: &[ArchiveCandidate<'_>],
+        ) -> Result<ArchiveAdmissionOutcome> {
             panic!("unused MessageRepository::admit_history port");
         }
 

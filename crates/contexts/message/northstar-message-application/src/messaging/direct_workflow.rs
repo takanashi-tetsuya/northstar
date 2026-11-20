@@ -362,8 +362,10 @@ impl<'a, 'live> PreparedLocalDirect<'a, 'live> {
             command
                 .archives
                 .iter()
-                .all(|projection| projection.owner_id == original.actor_id
-                    || projection.owner_id == destination.recipient_id),
+                .all(
+                    |candidate| candidate.projection.owner_id == original.actor_id
+                        || candidate.projection.owner_id == destination.recipient_id
+                ),
             "direct preparation archive owner mismatch"
         );
         let facts = DirectCommandFacts::for_local(&command, eligibility)?;

@@ -33,9 +33,7 @@ async fn assert_personal_evidence_is_keyed(pool: &PgPool, identity_value: &str) 
     assert_eq!(row.2, None);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
-async fn members_only_invite_is_one_replay_safe_transaction() {
+pub(super) async fn isolated_message_pool() -> (PgPool, PgPool, String) {
     let url = std::env::var("TEST_DATABASE_URL")
         .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
     let admin = sqlx::postgres::PgPoolOptions::new()
@@ -67,7 +65,22 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
         .await
         .unwrap();
     crate::support::migrate(&pool).await.unwrap();
+    (admin, pool, schema)
+}
 
+pub(super) async fn drop_isolated_message_pool(admin: PgPool, pool: PgPool, schema: String) {
+    pool.close().await;
+    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+        .execute(&admin)
+        .await
+        .unwrap();
+    admin.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
+async fn members_only_invite_is_one_replay_safe_transaction() {
+    let (admin, pool, schema) = isolated_message_pool().await;
     let marker = Uuid::new_v4().simple().to_string();
     let sender_id = Uuid::new_v4();
     let recipient_id = Uuid::new_v4();
@@ -150,21 +163,27 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
         "<message from='{sender}' to='{recipient}'><body>invite</body><delay xmlns='urn:xmpp:delay'/></message>"
     );
     let writes = [
-        ArchiveWrite {
-            id: sender_archive_id,
-            owner_id: sender_id,
-            peer_jid: &recipient,
-            stanza: &sender_archive,
-            encrypted: true,
-            stanza_id: Some("invite-client-id"),
+        ArchiveCandidate {
+            direction: ArchiveDirection::Outbound,
+            projection: ArchiveWrite {
+                id: sender_archive_id,
+                owner_id: sender_id,
+                peer_jid: &recipient,
+                stanza: &sender_archive,
+                encrypted: true,
+                stanza_id: Some("invite-client-id"),
+            },
         },
-        ArchiveWrite {
-            id: recipient_archive_id,
-            owner_id: recipient_id,
-            peer_jid: &sender,
-            stanza: &recipient_archive,
-            encrypted: true,
-            stanza_id: Some("invite-client-id"),
+        ArchiveCandidate {
+            direction: ArchiveDirection::Inbound,
+            projection: ArchiveWrite {
+                id: recipient_archive_id,
+                owner_id: recipient_id,
+                peer_jid: &sender,
+                stanza: &recipient_archive,
+                encrypted: true,
+                stanza_id: Some("invite-client-id"),
+            },
         },
     ];
     let request = LocalMucInviteAdmission {
@@ -184,7 +203,6 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
         sender_jid: &sender,
         stanza: &delayed,
         encrypted: true,
-        mam_backed: true,
         room_id: room.id,
         cluster_authority: None,
     };
@@ -329,13 +347,16 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     let failure_delivery_id = Uuid::new_v4();
     let failure_archive_id = Uuid::new_v4();
     let failure_stanza = format!("<message from='{sender}' to='{failure_recipient}'/>");
-    let failure_writes = [ArchiveWrite {
-        id: failure_archive_id,
-        owner_id: failure_recipient_id,
-        peer_jid: &sender,
-        stanza: &failure_stanza,
-        encrypted: true,
-        stanza_id: None,
+    let failure_writes = [ArchiveCandidate {
+        direction: ArchiveDirection::Inbound,
+        projection: ArchiveWrite {
+            id: failure_archive_id,
+            owner_id: failure_recipient_id,
+            peer_jid: &sender,
+            stanza: &failure_stanza,
+            encrypted: true,
+            stanza_id: None,
+        },
     }];
     let failure_request = LocalMucInviteAdmission {
         local_actor_id: sender_id,
@@ -354,7 +375,6 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
         sender_jid: &sender,
         stanza: &failure_stanza,
         encrypted: true,
-        mam_backed: true,
         room_id: failure_room.id,
         cluster_authority: None,
     };
@@ -409,13 +429,16 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     let quota_delivery_id = Uuid::new_v4();
     let quota_archive_id = Uuid::new_v4();
     let quota_stanza = format!("<message from='{sender}' to='{quota_recipient}'/>");
-    let quota_writes = [ArchiveWrite {
-        id: quota_archive_id,
-        owner_id: quota_recipient_id,
-        peer_jid: &sender,
-        stanza: &quota_stanza,
-        encrypted: true,
-        stanza_id: None,
+    let quota_writes = [ArchiveCandidate {
+        direction: ArchiveDirection::Inbound,
+        projection: ArchiveWrite {
+            id: quota_archive_id,
+            owner_id: quota_recipient_id,
+            peer_jid: &sender,
+            stanza: &quota_stanza,
+            encrypted: true,
+            stanza_id: None,
+        },
     }];
     let quota_request = LocalMucInviteAdmission {
         local_actor_id: sender_id,
@@ -434,7 +457,6 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
         sender_jid: &sender,
         stanza: &quota_stanza,
         encrypted: true,
-        mam_backed: true,
         room_id: quota_room.id,
         cluster_authority: None,
     };
@@ -472,21 +494,27 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
         format!("<message from='{sender}' to='{concurrent_recipient}' id='invite'/>");
     let concurrent_message_stanza =
         format!("<message from='{sender}' to='{concurrent_recipient}' id='message'/>");
-    let invite_writes = [ArchiveWrite {
-        id: concurrent_invite_archive,
-        owner_id: concurrent_recipient_id,
-        peer_jid: &sender,
-        stanza: &concurrent_invite_stanza,
-        encrypted: true,
-        stanza_id: None,
+    let invite_writes = [ArchiveCandidate {
+        direction: ArchiveDirection::Inbound,
+        projection: ArchiveWrite {
+            id: concurrent_invite_archive,
+            owner_id: concurrent_recipient_id,
+            peer_jid: &sender,
+            stanza: &concurrent_invite_stanza,
+            encrypted: true,
+            stanza_id: None,
+        },
     }];
-    let message_writes = [ArchiveWrite {
-        id: concurrent_message_archive,
-        owner_id: concurrent_recipient_id,
-        peer_jid: &sender,
-        stanza: &concurrent_message_stanza,
-        encrypted: true,
-        stanza_id: None,
+    let message_writes = [ArchiveCandidate {
+        direction: ArchiveDirection::Inbound,
+        projection: ArchiveWrite {
+            id: concurrent_message_archive,
+            owner_id: concurrent_recipient_id,
+            peer_jid: &sender,
+            stanza: &concurrent_message_stanza,
+            encrypted: true,
+            stanza_id: None,
+        },
     }];
     let concurrent_invite = LocalMucInviteAdmission {
         local_actor_id: sender_id,
@@ -505,7 +533,6 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
         sender_jid: &sender,
         stanza: &concurrent_invite_stanza,
         encrypted: true,
-        mam_backed: true,
         room_id: concurrent_room.id,
         cluster_authority: None,
     };
@@ -527,7 +554,6 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
             sender_jid: &sender,
             stanza: &concurrent_message_stanza,
             encrypted: true,
-            mam_backed: true,
         }),
     };
     let (invite_result, message_result) = tokio::time::timeout(Duration::from_secs(5), async {
@@ -570,13 +596,16 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     let remote_archive_id = Uuid::new_v4();
     let remote_archive =
         format!("<message from='{sender}' to='{remote_target}'><body>invite</body></message>");
-    let remote_writes = [ArchiveWrite {
-        id: remote_archive_id,
-        owner_id: sender_id,
-        peer_jid: &remote_target,
-        stanza: &remote_archive,
-        encrypted: true,
-        stanza_id: Some("remote-invite"),
+    let remote_writes = [ArchiveCandidate {
+        direction: ArchiveDirection::Outbound,
+        projection: ArchiveWrite {
+            id: remote_archive_id,
+            owner_id: sender_id,
+            peer_jid: &remote_target,
+            stanza: &remote_archive,
+            encrypted: true,
+            stanza_id: Some("remote-invite"),
+        },
     }];
     let outbox_policy = northstar_federation_core::S2sOutboxPolicy {
         ttl_seconds: 300,
@@ -736,13 +765,16 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     let failed_remote_target = format!("failed-{}@failure.remote.test", &marker[..8]);
     let failed_remote_stanza = format!("<message from='{sender}' to='{failed_remote_target}'/>");
     let failed_remote_archive_id = Uuid::new_v4();
-    let failed_remote_writes = [ArchiveWrite {
-        id: failed_remote_archive_id,
-        owner_id: sender_id,
-        peer_jid: &failed_remote_target,
-        stanza: &failed_remote_stanza,
-        encrypted: true,
-        stanza_id: None,
+    let failed_remote_writes = [ArchiveCandidate {
+        direction: ArchiveDirection::Outbound,
+        projection: ArchiveWrite {
+            id: failed_remote_archive_id,
+            owner_id: sender_id,
+            peer_jid: &failed_remote_target,
+            stanza: &failed_remote_stanza,
+            encrypted: true,
+            stanza_id: None,
+        },
     }];
     let failed_remote = RemoteMucInviteAdmission {
         local_actor_id: sender_id,
@@ -798,13 +830,16 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     let legacy_remote_stanza =
         format!("<message from='{sender}' to='{remote_target}' id='legacy-concurrent'/>",);
     let concurrent_remote_archive_id = Uuid::new_v4();
-    let concurrent_remote_writes = [ArchiveWrite {
-        id: concurrent_remote_archive_id,
-        owner_id: sender_id,
-        peer_jid: &remote_target,
-        stanza: &concurrent_remote_stanza,
-        encrypted: true,
-        stanza_id: None,
+    let concurrent_remote_writes = [ArchiveCandidate {
+        direction: ArchiveDirection::Outbound,
+        projection: ArchiveWrite {
+            id: concurrent_remote_archive_id,
+            owner_id: sender_id,
+            peer_jid: &remote_target,
+            stanza: &concurrent_remote_stanza,
+            encrypted: true,
+            stanza_id: None,
+        },
     }];
     let concurrent_remote = RemoteMucInviteAdmission {
         local_actor_id: sender_id,
@@ -850,10 +885,5 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     );
     assert!(legacy_remote_result.unwrap());
 
-    pool.close().await;
-    sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
-        .execute(&admin)
-        .await
-        .unwrap();
-    admin.close().await;
+    drop_isolated_message_pool(admin, pool, schema).await;
 }

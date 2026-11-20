@@ -21,7 +21,9 @@ use northstar_abuse_policy::message_admission::{
 use northstar_abuse_policy::MessageAdmissionRequest;
 use northstar_delivery_core::DurableDelivery;
 use northstar_message_core::route_item::{RouteEnqueue, RouteItem as _, RouteSendError};
-use northstar_message_core::{ArchiveProjection, LocalDelivery, MessageIdentity};
+use northstar_message_core::{
+    ArchiveCandidate, ArchiveDirection, ArchiveProjection, LocalDelivery, MessageIdentity,
+};
 use std::sync::{Arc, Mutex};
 
 struct CloneProbe<T>(std::marker::PhantomData<T>);
@@ -68,7 +70,6 @@ fn prepared<'command>(
             sender_jid: "alice@example.test/device",
             stanza: stored,
             encrypted: false,
-            mam_backed: false,
         }),
     };
     PreparedLocalDirect::bind(
@@ -400,13 +401,16 @@ impl DirectCommitRepository for RecordingCommit {
         let archives: Vec<_> = self
             .archive_ids
             .iter()
-            .map(|id| ArchiveProjection {
-                id: *id,
-                owner_id: Uuid::from_u128(1),
-                peer_jid: "bob@example.test",
-                stanza: &self.stored,
-                encrypted: false,
-                stanza_id: Some("origin"),
+            .map(|id| ArchiveCandidate {
+                direction: ArchiveDirection::Outbound,
+                projection: ArchiveProjection {
+                    id: *id,
+                    owner_id: Uuid::from_u128(1),
+                    peer_jid: "bob@example.test",
+                    stanza: &self.stored,
+                    encrypted: false,
+                    stanza_id: Some("origin"),
+                },
             })
             .collect();
         assert_eq!(command.archives, archives.as_slice());
@@ -423,7 +427,6 @@ impl DirectCommitRepository for RecordingCommit {
                 sender_jid: "alice@example.test/device",
                 stanza: &self.stored,
                 encrypted: false,
-                mam_backed: false,
             }
         );
         if self.transaction == Transaction::Unconfirmed {
@@ -462,7 +465,7 @@ impl DirectCommitRepository for RecordingCommit {
         Ok(DirectPersonalMessageAdmission {
             commit: match self.transaction {
                 Transaction::Stored => MessageCommit::Stored {
-                    archive_written: !command.archives.is_empty(),
+                    archive_written: !self.archive_ids.is_empty(),
                     post_commit: MessagePostCommit::RouteLocalDelivery {
                         delivery_id: destination.delivery_id,
                         recipient_id: destination.recipient_id,
@@ -520,9 +523,6 @@ impl messaging_service::MessageRepository for RecordingCommit {
     ) -> anyhow::Result<bool> {
         panic!("service repeated session privacy lookup")
     }
-    async fn archive_allowed(&self, _: Uuid, _: &str) -> anyhow::Result<bool> {
-        panic!("service repeated archive lookup")
-    }
     async fn admit_remote_muc_invite(
         &self,
         _: &messaging_service::RemoteMucInviteAdmission<'_>,
@@ -535,7 +535,10 @@ impl messaging_service::MessageRepository for RecordingCommit {
     ) -> anyhow::Result<northstar_room_core::DurableMucInviteOutcome> {
         panic!("service admitted local invite")
     }
-    async fn admit_history(&self, _: &[messaging_service::ArchiveWrite<'_>]) -> anyhow::Result<()> {
+    async fn admit_history(
+        &self,
+        _: &[ArchiveCandidate<'_>],
+    ) -> anyhow::Result<messaging_service::ArchiveAdmissionOutcome> {
         panic!("service used separate history transaction")
     }
     async fn store_offline(
@@ -1142,7 +1145,7 @@ fn prepare_envelope<'command, 'live>(
     owner: &DirectOperationHandle,
     request: &MessageAdmissionRequest<'live>,
     stored: &'command str,
-    archives: &'command [ArchiveProjection<'command>],
+    archives: &'command [ArchiveCandidate<'command>],
     live: &'live str,
     message_type: &'live str,
     eligibility: DirectSpoolEligibility,
@@ -1186,7 +1189,6 @@ fn prepare_envelope<'command, 'live>(
                 sender_jid: "alice@example.test/device",
                 stanza: stored,
                 encrypted: false,
-                mam_backed: false,
             }),
         },
         eligibility,
@@ -1251,13 +1253,16 @@ async fn prepared_live_routes_only_the_original_envelope_and_committed_source() 
         };
         let applied = {
             let stored = String::from("delayed stored projection");
-            let archives = [ArchiveProjection {
-                id: Uuid::from_u128(8),
-                owner_id: request.actor_id,
-                peer_jid: "bob@example.test",
-                stanza: &stored,
-                encrypted: false,
-                stanza_id: Some("origin"),
+            let archives = [ArchiveCandidate {
+                direction: ArchiveDirection::Outbound,
+                projection: ArchiveProjection {
+                    id: Uuid::from_u128(8),
+                    owner_id: request.actor_id,
+                    peer_jid: "bob@example.test",
+                    stanza: &stored,
+                    encrypted: false,
+                    stanza_id: Some("origin"),
+                },
             }];
             let mut repository = RecordingCommit::stored(events.clone());
             repository.eligibility = eligibility;

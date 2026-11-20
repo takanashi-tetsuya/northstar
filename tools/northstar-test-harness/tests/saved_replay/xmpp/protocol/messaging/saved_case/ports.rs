@@ -136,7 +136,7 @@ impl direct_commit::DirectCommitRepository for DirectPort<'_> {
     type Error = anyhow::Error;
     async fn commit_direct<'a>(
         &'a self,
-        command: &'a ValidatedPersonalMessage<'a>,
+        _command: &'a ValidatedPersonalMessage<'a>,
         _: DirectSpoolEligibility,
         observer: Option<&'a dyn direct_commit::DirectCommitObserver>,
     ) -> Result<northstar_message_core::DirectPersonalMessageAdmission> {
@@ -202,10 +202,10 @@ impl direct_commit::DirectCommitRepository for DirectPort<'_> {
                 recipient_id,
                 delivery_id,
                 live_claim_id,
-                ..
+                archive_ids,
             } => (
                 northstar_message_core::MessageCommit::Stored {
-                    archive_written: !command.archives.is_empty(),
+                    archive_written: !archive_ids.is_empty(),
                     post_commit: MessagePostCommit::RouteLocalDelivery {
                         recipient_id,
                         delivery_id,

@@ -20,7 +20,8 @@ use northstar_message_application::messaging::{
 use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
 #[cfg(test)]
 use northstar_message_xmpp::messaging::preparation_fixture::{
-    direct_spool_eligibility, LocalArchivePolicy, LocalProjectionAuthority, OriginalDirectMessage,
+    direct_spool_eligibility, LocalArchiveEligibility, LocalProjectionAuthority,
+    OriginalDirectMessage,
 };
 #[cfg(test)]
 use northstar_stream::frame_execution::Stage;

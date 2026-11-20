@@ -25,7 +25,6 @@ fn prepared() -> (DirectOperationHandle, PreparedLocalDirect<'static, 'static>) 
             sender_jid: "alice@example.test/device",
             stanza: "private-stored-stanza",
             encrypted: false,
-            mam_backed: false,
         }),
     };
     let prepared = PreparedLocalDirect::bind(

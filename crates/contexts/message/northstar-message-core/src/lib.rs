@@ -24,6 +24,26 @@ pub struct ArchiveProjection<'a> {
     pub stanza_id: Option<&'a str>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArchiveDirection {
+    Outbound,
+    Inbound,
+}
+
+/// A hint- and encryption-eligible projection whose owner policy is decided
+/// by the history transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArchiveCandidate<'a> {
+    pub projection: ArchiveProjection<'a>,
+    pub direction: ArchiveDirection,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ArchiveAdmissionOutcome {
+    Projected(Vec<Uuid>),
+    AccountUnavailable,
+}
+
 /// The authenticated authority which owns a stable message identity.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IdentityAuthority {
@@ -65,7 +85,6 @@ pub struct LocalDelivery<'a> {
     pub sender_jid: &'a str,
     pub stanza: &'a str,
     pub encrypted: bool,
-    pub mam_backed: bool,
 }
 
 /// Durable federation projection committed before the outbox worker wakes.
@@ -93,14 +112,8 @@ pub enum PersonalMessageDestination<'a> {
 pub struct ValidatedPersonalMessage<'a> {
     pub local_actor_id: Option<Uuid>,
     pub identity: Option<MessageIdentity<'a>>,
-    pub archives: &'a [ArchiveProjection<'a>],
+    pub archives: &'a [ArchiveCandidate<'a>],
     pub destination: PersonalMessageDestination<'a>,
-}
-
-impl ValidatedPersonalMessage<'_> {
-    pub const fn writes_history(&self) -> bool {
-        !self.archives.is_empty()
-    }
 }
 
 /// Authoritative transaction result. Post-commit socket, Carbon, Push and
@@ -315,7 +328,6 @@ mod tests {
             sender_jid: "bob@example.test/device",
             stanza: "<message/>",
             encrypted: false,
-            mam_backed: false,
         };
         let command = ValidatedPersonalMessage {
             local_actor_id: Some(Uuid::nil()),
@@ -323,7 +335,7 @@ mod tests {
             archives: &[],
             destination: PersonalMessageDestination::Local(local),
         };
-        assert!(!command.writes_history());
+        assert!(command.archives.is_empty());
     }
 
     #[test]

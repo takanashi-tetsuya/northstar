@@ -11,12 +11,13 @@ use northstar_message_application::messaging::direct_workflow::{
     LocalPreparation, PreparedLocalDirect,
 };
 use northstar_message_application::messaging::{
-    admit_offline_then_push, ArchiveWrite, DirectMessageRouter, DirectRouteDelivery,
-    DirectRouteOutcome, DirectRouteRejection, DirectRouteRequest, DirectRouteTarget,
-    DurableAdmissionOutcome, FederationDelivery, FullJidFallbackPort, IdentityAuthority,
-    LocalDelivery, LocalMucInviteAdmission, LocalRecipientDecision, MessageIdentity,
-    MessagePostCommit, OfflineAdmissionOutcome, OutboundPolicyDecision, PersonalMessageDestination,
-    RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome, ValidatedPersonalMessage,
+    admit_offline_then_push, ArchiveCandidate, ArchiveDirection, ArchiveWrite, DirectMessageRouter,
+    DirectRouteDelivery, DirectRouteOutcome, DirectRouteRejection, DirectRouteRequest,
+    DirectRouteTarget, DurableAdmissionOutcome, FederationDelivery, FullJidFallbackPort,
+    IdentityAuthority, LocalDelivery, LocalMucInviteAdmission, LocalRecipientDecision,
+    MessageIdentity, MessagePostCommit, OfflineAdmissionOutcome, OutboundPolicyDecision,
+    PersonalMessageDestination, RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome,
+    ValidatedPersonalMessage,
 };
 use northstar_message_application::retractions::{DeliveryProjection, RetractionOutcome};
 use northstar_message_application::{
@@ -48,6 +49,7 @@ use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::Node;
 use std::future::Future;
 
+pub(crate) mod archive_admission;
 mod message_delivery;
 mod projection;
 
@@ -59,7 +61,7 @@ use self::projection::*;
 #[cfg(any(test, feature = "test-support"))]
 pub mod preparation_fixture {
     pub use super::projection::{
-        direct_spool_eligibility, DelayedLocalProjection, LocalArchivePolicy,
+        direct_spool_eligibility, DelayedLocalProjection, LocalArchiveEligibility,
         LocalOriginalProjection, LocalProjectionAuthority, OriginalDirectMessage,
     };
 }

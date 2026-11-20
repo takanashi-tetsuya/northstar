@@ -61,7 +61,7 @@ impl<'a> OriginalDirectMessage<'a> {
         retraction: Option<&str>,
     ) -> LocalOriginalProjection<'a, 'b> {
         // These transformations stay at their original local preparation point,
-        // after generated stanza IDs and before the original policy awaits.
+        // after generated stanza IDs and before the route is prepared.
         let rewritten = set_from(self.routed_raw, self.sender);
         let routed = strip_stanza_ids_by_domain(&rewritten, authority.domain);
         let sender_archive = add_stanza_id(
@@ -126,25 +126,67 @@ pub struct LocalOriginalProjection<'source, 'a> {
 pub struct DelayedLocalProjection<'source, 'local, 'a> {
     pub local: &'a LocalOriginalProjection<'source, 'local>,
     pub stanza: String,
-    pub archive_policy: LocalArchivePolicy,
+    pub archive_eligibility: LocalArchiveEligibility,
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct LocalArchivePolicy {
-    pub sender_enabled: bool,
-    pub recipient_enabled: bool,
+pub struct LocalArchiveEligibility {
+    pub sender_eligible: bool,
+    pub recipient_eligible: bool,
 }
 
 impl<'source, 'local> LocalOriginalProjection<'source, 'local> {
+    pub(super) fn archive_projections(
+        &self,
+    ) -> impl Iterator<Item = (ArchiveDirection, ArchiveWrite<'_>)> + '_ {
+        let source = self.source;
+        let authority = &self.authority;
+        let sender = ArchiveWrite {
+            id: authority.sender_stable_id,
+            owner_id: source.actor_id,
+            peer_jid: source.target,
+            stanza: &self.sender_archive_stanza,
+            encrypted: self.encrypted,
+            stanza_id: source.stanza_id,
+        };
+        let recipient = ArchiveWrite {
+            id: authority.recipient_stable_id,
+            owner_id: authority.recipient_id,
+            peer_jid: source.sender,
+            stanza: &self.recipient_archive_stanza,
+            encrypted: self.encrypted,
+            stanza_id: source.stanza_id,
+        };
+        std::iter::once((ArchiveDirection::Outbound, sender)).chain(
+            (authority.recipient_id != source.actor_id)
+                .then_some((ArchiveDirection::Inbound, recipient)),
+        )
+    }
+
+    pub(super) fn archive_candidates(
+        &self,
+        eligibility: LocalArchiveEligibility,
+    ) -> Vec<ArchiveCandidate<'_>> {
+        self.archive_projections()
+            .filter_map(|(direction, projection)| {
+                let eligible = match direction {
+                    ArchiveDirection::Outbound => eligibility.sender_eligible,
+                    ArchiveDirection::Inbound => eligibility.recipient_eligible,
+                };
+                super::archive_admission::archive_candidate(projection, direction, eligible)
+            })
+            .collect()
+    }
+
     pub fn delayed(
         &self,
         at: northstar_time::DateTime<northstar_time::Utc>,
-        archive_policy: LocalArchivePolicy,
+        archive_eligibility: LocalArchiveEligibility,
     ) -> DelayedLocalProjection<'source, 'local, '_> {
         DelayedLocalProjection {
             local: self,
             stanza: add_delay_from(&self.recipient_delivery, at, Some(self.authority.domain)),
-            archive_policy,
+            archive_eligibility,
         }
     }
 }
@@ -164,53 +206,17 @@ impl<'source, 'local, 'live> DelayedLocalProjection<'source, 'local, 'live> {
         anyhow::ensure!(
             destination.recipient_id == authority.recipient_id
                 && destination.delivery_id == authority.recipient_stable_id
-                && destination.encrypted == self.local.encrypted
-                && destination.mam_backed == self.archive_policy.recipient_enabled,
+                && destination.encrypted == self.local.encrypted,
             "prepared direct destination mismatch"
         );
-        let expected_owners = [
-            self.archive_policy
-                .sender_enabled
-                .then_some(source.actor_id),
-            (self.archive_policy.recipient_enabled && authority.recipient_id != source.actor_id)
-                .then_some(authority.recipient_id),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
         anyhow::ensure!(
-            command.archives.len() == expected_owners.len(),
-            "prepared direct archive set mismatch"
+            command.archives
+                == self
+                    .local
+                    .archive_candidates(self.archive_eligibility)
+                    .as_slice(),
+            "prepared direct archive candidates mismatch"
         );
-        for (projection, expected_owner) in command.archives.iter().zip(expected_owners) {
-            anyhow::ensure!(
-                projection.owner_id == expected_owner,
-                "prepared direct archive order/owner mismatch"
-            );
-            let (id, peer, stanza) = if projection.owner_id == source.actor_id {
-                (
-                    authority.sender_stable_id,
-                    source.target,
-                    self.local.sender_archive_stanza.as_str(),
-                )
-            } else if projection.owner_id == authority.recipient_id {
-                (
-                    authority.recipient_stable_id,
-                    source.sender,
-                    self.local.recipient_archive_stanza.as_str(),
-                )
-            } else {
-                anyhow::bail!("prepared direct archive owner mismatch");
-            };
-            anyhow::ensure!(
-                projection.id == id
-                    && projection.peer_jid == peer
-                    && projection.stanza == stanza
-                    && projection.encrypted == self.local.encrypted
-                    && projection.stanza_id == source.stanza_id,
-                "prepared direct archive projection mismatch"
-            );
-        }
         let admission = match &source.admission {
             OriginalAdmissionKind::Rated(payload) => {
                 PreparationAdmission::Rated(OriginalAdmission {

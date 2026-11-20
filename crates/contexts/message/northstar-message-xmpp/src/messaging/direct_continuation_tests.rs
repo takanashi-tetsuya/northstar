@@ -124,7 +124,6 @@ fn prepared<'command>(
             sender_jid: "alice@example.test/device",
             stanza: stored,
             encrypted: false,
-            mam_backed: false,
         }),
     };
     PreparedLocalDirect::bind(
@@ -230,7 +229,11 @@ impl DirectCommitRepository for Repository {
             Outcome::Stored => TransactionOutcome::Stored {
                 recipient_id: destination.recipient_id,
                 delivery_id: destination.delivery_id,
-                archive_ids: command.archives.iter().map(|write| write.id).collect(),
+                archive_ids: command
+                    .archives
+                    .iter()
+                    .map(|candidate| candidate.projection.id)
+                    .collect(),
                 live_claim_id: claim,
             },
             Outcome::Replay => TransactionOutcome::Replay {

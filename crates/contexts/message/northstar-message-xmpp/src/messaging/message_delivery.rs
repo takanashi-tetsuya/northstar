@@ -1,5 +1,6 @@
 //! Admits a client message stanza, archives it and delivers it to online, offline, carbon and federated recipients.
 
+use super::archive_admission::archive_candidate;
 use super::*;
 
 pub async fn message<S: MessageSession>(
@@ -286,16 +287,6 @@ pub async fn message<S: MessageSession>(
             return Ok(S::Action::none());
         }
         let encrypted = is_encrypted(root);
-        let archive_allowed = state
-            .message_service()
-            .archive_enabled(
-                user_id,
-                to,
-                mam_storage_eligible(root),
-                encrypted,
-                personal_retraction,
-            )
-            .await?;
         let archive = if encrypted {
             if let Some(target_id) = personal_retraction_target.as_deref() {
                 encrypted_retraction_archive_stanza(&sender_archive, target_id)
@@ -305,17 +296,22 @@ pub async fn message<S: MessageSession>(
         } else {
             sender_archive.clone()
         };
-        let writes = archive_allowed
-            .then_some(ArchiveWrite {
-                id: stable_id,
-                owner_id: user_id,
-                peer_jid: to,
-                stanza: &archive,
-                encrypted,
-                stanza_id: root.attribute("id"),
-            })
-            .into_iter()
-            .collect::<Vec<_>>();
+        let archive_write = ArchiveWrite {
+            id: stable_id,
+            owner_id: user_id,
+            peer_jid: to,
+            stanza: &archive,
+            encrypted,
+            stanza_id: root.attribute("id"),
+        };
+        let candidate = archive_candidate(
+            archive_write.clone(),
+            ArchiveDirection::Outbound,
+            !personal_retraction
+                && state
+                    .message_service()
+                    .archive_content_eligible(mam_storage_eligible(root), encrypted),
+        );
         if let DirectInviteAdmission::MembersOnly {
             room_id,
             room_epoch,
@@ -347,7 +343,7 @@ pub async fn message<S: MessageSession>(
             let admission = RemoteMucInviteAdmission {
                 local_actor_id: user_id,
                 identity,
-                archives: &writes,
+                archives: candidate.as_slice(),
                 room_id,
                 invitee_bare_jid: &invitee_bare_jid,
                 target_domain: domain,
@@ -405,7 +401,14 @@ pub async fn message<S: MessageSession>(
         } else if personal_retraction {
             session.enter_frame_stage(MessageFrameStage::Admission);
             match apply_outbound_personal_retraction(
-                state, user_id, from, to, root, &writes, domain, &routed,
+                state,
+                user_id,
+                from,
+                to,
+                root,
+                std::slice::from_ref(&archive_write),
+                domain,
+                &routed,
             )
             .await
             {
@@ -458,7 +461,7 @@ pub async fn message<S: MessageSession>(
             let admission = ValidatedPersonalMessage {
                 local_actor_id: Some(user_id),
                 identity,
-                archives: &writes,
+                archives: candidate.as_slice(),
                 destination: PersonalMessageDestination::Federation(FederationDelivery {
                     local_actor_id: user_id,
                     target_domain: domain,
@@ -580,36 +583,18 @@ pub async fn message<S: MessageSession>(
     let rewritten = local_projection.rewritten.as_str();
     let sender_archive = local_projection.sender_archive.as_str();
     let recipient_delivery = local_projection.recipient_delivery.as_str();
-    let sender_archive_stanza = local_projection.sender_archive_stanza.as_str();
     let recipient_archive_stanza = local_projection.recipient_archive_stanza.as_str();
     let durable_content_allowed = encrypted || !state.archive_requires_encryption();
     let persistence_allowed = personal_retraction || offline_storage_permitted(root);
-    let archive_allowed_by_stanza = personal_retraction || mam_storage_eligible(root);
-    let stanza_id = root.attribute("id");
-    let sender_history_enabled = state
-        .message_service()
-        .archive_enabled(
-            user_id,
-            to,
-            archive_allowed_by_stanza,
-            encrypted,
-            personal_retraction,
-        )
-        .await?;
-    let recipient_history_enabled = if recipient.id == user_id {
-        sender_history_enabled
-    } else {
-        state
+    let archive_eligible = !personal_retraction
+        && state
             .message_service()
-            .archive_enabled(
-                recipient.id,
-                from,
-                archive_allowed_by_stanza,
-                encrypted,
-                personal_retraction,
-            )
-            .await?
+            .archive_content_eligible(mam_storage_eligible(root), encrypted);
+    let archive_eligibility = LocalArchiveEligibility {
+        sender_eligible: archive_eligible,
+        recipient_eligible: archive_eligible,
     };
+    let candidates = local_projection.archive_candidates(archive_eligibility);
     let spool_only_now = if local_direct {
         match state.message_service().direct_mode() {
             DirectPostCommitMode::Live => false,
@@ -685,9 +670,8 @@ pub async fn message<S: MessageSession>(
             return Ok(message_error(root, "cancel", "service-unavailable"));
         }
     }
-    // A trusted client origin-id is account scoped.  When the recipient's
-    // personal archive is part of this admission, commit every owner
-    // projection before fanout. A concurrent/retried origin-id is then
+    // A trusted client origin-id is account scoped. Commit the durable
+    // delivery and any selected archives before fanout. A retried origin-id is
     // consumed before any resource can observe a duplicate. The exact
     // sanitized client payload (without random server stanza-ids) is the
     // collision-safe replay value.
@@ -708,27 +692,6 @@ pub async fn message<S: MessageSession>(
     if direct_delivery_candidate
         && durable_direct_delivery_allowed(direct_delivery_mode, durable_content_allowed)
     {
-        let mut writes = Vec::with_capacity(2);
-        if sender_history_enabled {
-            writes.push(ArchiveWrite {
-                id: sender_stable_id,
-                owner_id: user_id,
-                peer_jid: to,
-                stanza: sender_archive_stanza,
-                encrypted,
-                stanza_id,
-            });
-        }
-        if recipient.id != user_id && recipient_history_enabled {
-            writes.push(ArchiveWrite {
-                id: recipient_stable_id,
-                owner_id: recipient.id,
-                peer_jid: from,
-                stanza: recipient_archive_stanza,
-                encrypted,
-                stanza_id,
-            });
-        }
         let identity = origin_id.map(|identity_value| {
             let actor_scope = bare_jid(from);
             let target_scope = bare_jid(to);
@@ -741,17 +704,12 @@ pub async fn message<S: MessageSession>(
                 payload: rewritten,
             }
         });
-        let delayed_projection = local_projection.delayed(
-            northstar_time::Utc::now(),
-            LocalArchivePolicy {
-                sender_enabled: sender_history_enabled,
-                recipient_enabled: recipient_history_enabled,
-            },
-        );
+        let delayed_projection =
+            local_projection.delayed(northstar_time::Utc::now(), archive_eligibility);
         let admission = ValidatedPersonalMessage {
             local_actor_id: Some(user_id),
             identity,
-            archives: &writes,
+            archives: &candidates,
             destination: PersonalMessageDestination::Local(LocalDelivery {
                 delivery_id: recipient_stable_id,
                 recipient_id: recipient.id,
@@ -759,7 +717,6 @@ pub async fn message<S: MessageSession>(
                 sender_jid: from,
                 stanza: &delayed_projection.stanza,
                 encrypted,
-                mam_backed: recipient_history_enabled,
             }),
         };
         let eligibility = direct_spool_eligibility(degraded_spool_eligible, spool_privacy_permits);
@@ -922,27 +879,10 @@ pub async fn message<S: MessageSession>(
         if !exact_full_target_can_route {
             return Ok(message_error(root, "cancel", "service-unavailable"));
         }
-        let mut writes = Vec::with_capacity(2);
-        if sender_history_enabled {
-            writes.push(ArchiveWrite {
-                id: sender_stable_id,
-                owner_id: user_id,
-                peer_jid: to,
-                stanza: sender_archive_stanza,
-                encrypted,
-                stanza_id,
-            });
-        }
-        if recipient.id != user_id && recipient_history_enabled {
-            writes.push(ArchiveWrite {
-                id: recipient_stable_id,
-                owner_id: recipient.id,
-                peer_jid: from,
-                stanza: recipient_archive_stanza,
-                encrypted,
-                stanza_id,
-            });
-        }
+        let writes = local_projection
+            .archive_projections()
+            .map(|(_, write)| write)
+            .collect::<Vec<_>>();
         let delayed_delivery = add_delay_from(
             recipient_delivery,
             northstar_time::Utc::now(),
@@ -959,7 +899,7 @@ pub async fn message<S: MessageSession>(
             max_messages: offline_limits.max_messages,
             max_bytes: offline_limits.max_bytes,
             ttl_days: offline_limits.ttl_days,
-            mam_backed: recipient_history_enabled,
+            mam_backed: writes.iter().any(|write| write.owner_id == recipient.id),
         };
         session.enter_frame_stage(MessageFrameStage::Admission);
         match apply_personal_retraction(
@@ -1067,27 +1007,6 @@ pub async fn message<S: MessageSession>(
             northstar_time::Utc::now(),
             Some(bare_jid(from)),
         );
-        let mut writes = Vec::with_capacity(2);
-        if sender_history_enabled {
-            writes.push(ArchiveWrite {
-                id: sender_stable_id,
-                owner_id: user_id,
-                peer_jid: to,
-                stanza: sender_archive_stanza,
-                encrypted,
-                stanza_id,
-            });
-        }
-        if recipient.id != user_id && recipient_history_enabled {
-            writes.push(ArchiveWrite {
-                id: recipient_stable_id,
-                owner_id: recipient.id,
-                peer_jid: from,
-                stanza: recipient_archive_stanza,
-                encrypted,
-                stanza_id,
-            });
-        }
         let identity = origin_id.map(|identity_value| {
             let actor_scope = bare_jid(from);
             let target_scope = bare_jid(to);
@@ -1103,14 +1022,13 @@ pub async fn message<S: MessageSession>(
         let invitation = LocalMucInviteAdmission {
             local_actor_id: user_id,
             identity,
-            archives: &writes,
+            archives: &candidates,
             delivery_id: recipient_stable_id,
             recipient_id: recipient.id,
             recipient_bare_jid: &recipient_by,
             sender_jid: from,
             stanza: &delayed,
             encrypted,
-            mam_backed: recipient_history_enabled,
             room_id,
             cluster_authority: cluster_authority.as_ref(),
         };
@@ -1125,7 +1043,6 @@ pub async fn message<S: MessageSession>(
                 live_claim_id: admitted_claim_id,
                 ..
             } => {
-                history_committed = true;
                 live_claim_id = admitted_claim_id;
                 if cluster_authority.is_some() {
                     if let Err(error) = state
@@ -1293,7 +1210,8 @@ pub async fn message<S: MessageSession>(
                                 sender_jid: from,
                                 stanza: &delayed,
                                 encrypted,
-                                mam_backed: recipient_history_enabled,
+                                // No durable history admission preceded this fallback.
+                                mam_backed: false,
                                 identity: message_admission_lease
                                     .as_ref()
                                     .map(|lease| &lease.offline_dedupe),
@@ -1358,42 +1276,16 @@ pub async fn message<S: MessageSession>(
         }
     }
 
-    // Durable direct deliveries and all personal retractions committed
-    // their complete history/delivery transaction before routing. Only
-    // legacy best-effort non-retraction message types may archive here.
+    // Durable deliveries have already decided their archive projections.
+    // Volatile deliveries reach history after route acceptance.
     let accepted_route = if stored_offline { "offline" } else { "online" };
     finalize_message_admission(session, &mut message_admission_lease, accepted_route).await;
     debug_assert!(
         !personal_retraction || history_committed,
         "a personal retraction reached fanout without durable admission"
     );
-    if !history_committed && !personal_retraction {
-        let mut writes = Vec::with_capacity(2);
-        if sender_history_enabled {
-            writes.push(ArchiveWrite {
-                id: sender_stable_id,
-                owner_id: user_id,
-                peer_jid: to,
-                stanza: sender_archive_stanza,
-                encrypted,
-                stanza_id,
-            });
-        }
-        if recipient.id != user_id && recipient_history_enabled {
-            writes.push(ArchiveWrite {
-                id: recipient_stable_id,
-                owner_id: recipient.id,
-                peer_jid: from,
-                stanza: recipient_archive_stanza,
-                encrypted,
-                stanza_id,
-            });
-        }
-        let history_result = if writes.is_empty() {
-            Ok(())
-        } else {
-            state.message_service().admit_history(&writes).await
-        };
+    if live_delivery_id.is_none() && !personal_retraction {
+        let history_result = state.message_service().admit_history(&candidates).await;
         if let Err(error) = history_result {
             state.personal_message_telemetry().post_accept_failed();
             tracing::warn!(?error, %sender_stable_id, route = accepted_route, "accepted message history transaction failed atomically");

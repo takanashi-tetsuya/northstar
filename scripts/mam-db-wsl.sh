@@ -87,3 +87,14 @@ TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5
   cargo test --locked --offline -p northstar-db-it \
   message::message_repository::members_only_invite_is_one_replay_safe_transaction \
   -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee -a "$test_log"
+
+for test_name in \
+  paired_preferences_are_sampled_after_history_account_fence \
+  federated_admission_uses_committed_opt_out_and_opt_in \
+  failed_delivery_rolls_back_selected_archive_rows_and_identity
+do
+  TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$runner_schema" \
+    cargo test --locked --offline -p northstar-db-it \
+    "message::archive_admission::$test_name" \
+    -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee -a "$test_log"
+done

@@ -9,6 +9,7 @@ use northstar_abuse_policy::admission_execution::{
     ReconcileResult, TransactionScope,
 };
 use northstar_abuse_policy::admission_transaction::{AdmissionFence, FinalizeDecision};
+use northstar_abuse_policy::content_identity::PersonalRetractionContentKeyring;
 use northstar_abuse_policy::message_admission::{
     acceptance_fence, MessageAdmissionAcceptance, MessageAdmissionLease, MessageAdmissionStart,
 };
@@ -25,10 +26,11 @@ use northstar_message_application::message_admission::{
 };
 use northstar_message_application::message_carbons::{CarbonDeliveryPort, Direction};
 use northstar_message_application::messaging::{
-    ArchiveWrite, DirectMessageRoutePort, FullJidFallbackPort, LocalMucInviteAdmission,
-    LocalRecipient, LocalRecipientDecision, MessageRepository, MessageService,
-    OfflineAdmissionOutcome, OfflineMessageAdmission, OnlineRoutePort, OnlineRouteResult,
-    OutboundPolicyDecision, RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome,
+    ArchiveAdmissionOutcome, ArchiveCandidate, ArchiveDirection, DirectMessageRoutePort,
+    FullJidFallbackPort, LocalMucInviteAdmission, LocalRecipient, LocalRecipientDecision,
+    MessageRepository, MessageService, OfflineAdmissionOutcome, OfflineMessageAdmission,
+    OnlineRoutePort, OnlineRouteResult, OutboundPolicyDecision, RemoteMucInviteAdmission,
+    RemoteMucInviteAdmissionOutcome,
 };
 use northstar_message_application::retractions::{
     PreparedRetraction, RetractionOutcome, RetractionRepository, RetractionService,
@@ -94,6 +96,7 @@ pub(crate) struct StoredEnvelope {
     pub stanza: String,
     pub identity: Option<(String, String, String, String)>,
     pub archives: Vec<(Uuid, Uuid, String, String)>,
+    pub candidates: Vec<(ArchiveDirection, Uuid, String)>,
     pub eligibility: DirectSpoolEligibility,
 }
 
@@ -119,7 +122,10 @@ pub(crate) enum Event {
     Push(Uuid),
     Routed,
     PostAcceptFailed,
-    History,
+    History(Vec<(ArchiveDirection, Uuid, String)>),
+    OutboundCommit(Vec<(ArchiveDirection, Uuid, String)>),
+    Retraction(Vec<Uuid>),
+    WakeOutbox,
 }
 
 pub(crate) struct State {
@@ -133,6 +139,9 @@ pub(crate) struct State {
     pub remote_gate: Mutex<Option<oneshot::Receiver<()>>>,
     pub remote_result: Mutex<OnlineRouteResult>,
     pub archive: bool,
+    pub history_error: bool,
+    pub archive_requires_encryption: bool,
+    pub expect_retraction: bool,
     pub committed: Mutex<Option<StoredEnvelope>>,
     pub sessions: Vec<(String, OnlineSession)>,
     pub deny_connection: Option<Uuid>,
@@ -149,14 +158,39 @@ impl State {
     }
 }
 
+fn archive_facts(candidates: &[ArchiveCandidate<'_>]) -> Vec<(ArchiveDirection, Uuid, String)> {
+    candidates
+        .iter()
+        .map(|candidate| {
+            (
+                candidate.direction,
+                candidate.projection.owner_id,
+                candidate.projection.peer_jid.to_owned(),
+            )
+        })
+        .collect()
+}
+
 #[derive(Clone)]
 pub(crate) struct Repository(pub Arc<State>);
 
 impl PersonalMessageCommitRepository for Repository {
     type Error = anyhow::Error;
 
-    async fn commit<'a>(&'a self, _: &'a ValidatedPersonalMessage<'a>) -> Result<MessageCommit> {
-        panic!("unexpected non-direct commit")
+    async fn commit<'a>(
+        &'a self,
+        command: &'a ValidatedPersonalMessage<'a>,
+    ) -> Result<MessageCommit> {
+        assert!(matches!(
+            command.destination,
+            PersonalMessageDestination::Federation(_)
+        ));
+        self.0
+            .record(Event::OutboundCommit(archive_facts(command.archives)));
+        Ok(MessageCommit::Stored {
+            archive_written: self.0.archive && !command.archives.is_empty(),
+            post_commit: MessagePostCommit::WakeFederationOutbox,
+        })
     }
 }
 
@@ -193,6 +227,8 @@ impl DirectCommitRepository for Repository {
             archives: command
                 .archives
                 .iter()
+                .filter(|_| self.0.archive)
+                .map(|candidate| &candidate.projection)
                 .map(|archive| {
                     (
                         archive.id,
@@ -202,6 +238,7 @@ impl DirectCommitRepository for Repository {
                     )
                 })
                 .collect(),
+            candidates: archive_facts(command.archives),
             eligibility,
         };
         self.0
@@ -218,7 +255,12 @@ impl DirectCommitRepository for Repository {
             _ => TransactionOutcome::Stored {
                 recipient_id: local.recipient_id,
                 delivery_id: local.delivery_id,
-                archive_ids: command.archives.iter().map(|archive| archive.id).collect(),
+                archive_ids: command
+                    .archives
+                    .iter()
+                    .filter(|_| self.0.archive)
+                    .map(|candidate| candidate.projection.id)
+                    .collect(),
                 live_claim_id: Some(local.delivery_id),
             },
         };
@@ -233,7 +275,7 @@ impl DirectCommitRepository for Repository {
             CommitAnswer::Replay => MessageCommit::Replay,
             CommitAnswer::Unavailable => MessageCommit::AccountUnavailable,
             _ => MessageCommit::Stored {
-                archive_written: !command.archives.is_empty(),
+                archive_written: self.0.archive && !command.archives.is_empty(),
                 post_commit: MessagePostCommit::RouteLocalDelivery {
                     delivery_id: local.delivery_id,
                     recipient_id: local.recipient_id,
@@ -310,9 +352,6 @@ impl MessageRepository for Repository {
     ) -> Result<bool> {
         panic!("unexpected repository session privacy lookup")
     }
-    async fn archive_allowed(&self, _: Uuid, _: &str) -> Result<bool> {
-        Ok(self.0.archive)
-    }
     async fn admit_remote_muc_invite(
         &self,
         _: &RemoteMucInviteAdmission<'_>,
@@ -325,9 +364,18 @@ impl MessageRepository for Repository {
     ) -> Result<DurableMucInviteOutcome> {
         panic!("unexpected local invite")
     }
-    async fn admit_history(&self, _: &[ArchiveWrite<'_>]) -> Result<()> {
-        self.0.record(Event::History);
-        Ok(())
+    async fn admit_history(
+        &self,
+        candidates: &[ArchiveCandidate<'_>],
+    ) -> Result<ArchiveAdmissionOutcome> {
+        self.0.record(Event::History(archive_facts(candidates)));
+        anyhow::ensure!(!self.0.history_error, "history write failed after route");
+        let ids = candidates
+            .iter()
+            .filter(|_| self.0.archive)
+            .map(|candidate| candidate.projection.id)
+            .collect();
+        Ok(ArchiveAdmissionOutcome::Projected(ids))
     }
     async fn store_offline(
         &self,
@@ -420,8 +468,19 @@ impl MessageAdmissionRepository for Repository {
 }
 
 impl RetractionRepository for Repository {
-    async fn apply_prepared(&self, _: PreparedRetraction<'_>) -> Result<RetractionOutcome> {
-        panic!("unexpected retraction")
+    async fn apply_prepared(&self, prepared: PreparedRetraction<'_>) -> Result<RetractionOutcome> {
+        assert!(self.0.expect_retraction, "unexpected retraction");
+        self.0.record(Event::Retraction(
+            prepared
+                .normalized_writes
+                .iter()
+                .map(|write| write.write.owner_id)
+                .collect(),
+        ));
+        Ok(RetractionOutcome::Applied {
+            tombstones: 0,
+            live_claim_id: None,
+        })
     }
 }
 
@@ -429,6 +488,7 @@ pub(crate) struct Host {
     pub state: Arc<State>,
     messages: MessageService<Repository>,
     admissions: MessageAdmissionService<Repository>,
+    retractions: RetractionService<Repository>,
     histogram: DurationHistogram,
     pub counters: [AtomicU64; 9],
 }
@@ -437,8 +497,16 @@ impl Host {
     pub fn new(state: State) -> Self {
         let state = Arc::new(state);
         Self {
-            messages: MessageService::new(Repository(state.clone()), false),
+            messages: MessageService::new(
+                Repository(state.clone()),
+                state.archive_requires_encryption,
+            ),
             admissions: MessageAdmissionService::new(Repository(state.clone())),
+            retractions: RetractionService::new(
+                Repository(state.clone()),
+                PersonalRetractionContentKeyring::new(Arc::default()),
+                "example.test",
+            ),
             state,
             histogram: DurationHistogram::default(),
             counters: std::array::from_fn(|_| AtomicU64::new(0)),
@@ -469,6 +537,9 @@ impl Default for State {
             remote_gate: Mutex::new(None),
             remote_result: Mutex::new(OnlineRouteResult::default()),
             archive: true,
+            history_error: false,
+            archive_requires_encryption: false,
+            expect_retraction: false,
             committed: Mutex::new(None),
             sessions,
             deny_connection: Some(Uuid::from_u128(23)),
@@ -488,7 +559,7 @@ impl MessageHost for Host {
         &self.admissions
     }
     fn retraction_service(&self) -> &RetractionService<Repository> {
-        panic!("unexpected retraction service")
+        &self.retractions
     }
     fn personal_message_telemetry(&self) -> PersonalMessageTelemetry<'_> {
         PersonalMessageTelemetry::new(PersonalMessageTelemetryCells {
@@ -511,7 +582,7 @@ impl MessageHost for Host {
         "example.test"
     }
     fn archive_requires_encryption(&self) -> bool {
-        false
+        self.state.archive_requires_encryption
     }
     fn offline_delivery_limits(&self) -> OfflineDeliveryLimits {
         OfflineDeliveryLimits {
@@ -527,7 +598,7 @@ impl MessageHost for Host {
         S2sOutboxPolicy::new(60, 10, 4096, 10)
     }
     fn wake_federation_outbox(&self) {
-        panic!("unexpected federation wake")
+        self.state.record(Event::WakeOutbox);
     }
     async fn send_volatile(&self, _: &str, _: &str, _: String) -> bool {
         panic!("unexpected volatile federation")

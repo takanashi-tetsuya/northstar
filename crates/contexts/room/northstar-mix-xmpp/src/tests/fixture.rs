@@ -30,6 +30,8 @@ pub enum Call {
     Preference(Uuid, String),
     Store(bool),
     Retract(Uuid, String, Uuid),
+    MamBatch(String, Vec<String>),
+    MutationReplay(String),
 }
 
 pub struct DropFlag(pub Arc<AtomicBool>);
@@ -59,6 +61,10 @@ pub struct State {
     pub archive_replay: AtomicBool,
     pub replay: Mutex<MixBusinessReplay>,
     pub foreground_owner: Mutex<Option<foreground::Observation>>,
+    pub mam_outcome: Mutex<Option<MixMamReadOutcome>>,
+    pub mutation_iq: Mutex<Option<(String, [u8; 32])>>,
+    pub reject_mam: AtomicBool,
+    pub outbox_wakes: std::sync::atomic::AtomicUsize,
 }
 
 impl State {
@@ -108,7 +114,53 @@ macro_rules! unused_repository_methods {
     };
 }
 
+impl MixMamReadRepository for Repository {
+    async fn read_mix_mam(&self, _command: MixMamReadCommand) -> Result<MixMamReadOutcome> {
+        panic!("unexpected repository call: read_mix_mam")
+    }
+
+    async fn admit_federated_mix_mam(
+        &self,
+        command: MixMamReadCommand,
+        target_domain: &str,
+        _policy: S2sOutboxPolicy,
+        render: impl FnOnce(MixMamReadOutcome) -> Result<Vec<String>> + Send,
+    ) -> Result<MixMamAdmissionOutcome> {
+        assert!(matches!(&command.actor, MixMamReadActor::Federated { .. }));
+        let outcome = self.0.mam_outcome.lock().unwrap().take().unwrap();
+        let responses = render(outcome)?;
+        if self.0.reject_mam.load(Ordering::SeqCst) {
+            return Ok(MixMamAdmissionOutcome::OutboxRejected(
+                northstar_federation_core::S2sOutboxCapacityExceeded::PerDomain.into(),
+            ));
+        }
+        self.0
+            .record(Call::MamBatch(target_domain.to_owned(), responses));
+        Ok(MixMamAdmissionOutcome::Queued)
+    }
+}
+
 impl MixRepository for Repository {
+    async fn federated_mix_iq_replay(
+        &self,
+        _authenticated_domain: &str,
+        _actor_jid: &str,
+        request_id: &str,
+        request_digest: &[u8; 32],
+    ) -> Result<FederatedMixIqReplay> {
+        self.0.record(Call::MutationReplay(request_id.to_owned()));
+        let recorded = self.0.mutation_iq.lock().unwrap();
+        let (id, digest) = recorded
+            .as_ref()
+            .expect("unexpected mutation replay lookup");
+        assert_eq!(id, request_id);
+        Ok(if digest == request_digest {
+            FederatedMixIqReplay::Replay("<iq/>".to_owned())
+        } else {
+            FederatedMixIqReplay::Conflict
+        })
+    }
+
     async fn claim_mix_deliveries_observed(
         &self,
         request: &mix_worker::ClaimRequest,
@@ -387,8 +439,6 @@ impl MixRepository for Repository {
         authorized_mix_event_page(channel_id: Uuid, actor: &str, node: &str, before: Option<(DateTime<Utc>, Uuid)>, limit: i64) -> MixReadOutcome<MixEventPage>;
         publish_mix_avatar(channel_id: Uuid, actor: &str, node: &str, item_id: &str, payload: &str, federated: Option<&FederatedMixMutation>) -> bool;
         retract_mix_avatar(channel_id: Uuid, actor: &str, node: &str, item_id: &str, federated: Option<&FederatedMixMutation>) -> bool;
-        authorized_mix_mam_page(channel_id: Uuid, actor: &str, viewer_id: Option<Uuid>, query: &MamArchiveQuery) -> MixReadOutcome<MixMamPage>;
-        authorized_mix_mam_boundaries(channel_id: Uuid, actor: &str, viewer_id: Option<Uuid>) -> MixReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>;
         authorized_mix_access_entries(channel_id: Uuid, actor: &str, banned: bool, limit: i64) -> MixReadOutcome<Vec<String>>;
         update_mix_info(channel_id: Uuid, actor: &str, update: MixInfoUpdate, federated: Option<&FederatedMixMutation>) -> MixMutationOutcome;
         update_mix_config(channel_id: Uuid, actor: &str, update: MixConfigUpdate, roles: MixRoleUpdate, federated: Option<&FederatedMixMutation>) -> MixMutationOutcome;
@@ -415,7 +465,6 @@ impl MixRepository for Repository {
         mix_muc_mirror_for_muc(muc_room_id: Uuid) -> Option<MixMucMirror>;
         mix_muc_mirror_service_complete(mix_domain: &str) -> bool;
         enqueue_s2s_response_batch(target_domain: &str, responses: &[String], policy: S2sOutboxPolicy) -> ();
-        federated_mix_iq_replay(authenticated_domain: &str, actor_jid: &str, request_id: &str, request_digest: &[u8; 32]) -> FederatedMixIqReplay;
         admit_federated_mix_iq_result(authenticated_domain: &str, actor_jid: &str, request_id: &str, request_digest: &[u8; 32], response: &str, policy: S2sOutboxPolicy) -> FederatedMixIqReplay;
         claim_mix_deliveries(limit: i64, max_bytes: i64) -> Vec<ClaimedMixDelivery>;
         acknowledge_mix_delivery(delivery_id: Uuid, lease_token: Uuid, observation: Option<&northstar_delivery_core::native_write::AckRequest>) -> bool;
@@ -483,7 +532,9 @@ impl FederationRoute for Federation {
     fn outbox_policy(&self) -> S2sOutboxPolicy {
         S2sOutboxPolicy::new(60, 100, 1_000_000, 100)
     }
-    fn wake_outbox(&self) {}
+    fn wake_outbox(&self) {
+        self.0.outbox_wakes.fetch_add(1, Ordering::SeqCst);
+    }
     async fn send(&self, target_domain: &str, stanza: String, bounce_to: Option<String>) -> bool {
         assert!(bounce_to.is_none());
         self.0.record(Call::Federation(
@@ -549,6 +600,10 @@ impl Context {
             archive_replay: AtomicBool::new(false),
             replay: Mutex::new(MixBusinessReplay::Miss),
             foreground_owner: Mutex::new(None),
+            mam_outcome: Mutex::new(None),
+            mutation_iq: Mutex::new(None),
+            reject_mam: AtomicBool::new(false),
+            outbox_wakes: std::sync::atomic::AtomicUsize::new(0),
         });
         let generations = Arc::new(Vec::new());
         let service = MixService::new_with_outbox_database_admission(

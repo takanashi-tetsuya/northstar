@@ -26,3 +26,24 @@ for test_name in \
     exit 1
   fi
 done
+
+for test_name in \
+  local_mix_mam_uses_the_same_snapshot_after_disable_or_generation_change \
+  federated_mix_mam_denies_revocation_committed_while_waiting_for_channel \
+  federated_mix_mam_revocation_after_channel_fence_sees_whole_batch \
+  federated_mix_mam_quota_rejection_rolls_back_the_result_prefix \
+  mix_mam_ids_resolve_in_visible_scope_before_filters \
+  mix_mam_keeps_the_stored_publisher_identity_after_visibility_changes; do
+  if ! output="$(TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
+    cargo test --locked --offline -p northstar-db-it \
+    "room::mix_mam_authority::$test_name" \
+    -- --ignored --exact --nocapture 2>&1)"; then
+    printf '%s\n' "$output"
+    exit 1
+  fi
+  printf '%s\n' "$output"
+  if ! grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$output"; then
+    echo "expected exactly one ignored MIX MAM authority test to execute: $test_name" >&2
+    exit 1
+  fi
+done

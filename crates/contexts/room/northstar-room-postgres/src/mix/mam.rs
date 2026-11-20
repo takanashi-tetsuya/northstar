@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub async fn mix_mam_blocked_patterns(
+async fn mix_mam_blocked_patterns(
     transaction: &mut Transaction<'_, Postgres>,
     viewer_id: Option<Uuid>,
 ) -> Result<Vec<MamBlockedPattern>> {
@@ -21,7 +21,7 @@ pub async fn mix_mam_blocked_patterns(
     ))
 }
 
-pub fn push_mix_mam_archive_base(
+fn push_mix_mam_archive_base(
     query_builder: &mut QueryBuilder<Postgres>,
     channel_id: Uuid,
     blocked_patterns: &[MamBlockedPattern],
@@ -48,7 +48,7 @@ pub fn push_mix_mam_archive_base(
     }
 }
 
-pub fn push_mix_mam_scope(
+fn push_mix_mam_scope(
     query_builder: &mut QueryBuilder<Postgres>,
     channel_id: Uuid,
     query: &northstar_archive_core::MamArchiveQuery,
@@ -92,90 +92,39 @@ pub fn push_mix_mam_scope(
     }
 }
 
-/// Query a MIX channel's mandatory messages archive using one repeatable-read
-/// snapshot. Cursor validation, the result count, page rows and first index
-/// therefore cannot disagree if retention runs concurrently.
-pub async fn mix_mam_page_for(
-    pool: &PgPool,
+fn push_mix_mam_reference_scope(
+    builder: &mut QueryBuilder<Postgres>,
+    channel_id: Uuid,
+    blocked_patterns: &[MamBlockedPattern],
+    referenced_ids: Vec<Uuid>,
+) {
+    push_mix_mam_archive_base(builder, channel_id, blocked_patterns);
+    builder
+        .push(" AND authoritative_id = ANY(")
+        .push_bind(referenced_ids)
+        .push(")");
+}
+
+pub(crate) async fn mix_mam_page_tx(
+    transaction: &mut Transaction<'_, Postgres>,
     channel_id: Uuid,
     viewer_id: Option<Uuid>,
-    actor: Option<&str>,
     query: &northstar_archive_core::MamArchiveQuery,
-) -> Result<MixReadOutcome<MixMamPage>> {
-    let mut transaction = pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-        .execute(&mut *transaction)
-        .await?;
-    if let Some(actor) = actor {
-        match authorize_mix_node_read_tx(&mut transaction, channel_id, actor, NODE_MESSAGES).await?
-        {
-            MixReadOutcome::Found(channel) => {
-                if !mix_mam_peer_filter_allowed(&channel.jid_visibility, query.with_jid.is_some()) {
-                    transaction.rollback().await?;
-                    return Ok(MixReadOutcome::Unauthorized);
-                }
-            }
-            MixReadOutcome::Unauthorized => {
-                transaction.rollback().await?;
-                return Ok(MixReadOutcome::Unauthorized);
-            }
-            MixReadOutcome::NotFound => {
-                transaction.rollback().await?;
-                return Ok(MixReadOutcome::NotFound);
-            }
-        }
-    }
-    let blocked_patterns = mix_mam_blocked_patterns(&mut transaction, viewer_id).await?;
-
-    // Item IDs must match the form filters. Form/RSM cursors need only be
-    // visible in the channel's base scope, independently of those filters.
-    let requested_ids = query
-        .ids
-        .iter()
-        .copied()
-        .collect::<std::collections::HashSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    if !requested_ids.is_empty() {
-        let mut builder = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM mix_events");
-        push_mix_mam_scope(
-            &mut builder,
-            channel_id,
-            query,
-            &blocked_patterns,
-            None,
-            None,
-        );
-        builder
-            .push(" AND authoritative_id = ANY(")
-            .push_bind(requested_ids.clone())
-            .push(")");
-        let found: i64 = builder
-            .build_query_scalar()
-            .fetch_one(&mut *transaction)
-            .await?;
-        if found != requested_ids.len() as i64 {
-            transaction.rollback().await?;
-            return Ok(MixReadOutcome::NotFound);
-        }
-    }
+) -> Result<Option<MixMamPage>> {
+    let blocked_patterns = mix_mam_blocked_patterns(transaction, viewer_id).await?;
+    // Resolve requested IDs and cursors in the visible base before filtering.
     let referenced_ids = mam_referenced_ids(query);
     let mut visible_points = std::collections::HashMap::with_capacity(referenced_ids.len());
     if !referenced_ids.is_empty() {
         let mut builder =
             QueryBuilder::<Postgres>::new("SELECT authoritative_id, created_at FROM mix_events");
-        push_mix_mam_archive_base(&mut builder, channel_id, &blocked_patterns);
-        builder
-            .push(" AND authoritative_id = ANY(")
-            .push_bind(referenced_ids)
-            .push(")");
-        for row in builder.build().fetch_all(&mut *transaction).await? {
+        push_mix_mam_reference_scope(&mut builder, channel_id, &blocked_patterns, referenced_ids);
+        for row in builder.build().fetch_all(&mut **transaction).await? {
             visible_points.insert(row.try_get("authoritative_id")?, row.try_get("created_at")?);
         }
     }
     let Some(resolved) = resolve_mam_query(query, &visible_points) else {
-        transaction.rollback().await?;
-        return Ok(MixReadOutcome::NotFound);
+        return Ok(None);
     };
     let form_after = resolved.plan.count_bounds.after;
     let form_before = resolved.plan.count_bounds.before;
@@ -191,7 +140,7 @@ pub async fn mix_mam_page_for(
     );
     let total: i64 = count_builder
         .build_query_scalar()
-        .fetch_one(&mut *transaction)
+        .fetch_one(&mut **transaction)
         .await?;
 
     let max = query.max.clamp(0, MAX_MAM_PAGE_SIZE);
@@ -216,7 +165,7 @@ pub async fn mix_mam_page_for(
     if let Some(index) = window.offset {
         page_builder.push(" OFFSET ").push_bind(index);
     }
-    let rows = page_builder.build().fetch_all(&mut *transaction).await?;
+    let rows = page_builder.build().fetch_all(&mut **transaction).await?;
     let (events, complete) = finish_mam_page(
         rows.iter()
             .map(|row| MixEvent {
@@ -248,18 +197,58 @@ pub async fn mix_mam_page_for(
             .push(")");
         index_builder
             .build_query_scalar()
-            .fetch_one(&mut *transaction)
+            .fetch_one(&mut **transaction)
             .await?
     } else {
         0
     };
-    transaction.commit().await?;
-    Ok(MixReadOutcome::Found(MixMamPage {
+    Ok(Some(MixMamPage {
         events,
         total,
         first_index,
         complete,
     }))
+}
+
+pub(crate) async fn mix_mam_boundaries_tx(
+    transaction: &mut Transaction<'_, Postgres>,
+    channel_id: Uuid,
+    viewer_id: Option<Uuid>,
+) -> Result<(
+    Option<northstar_archive_core::ArchiveBoundary>,
+    Option<northstar_archive_core::ArchiveBoundary>,
+)> {
+    let blocked_patterns = mix_mam_blocked_patterns(transaction, viewer_id).await?;
+    let mut first_builder =
+        QueryBuilder::<Postgres>::new("SELECT authoritative_id AS id,created_at FROM mix_events");
+    push_mix_mam_archive_base(&mut first_builder, channel_id, &blocked_patterns);
+    first_builder.push(" ORDER BY created_at ASC,authoritative_id ASC LIMIT 1");
+    let first = first_builder
+        .build()
+        .fetch_optional(&mut **transaction)
+        .await?;
+    let mut last_builder =
+        QueryBuilder::<Postgres>::new("SELECT authoritative_id AS id,created_at FROM mix_events");
+    push_mix_mam_archive_base(&mut last_builder, channel_id, &blocked_patterns);
+    last_builder.push(" ORDER BY created_at DESC,authoritative_id DESC LIMIT 1");
+    let last = last_builder
+        .build()
+        .fetch_optional(&mut **transaction)
+        .await?;
+    let convert = |row: sqlx::postgres::PgRow| northstar_archive_core::ArchiveBoundary {
+        id: row.get("id"),
+        created_at: row.get("created_at"),
+    };
+    Ok((first.map(convert), last.map(convert)))
+}
+
+#[cfg(any(test, feature = "test-support"))]
+async fn mix_mam_test_snapshot(pool: &PgPool) -> Result<Transaction<'_, Postgres>> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *transaction)
+        .await?;
+    Ok(transaction)
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -268,12 +257,10 @@ pub async fn mix_mam_page(
     channel_id: Uuid,
     query: &northstar_archive_core::MamArchiveQuery,
 ) -> Result<Option<MixMamPage>> {
-    Ok(
-        match mix_mam_page_for(pool, channel_id, None, None, query).await? {
-            MixReadOutcome::Found(page) => Some(page),
-            MixReadOutcome::Unauthorized | MixReadOutcome::NotFound => None,
-        },
-    )
+    let mut transaction = mix_mam_test_snapshot(pool).await?;
+    let page = mix_mam_page_tx(&mut transaction, channel_id, None, query).await?;
+    transaction.commit().await?;
+    Ok(page)
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -283,22 +270,10 @@ pub async fn mix_mam_page_visible(
     viewer_id: Uuid,
     query: &northstar_archive_core::MamArchiveQuery,
 ) -> Result<Option<MixMamPage>> {
-    Ok(
-        match mix_mam_page_for(pool, channel_id, Some(viewer_id), None, query).await? {
-            MixReadOutcome::Found(page) => Some(page),
-            MixReadOutcome::Unauthorized | MixReadOutcome::NotFound => None,
-        },
-    )
-}
-
-pub async fn authorized_mix_mam_page(
-    pool: &PgPool,
-    channel_id: Uuid,
-    actor: &str,
-    viewer_id: Option<Uuid>,
-    query: &northstar_archive_core::MamArchiveQuery,
-) -> Result<MixReadOutcome<MixMamPage>> {
-    mix_mam_page_for(pool, channel_id, viewer_id, Some(actor), query).await
+    let mut transaction = mix_mam_test_snapshot(pool).await?;
+    let page = mix_mam_page_tx(&mut transaction, channel_id, Some(viewer_id), query).await?;
+    transaction.commit().await?;
+    Ok(page)
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -309,81 +284,56 @@ pub async fn mix_mam_boundaries(
     Option<northstar_archive_core::ArchiveBoundary>,
     Option<northstar_archive_core::ArchiveBoundary>,
 )> {
-    let first = sqlx::query(
-        "SELECT authoritative_id AS id, created_at FROM mix_events
-         WHERE channel_id = $1 AND node = $2
-         ORDER BY created_at ASC, authoritative_id ASC LIMIT 1",
-    )
-    .bind(channel_id)
-    .bind(NODE_MESSAGES)
-    .fetch_optional(pool)
-    .await?;
-    let last = sqlx::query(
-        "SELECT authoritative_id AS id, created_at FROM mix_events
-         WHERE channel_id = $1 AND node = $2
-         ORDER BY created_at DESC, authoritative_id DESC LIMIT 1",
-    )
-    .bind(channel_id)
-    .bind(NODE_MESSAGES)
-    .fetch_optional(pool)
-    .await?;
-    let convert = |row: sqlx::postgres::PgRow| northstar_archive_core::ArchiveBoundary {
-        id: row.get("id"),
-        created_at: row.get("created_at"),
-    };
-    Ok((first.map(convert), last.map(convert)))
+    let mut transaction = mix_mam_test_snapshot(pool).await?;
+    let boundaries = mix_mam_boundaries_tx(&mut transaction, channel_id, None).await?;
+    transaction.commit().await?;
+    Ok(boundaries)
 }
 
-pub async fn authorized_mix_mam_boundaries(
-    pool: &PgPool,
-    channel_id: Uuid,
-    actor: &str,
-    viewer_id: Option<Uuid>,
-) -> Result<
-    MixReadOutcome<(
-        Option<northstar_archive_core::ArchiveBoundary>,
-        Option<northstar_archive_core::ArchiveBoundary>,
-    )>,
-> {
-    let mut transaction = pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-        .execute(&mut *transaction)
-        .await?;
-    match authorize_mix_node_read_tx(&mut transaction, channel_id, actor, NODE_MESSAGES).await? {
-        MixReadOutcome::Found(_) => {}
-        MixReadOutcome::Unauthorized => {
-            transaction.rollback().await?;
-            return Ok(MixReadOutcome::Unauthorized);
-        }
-        MixReadOutcome::NotFound => {
-            transaction.rollback().await?;
-            return Ok(MixReadOutcome::NotFound);
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use northstar_archive_core::{MamArchiveQuery, MamRsmPage};
+
+    #[test]
+    fn mix_mam_reference_scope_applies_blocks_before_form_filters() {
+        let channel_id = Uuid::from_u128(1);
+        let visible = Uuid::from_u128(2);
+        let blocked = Uuid::from_u128(3);
+        let stamp = DateTime::from_timestamp(1_000, 0).unwrap();
+        let blocks = [MamBlockedPattern::Bare("blocked@example.test".into())];
+        let mut query = MamArchiveQuery {
+            with_jid: Some("publisher@example.test/resource".into()),
+            start: Some(DateTime::from_timestamp(2_000, 0).unwrap()),
+            end: None,
+            before_id: None,
+            after_id: None,
+            ids: vec![visible, visible],
+            page: MamRsmPage::First,
+            max: 10,
+        };
+        assert_eq!(mam_referenced_ids(&query), vec![visible]);
+        let mut references = QueryBuilder::<Postgres>::new("SELECT id FROM mix_events");
+        push_mix_mam_reference_scope(
+            &mut references,
+            channel_id,
+            &blocks,
+            mam_referenced_ids(&query),
+        );
+        assert_eq!(
+            references.sql().as_str(),
+            "SELECT id FROM mix_events WHERE channel_id = $1 AND node = $2 AND publisher_jid <> $3 AND authoritative_id = ANY($4)"
+        );
+        let visible_points = std::collections::HashMap::from([(visible, stamp)]);
+        assert!(resolve_mam_query(&query, &visible_points).is_some());
+
+        let mut selection = QueryBuilder::<Postgres>::new("SELECT id FROM mix_events");
+        push_mix_mam_scope(&mut selection, channel_id, &query, &blocks, None, None);
+        assert_eq!(
+            selection.sql().as_str(),
+            "SELECT id FROM mix_events WHERE channel_id = $1 AND node = $2 AND publisher_jid <> $3 AND publisher_jid = $4 AND created_at >= $5 AND authoritative_id = ANY($6)"
+        );
+        query.ids.push(blocked);
+        assert!(resolve_mam_query(&query, &visible_points).is_none());
     }
-    let blocked_patterns = mix_mam_blocked_patterns(&mut transaction, viewer_id).await?;
-    let mut first_builder =
-        QueryBuilder::<Postgres>::new("SELECT authoritative_id AS id,created_at FROM mix_events");
-    push_mix_mam_archive_base(&mut first_builder, channel_id, &blocked_patterns);
-    first_builder.push(" ORDER BY created_at ASC,authoritative_id ASC LIMIT 1");
-    let first = first_builder
-        .build()
-        .fetch_optional(&mut *transaction)
-        .await?;
-    let mut last_builder =
-        QueryBuilder::<Postgres>::new("SELECT authoritative_id AS id,created_at FROM mix_events");
-    push_mix_mam_archive_base(&mut last_builder, channel_id, &blocked_patterns);
-    last_builder.push(" ORDER BY created_at DESC,authoritative_id DESC LIMIT 1");
-    let last = last_builder
-        .build()
-        .fetch_optional(&mut *transaction)
-        .await?;
-    let convert = |row: sqlx::postgres::PgRow| northstar_archive_core::ArchiveBoundary {
-        id: row.get("id"),
-        created_at: row.get("created_at"),
-    };
-    transaction.commit().await?;
-    Ok(MixReadOutcome::Found((
-        first.map(convert),
-        last.map(convert),
-    )))
 }

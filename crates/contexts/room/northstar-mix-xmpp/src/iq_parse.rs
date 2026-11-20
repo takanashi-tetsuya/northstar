@@ -332,6 +332,7 @@ pub fn parse_iq(raw: &str) -> Result<Option<OwnedIq>> {
                     IqOperation::MamError("bad-request")
                 }
             }
+            Some((_, _, Some(MAM_NS))) => IqOperation::MamError("bad-request"),
             Some((child, "ping", Some(northstar_xep_0199::NAMESPACE))) => {
                 northstar_xep_0199::parse_ping_element(child)
                     .map_err(|error| anyhow::anyhow!("invalid MIX ping: {error}"))?;

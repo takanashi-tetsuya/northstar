@@ -214,13 +214,13 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
     let mut filtered_item_id = query(northstar_archive_core::MamRsmPage::First, 10);
     filtered_item_id.with_jid = Some("bob@example.test".to_owned());
     filtered_item_id.ids = vec![first];
-    assert!(
-        mix_mam_page(&pool, channel_id, &filtered_item_id)
-            .await
-            .unwrap()
-            .is_none(),
-        "an item ID must match the publisher filter"
-    );
+    let visible_but_filtered = mix_mam_page(&pool, channel_id, &filtered_item_id)
+        .await
+        .unwrap()
+        .expect("a visible item ID need not match the publisher filter");
+    assert!(visible_but_filtered.events.is_empty());
+    assert_eq!(visible_but_filtered.total, 0);
+    assert!(visible_but_filtered.complete);
     filtered_item_id.ids = vec![second, second];
     let duplicate_item_id = mix_mam_page(&pool, channel_id, &filtered_item_id)
         .await
@@ -338,6 +338,12 @@ async fn mix_mam_snapshot_filters_cursors_and_metadata_are_consistent() {
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
 async fn authorized_mix_mam_peer_filter_uses_current_visibility_snapshot() {
+    use northstar_room_application::mix_service::{
+        MixMamReadActor, MixMamReadCommand, MixMamReadOperation, MixMamReadOutcome,
+        MixMamReadRepository, MixMamReadResult, MixMamReadTarget,
+    };
+    use northstar_workflows::room_effects::PostgresMixRepository;
+
     let url = std::env::var("TEST_DATABASE_URL")
         .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
     let pool = sqlx::postgres::PgPoolOptions::new()
@@ -347,7 +353,18 @@ async fn authorized_mix_mam_peer_filter_uses_current_visibility_snapshot() {
         .unwrap();
     crate::support::migrate(&pool).await.unwrap();
     let suffix = Uuid::new_v4().simple().to_string();
-    let owner = format!("owner-{suffix}@example.test");
+    let username = format!("owner-{suffix}");
+    let owner = format!("{username}@example.test");
+    let account_id = Uuid::new_v4();
+    let auth_generation: i64 = sqlx::query_scalar(
+        "INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'test-only')
+         RETURNING auth_generation",
+    )
+    .bind(account_id)
+    .bind(&username)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     let localpart = format!("mam-policy-{}", &suffix[..16]);
     let (created, _) = create_mix_channel(
         &northstar_workflows::room_effects::WorkflowRoomEffects,
@@ -366,6 +383,22 @@ async fn authorized_mix_mam_peer_filter_uses_current_visibility_snapshot() {
     };
     let mut filtered = query(northstar_archive_core::MamRsmPage::First, 10);
     filtered.with_jid = Some("peer@example.test".to_owned());
+    let repository = PostgresMixRepository::new(pool.clone());
+    let read = |query: northstar_archive_core::MamArchiveQuery| {
+        repository.read_mix_mam(MixMamReadCommand {
+            target: MixMamReadTarget {
+                service_domain: "mix.example.test".to_owned(),
+                localpart: localpart.clone(),
+            },
+            actor: MixMamReadActor::Local {
+                account_id,
+                username: username.clone(),
+                auth_generation,
+                local_domain: "example.test".to_owned(),
+            },
+            operation: MixMamReadOperation::Query(query.into()),
+        })
+    };
 
     let visible_channel = mix_channel_by_id(&pool, channel_id).await.unwrap().unwrap();
     assert_eq!(visible_channel.jid_visibility, "visible");
@@ -375,22 +408,17 @@ async fn authorized_mix_mam_peer_filter_uses_current_visibility_snapshot() {
         .await
         .unwrap();
     assert!(matches!(
-        authorized_mix_mam_page(&pool, channel_id, &owner, None, &filtered)
-            .await
-            .unwrap(),
-        MixReadOutcome::Unauthorized
+        read(filtered.clone()).await.unwrap(),
+        MixMamReadOutcome::NotAuthorized { .. }
     ));
     assert!(matches!(
-        authorized_mix_mam_page(
-            &pool,
-            channel_id,
-            &owner,
-            None,
-            &query(northstar_archive_core::MamRsmPage::First, 10)
-        )
-        .await
-        .unwrap(),
-        MixReadOutcome::Found(_)
+        read(query(northstar_archive_core::MamRsmPage::First, 10))
+            .await
+            .unwrap(),
+        MixMamReadOutcome::Authorized {
+            result: MixMamReadResult::Page(_),
+            ..
+        }
     ));
 
     let hidden_channel = mix_channel_by_id(&pool, channel_id).await.unwrap().unwrap();
@@ -401,13 +429,19 @@ async fn authorized_mix_mam_peer_filter_uses_current_visibility_snapshot() {
         .await
         .unwrap();
     assert!(matches!(
-        authorized_mix_mam_page(&pool, channel_id, &owner, None, &filtered)
-            .await
-            .unwrap(),
-        MixReadOutcome::Found(_)
+        read(filtered).await.unwrap(),
+        MixMamReadOutcome::Authorized {
+            result: MixMamReadResult::Page(_),
+            ..
+        }
     ));
     sqlx::query("DELETE FROM mix_channels WHERE id=$1")
         .bind(channel_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE id=$1")
+        .bind(account_id)
         .execute(&pool)
         .await
         .unwrap();

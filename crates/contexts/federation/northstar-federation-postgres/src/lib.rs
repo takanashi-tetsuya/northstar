@@ -15,7 +15,8 @@ use uuid::Uuid;
 
 const OUTBOX_ADVISORY_LOCK: i64 = 0x4e53_5332_534f_5554;
 use northstar_federation_core::{
-    ExpiredS2sOutboxItem, S2sOutboxItem, S2sOutboxPolicy, MAX_S2S_STANZA_BYTES,
+    ExpiredS2sOutboxItem, S2sOutboxCapacityExceeded, S2sOutboxItem, S2sOutboxPolicy,
+    MAX_S2S_STANZA_BYTES,
 };
 
 /// One internally consistent PostgreSQL view of the durable delivery queue.
@@ -264,7 +265,7 @@ pub async fn enqueue_s2s_outbox_with_id_in_transaction(
     let stanza_bytes = i64::try_from(stanza.len()).context("federation stanza is too large")?;
     if row_count >= policy.max_rows || byte_count.saturating_add(stanza_bytes) > policy.max_bytes {
         S2S_OUTBOX_CAPACITY_REJECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
-        anyhow::bail!("durable federation outbox reached its global capacity");
+        return Err(S2sOutboxCapacityExceeded::Global.into());
     }
 
     let domain_count: i64 = sqlx::query_scalar(
@@ -275,7 +276,7 @@ pub async fn enqueue_s2s_outbox_with_id_in_transaction(
     .await?;
     if domain_count >= policy.max_per_domain {
         S2S_OUTBOX_CAPACITY_REJECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
-        anyhow::bail!("durable federation outbox reached its per-domain capacity");
+        return Err(S2sOutboxCapacityExceeded::PerDomain.into());
     }
 
     sqlx::query(

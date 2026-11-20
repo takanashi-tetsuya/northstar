@@ -6,6 +6,7 @@ use northstar_time::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+mod mam_read_impl;
 mod relay_profile_snapshot;
 mod repository_impl;
 #[derive(Clone)]

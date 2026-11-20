@@ -291,6 +291,7 @@ pub trait MixHost: Send + Sync + 'static {
 pub struct MixSessionUser<'a> {
     pub id: Uuid,
     pub username: &'a str,
+    pub auth_generation: i64,
 }
 
 /// One client session's view for the MIX stanza entry points.

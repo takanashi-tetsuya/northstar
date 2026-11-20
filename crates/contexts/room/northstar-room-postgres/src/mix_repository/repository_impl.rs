@@ -528,49 +528,6 @@ impl<E: RoomEffects> MixRepository for PostgresMixRepository<E> {
         )
         .await
     }
-    async fn authorized_mix_mam_page(
-        &self,
-        channel_id: Uuid,
-        actor: &str,
-        viewer_id: Option<Uuid>,
-        query: &MamArchiveQuery,
-    ) -> Result<MixReadOutcome<MixMamPage>> {
-        Ok(
-            match crate::mix::authorized_mix_mam_page(
-                &self.pool,
-                channel_id,
-                actor,
-                viewer_id,
-                &mam_query_db(query),
-            )
-            .await?
-            {
-                crate::mix::MixReadOutcome::Found(page) => MixReadOutcome::Found(mam_page(page)),
-                crate::mix::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
-                crate::mix::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
-            },
-        )
-    }
-    async fn authorized_mix_mam_boundaries(
-        &self,
-        channel_id: Uuid,
-        actor: &str,
-        viewer_id: Option<Uuid>,
-    ) -> Result<MixReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>> {
-        Ok(
-            match crate::mix::authorized_mix_mam_boundaries(
-                &self.pool, channel_id, actor, viewer_id,
-            )
-            .await?
-            {
-                crate::mix::MixReadOutcome::Found((first, last)) => {
-                    MixReadOutcome::Found((first.map(boundary), last.map(boundary)))
-                }
-                crate::mix::MixReadOutcome::Unauthorized => MixReadOutcome::Unauthorized,
-                crate::mix::MixReadOutcome::NotFound => MixReadOutcome::NotFound,
-            },
-        )
-    }
     async fn authorized_mix_access_entries(
         &self,
         channel_id: Uuid,

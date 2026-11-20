@@ -15,6 +15,7 @@ use tokio::sync::{watch, Mutex, MutexGuard, OwnedSemaphorePermit};
 use uuid::Uuid;
 
 mod contracts;
+mod mam_read;
 mod operations;
 mod payloads;
 mod wake;
@@ -32,6 +33,10 @@ pub use self::contracts::{
     RemotePamCompletion, RemotePamCompletionOutcome, RemotePamJoin, RetractMixMessageAdmission,
     RetractMixMessageOutcome, RetractMixMessageRequest, SetNickError, SourceArchiveAdmission,
     StoreMixMessageRequest, UpdateSubscriptionsOutcome,
+};
+pub use self::mam_read::{
+    MixMamAdmissionOutcome, MixMamReadActor, MixMamReadCommand, MixMamReadOperation,
+    MixMamReadOutcome, MixMamReadRepository, MixMamReadResult, MixMamReadTarget,
 };
 pub use self::operations::{
     canonical_mix_access_pattern, mix_timestamp_item_id, participant_jid_visible, prepare_mix_nick,

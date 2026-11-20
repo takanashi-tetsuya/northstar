@@ -119,7 +119,7 @@ pub async fn try_mix_iq(session: &impl MixSession, raw: &str) -> Result<Option<M
     if !CanonicalJid::parse(to).is_ok_and(|target| target.domainpart() == mix_domain(session)) {
         return Ok(None);
     }
-    handle_local_mix_iq(session, request, &actor_bare, full_jid)
+    handle_local_mix_iq(session, request, user, &actor_bare, full_jid)
         .await
         .map(Some)
 }
@@ -586,9 +586,10 @@ pub async fn handle_pam_request(
     }
 }
 
-pub async fn handle_local_mix_iq(
+async fn handle_local_mix_iq(
     session: &impl MixSession,
     request: OwnedIq,
+    user: MixSessionUser<'_>,
     actor_bare: &str,
     reply_to: &str,
 ) -> Result<MixAction> {
@@ -597,16 +598,24 @@ pub async fn handle_local_mix_iq(
         .as_deref()
         .unwrap_or(&mix_domain(session))
         .to_owned();
-    if matches!(
-        request.operation,
-        IqOperation::Mam(_)
-            | IqOperation::MamForm
-            | IqOperation::MamMetadata
-            | IqOperation::MamError(_)
-    ) {
-        return Ok(MixAction::SendMany(
-            handle_mix_mam_iq(session.host(), &request, actor_bare, &from, reply_to).await?,
-        ));
+    if is_mix_mam_request(&request) {
+        let reply = MixMamReply {
+            request: &request,
+            addressed: &from,
+            reply_to,
+        };
+        let actor = MixMamReadActor::Local {
+            account_id: user.id,
+            username: user.username.to_owned(),
+            auth_generation: user.auth_generation,
+            local_domain: session.host().local_domain().to_owned(),
+        };
+        let command = match reply.command(session.host().as_ref(), actor) {
+            Ok(command) => command,
+            Err(response) => return Ok(MixAction::SendMany(vec![response])),
+        };
+        let outcome = session.host().mix_service().read_mix_mam(command).await?;
+        return Ok(MixAction::SendMany(reply.render(outcome)?));
     }
     let response =
         handle_channel_iq(session.host(), &request, actor_bare, &from, reply_to, None).await?;

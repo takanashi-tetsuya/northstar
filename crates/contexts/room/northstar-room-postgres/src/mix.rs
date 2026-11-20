@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use northstar_archive_core::{
-    classify_mam_blocked_jids, finish_mam_page, mam_referenced_ids, mix_mam_peer_filter_allowed,
-    resolve_mam_query, MamBlockedIdentitySource, MamBlockedPattern,
+    classify_mam_blocked_jids, finish_mam_page, mam_referenced_ids, resolve_mam_query,
+    MamBlockedIdentitySource, MamBlockedPattern,
 };
 use northstar_telemetry::delivery_counters::MIX_DELIVERY_CAPACITY_REJECTIONS_TOTAL;
 use northstar_telemetry::delivery_counters::MIX_DELIVERY_DEAD_LETTERS_TOTAL;
@@ -44,7 +44,9 @@ pub use self::delivery_settlement::*;
 pub use self::delivery_transfer::*;
 pub use self::intent::*;
 pub use self::jid_map_retract::*;
-pub use self::mam::*;
+#[cfg(any(test, feature = "test-support"))]
+pub use self::mam::{mix_mam_boundaries, mix_mam_page, mix_mam_page_visible};
+pub(crate) use self::mam::{mix_mam_boundaries_tx, mix_mam_page_tx};
 pub use self::membership::*;
 pub use self::nick_preference::*;
 pub use self::pam_completion::*;

@@ -69,6 +69,28 @@ impl S2sOutboxPolicy {
     }
 }
 
+/// A capacity rejection leaves the caller free to roll back its whole batch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum S2sOutboxCapacityExceeded {
+    Global,
+    PerDomain,
+}
+
+impl std::fmt::Display for S2sOutboxCapacityExceeded {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let scope = match self {
+            Self::Global => "global",
+            Self::PerDomain => "per-domain",
+        };
+        write!(
+            formatter,
+            "durable federation outbox reached its {scope} capacity"
+        )
+    }
+}
+
+impl std::error::Error for S2sOutboxCapacityExceeded {}
+
 /// Durable S2S outbox queue entry.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct S2sOutboxItem {

@@ -766,6 +766,7 @@ impl MixSession for Session {
         Some(MixSessionUser {
             id: Uuid::from_u128(81),
             username: "bob",
+            auth_generation: 0,
         })
     }
     fn full_jid(&self) -> Option<&str> {
@@ -783,6 +784,66 @@ impl MixSession for Session {
     fn frame_observer(&self) -> &dyn MixFrameObserver {
         &self.observer
     }
+}
+
+#[tokio::test]
+async fn federated_mam_bypasses_a_recorded_mutation_iq_id() {
+    use northstar_room_application::mix_service::{
+        MixMamPage, MixMamReadOutcome, MixMamReadResult,
+    };
+
+    let context = Context::new(1);
+    let host = Arc::new(Host {
+        context: context.clone(),
+        relay: MixIqRelayIndex::new(),
+    });
+    let mutation = "<iq type='set' id='reused' from='bob@remote.test/phone' to='room@mix.local.test'><leave xmlns='urn:xmpp:mix:core:1'/></iq>";
+    *context.state.mutation_iq.lock().unwrap() =
+        Some(("reused".into(), Sha256::digest(mutation.as_bytes()).into()));
+    let request = "<iq type='set' id='reused' from='bob@remote.test/phone' to='room@mix.local.test'><query xmlns='urn:xmpp:mam:2'/></iq>";
+    *context.state.mam_outcome.lock().unwrap() = Some(MixMamReadOutcome::Authorized {
+        channel_jid: "room@mix.local.test".into(),
+        result: MixMamReadResult::Page(MixMamPage {
+            events: vec![],
+            total: 0,
+            first_index: 0,
+            complete: true,
+        }),
+    });
+    assert!(federated_mix_iq(host, "remote.test", request.to_owned())
+        .await
+        .unwrap());
+    let calls = context.state.calls();
+    let [Call::MamBatch(domain, responses)] = calls.as_slice() else {
+        panic!("expected only MAM admission, got {calls:?}");
+    };
+    assert_eq!(domain, "remote.test");
+    assert_eq!(responses.len(), 1);
+    assert!(responses[0].contains("<fin"));
+    assert_eq!(context.state.outbox_wakes.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn rejected_federated_mam_batch_does_not_wake_or_send_a_fallback() {
+    use northstar_room_application::mix_service::{MixMamReadOutcome, MixMamReadResult};
+
+    let context = Context::new(1);
+    let host = Arc::new(Host {
+        context: context.clone(),
+        relay: MixIqRelayIndex::new(),
+    });
+    context.state.reject_mam.store(true, Ordering::SeqCst);
+    *context.state.mam_outcome.lock().unwrap() = Some(MixMamReadOutcome::Authorized {
+        channel_jid: "room@mix.local.test".into(),
+        result: MixMamReadResult::Form,
+    });
+    let request = "<iq type='get' id='full' from='bob@remote.test/phone' to='room@mix.local.test'><query xmlns='urn:xmpp:mam:2'/></iq>";
+    assert!(federated_mix_iq(host, "remote.test", request.to_owned())
+        .await
+        .unwrap());
+    assert!(context.state.mam_outcome.lock().unwrap().is_none());
+    assert!(context.state.calls().is_empty());
+    assert_eq!(context.state.outbox_wakes.load(Ordering::SeqCst), 0);
 }
 
 pub async fn ingress_contracts() {

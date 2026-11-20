@@ -242,27 +242,6 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    pub async fn authorized_mix_mam_page(
-        &self,
-        channel_id: Uuid,
-        actor: &str,
-        viewer_id: Option<Uuid>,
-        query: &MamArchiveQuery,
-    ) -> Result<MixReadOutcome<MixMamPage>> {
-        self.repository
-            .authorized_mix_mam_page(channel_id, actor, viewer_id, query)
-            .await
-    }
-    pub async fn authorized_mix_mam_boundaries(
-        &self,
-        channel_id: Uuid,
-        actor: &str,
-        viewer_id: Option<Uuid>,
-    ) -> Result<MixReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>> {
-        self.repository
-            .authorized_mix_mam_boundaries(channel_id, actor, viewer_id)
-            .await
-    }
     pub async fn authorized_mix_access_entries(
         &self,
         channel_id: Uuid,
@@ -473,9 +452,7 @@ impl<R: MixRepository> MixService<R> {
             .await
     }
 
-    /// Admit one ordered federation response stream atomically. A capacity or
-    /// validation failure rolls the complete stream back, so the remote peer
-    /// cannot observe a MAM prefix without its terminal result (or vice versa).
+    /// Admit a replayed mutation response or a mutation replay conflict.
     pub async fn enqueue_s2s_response_batch(
         &self,
         target_domain: &str,

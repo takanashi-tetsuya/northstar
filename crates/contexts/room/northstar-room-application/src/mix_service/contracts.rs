@@ -490,7 +490,7 @@ pub struct MixAccessEntryUpdate<'a> {
     pub operation: MixAccessEntryOperation<'a>,
 }
 
-pub trait MixRepository: Send + Sync {
+pub trait MixRepository: MixMamReadRepository {
     fn link_local_muc_mirror(
         &self,
         mix_domain: &str,
@@ -643,21 +643,6 @@ pub trait MixRepository: Send + Sync {
         item_id: &str,
         federated: Option<&FederatedMixMutation>,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
-    fn authorized_mix_mam_page(
-        &self,
-        channel_id: Uuid,
-        actor: &str,
-        viewer_id: Option<Uuid>,
-        query: &MamArchiveQuery,
-    ) -> impl std::future::Future<Output = Result<MixReadOutcome<MixMamPage>>> + Send;
-    fn authorized_mix_mam_boundaries(
-        &self,
-        channel_id: Uuid,
-        actor: &str,
-        viewer_id: Option<Uuid>,
-    ) -> impl std::future::Future<
-        Output = Result<MixReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>>,
-    > + Send;
     fn authorized_mix_access_entries(
         &self,
         channel_id: Uuid,

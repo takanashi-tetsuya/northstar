@@ -2,8 +2,10 @@
 
 use super::relay::relay_profile_reply;
 use super::*;
+use northstar_federation_core::S2sOutboxCapacityExceeded;
 use northstar_room_application::mix_service::{
-    MixRelayProfileDenial, MixRelayProfileQuery, MixRelayProfileRequester, MixRelayProfileResult,
+    MixMamAdmissionOutcome, MixRelayProfileDenial, MixRelayProfileQuery, MixRelayProfileRequester,
+    MixRelayProfileResult,
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -195,7 +197,8 @@ pub fn pam_membership_receives(membership: &PamMembership, node: &str) -> bool {
 }
 
 pub fn federated_mix_iq_is_mutation(request: &OwnedIq) -> bool {
-    request.kind == "set" || matches!(&request.operation, IqOperation::Invite { .. })
+    !is_mix_mam_request(request)
+        && (request.kind == "set" || matches!(&request.operation, IqOperation::Invite { .. }))
 }
 
 /// S2S entry point.  The S2S layer must call this only after authenticating
@@ -229,6 +232,63 @@ pub async fn federated_mix_iq(
     let to_jid = CanonicalJid::parse(to)?;
     if to_jid.domainpart() == local_mix {
         let actor = authenticated_actor(from, authenticated_domain)?;
+        if is_mix_mam_request(&request) {
+            let addressed = to_jid.to_string();
+            let reply = MixMamReply {
+                request: &request,
+                addressed: &addressed,
+                reply_to: &actor.reply_to,
+            };
+            let outbox = state.federation_outbox();
+            let command = match reply.command(
+                state.as_ref(),
+                MixMamReadActor::Federated {
+                    bare_jid: actor.bare,
+                },
+            ) {
+                Ok(command) => command,
+                Err(response) => {
+                    let _ = outbox.send(authenticated_domain, response, None).await;
+                    return Ok(true);
+                }
+            };
+            match state
+                .mix_service()
+                .admit_federated_mix_mam(
+                    command,
+                    authenticated_domain,
+                    outbox.outbox_policy(),
+                    |outcome| reply.render(outcome),
+                )
+                .await?
+            {
+                MixMamAdmissionOutcome::Queued => outbox.wake_outbox(),
+                MixMamAdmissionOutcome::OutboxRejected(error) => {
+                    tracing::warn!(
+                        domain = authenticated_domain,
+                        request_id = %request.id,
+                        ?error,
+                        "federated MIX MAM stream was rejected atomically"
+                    );
+                    if error.downcast_ref::<S2sOutboxCapacityExceeded>().is_none() {
+                        let _ = outbox
+                            .send(
+                                authenticated_domain,
+                                iq_error_to(
+                                    &request.id,
+                                    &addressed,
+                                    &actor.reply_to,
+                                    "wait",
+                                    "remote-server-timeout",
+                                ),
+                                None,
+                            )
+                            .await;
+                    }
+                }
+            }
+            return Ok(true);
+        }
         let mutation = federated_mix_iq_is_mutation(&request);
         let request_digest: [u8; 32] = Sha256::digest(raw.as_bytes()).into();
         let federated_mutation = mutation.then(|| FederatedMixMutation {
@@ -284,56 +344,6 @@ pub async fn federated_mix_iq(
                 }
                 FederatedMixIqReplay::Miss => {}
             }
-        }
-        if matches!(
-            request.operation,
-            IqOperation::Mam(_)
-                | IqOperation::MamForm
-                | IqOperation::MamMetadata
-                | IqOperation::MamError(_)
-        ) {
-            let responses = handle_mix_mam_iq(
-                &state,
-                &request,
-                &actor.bare,
-                &to_jid.to_string(),
-                &actor.reply_to,
-            )
-            .await?;
-            // A MAM response is one ordered result stream followed by one
-            // terminal IQ. Admit every stanza into the durable S2S outbox in
-            // one transaction so a quota/backend failure can never expose a
-            // prefix without its `fin`, nor a `fin` without every result.
-            let policy = state.federation_outbox().outbox_policy();
-            if let Err(error) = state
-                .mix_service()
-                .enqueue_s2s_response_batch(authenticated_domain, &responses, policy)
-                .await
-            {
-                tracing::warn!(
-                    domain = authenticated_domain,
-                    request_id = %request.id,
-                    ?error,
-                    "federated MIX MAM stream was rejected atomically"
-                );
-                let _ = state
-                    .federation_outbox()
-                    .send(
-                        authenticated_domain,
-                        iq_error_to(
-                            &request.id,
-                            &to_jid.to_string(),
-                            &actor.reply_to,
-                            "wait",
-                            "remote-server-timeout",
-                        ),
-                        None,
-                    )
-                    .await;
-                return Ok(true);
-            }
-            state.federation_outbox().wake_outbox();
-            return Ok(true);
         }
         let response = match handle_channel_iq(
             &state,

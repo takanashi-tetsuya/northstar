@@ -257,6 +257,22 @@ mod mix {
 
     pub(crate) struct UnusedMix;
 
+    impl MixMamReadRepository for UnusedMix {
+        async fn read_mix_mam(&self, _command: MixMamReadCommand) -> Result<MixMamReadOutcome> {
+            panic!("unexpected repository call: read_mix_mam")
+        }
+
+        async fn admit_federated_mix_mam(
+            &self,
+            _command: MixMamReadCommand,
+            _target_domain: &str,
+            _policy: S2sOutboxPolicy,
+            _render: impl FnOnce(MixMamReadOutcome) -> Result<Vec<String>> + Send,
+        ) -> Result<MixMamAdmissionOutcome> {
+            panic!("unexpected repository call: admit_federated_mix_mam")
+        }
+    }
+
     impl MixRepository for UnusedMix {
         unused_async! {
             fn link_local_muc_mirror(&self, mix_domain: &str, localpart: &str, actor_bare_jid: &str, local_domain: &str) -> Result<MixMucLinkOutcome>;
@@ -282,8 +298,6 @@ mod mix {
             fn authorized_mix_event_page(&self, channel_id: Uuid, actor: &str, node: &str, before: Option<(DateTime<Utc>, Uuid)>, limit: i64) -> Result<MixReadOutcome<MixEventPage>>;
             fn publish_mix_avatar(&self, channel_id: Uuid, actor: &str, node: &str, item_id: &str, payload: &str, federated: Option<&FederatedMixMutation>) -> Result<bool>;
             fn retract_mix_avatar(&self, channel_id: Uuid, actor: &str, node: &str, item_id: &str, federated: Option<&FederatedMixMutation>) -> Result<bool>;
-            fn authorized_mix_mam_page(&self, channel_id: Uuid, actor: &str, viewer_id: Option<Uuid>, query: &MamArchiveQuery) -> Result<MixReadOutcome<MixMamPage>>;
-            fn authorized_mix_mam_boundaries(&self, channel_id: Uuid, actor: &str, viewer_id: Option<Uuid>) -> Result<MixReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>>;
             fn authorized_mix_access_entries(&self, channel_id: Uuid, actor: &str, banned: bool, limit: i64) -> Result<MixReadOutcome<Vec<String>>>;
             fn update_mix_info(&self, channel_id: Uuid, actor: &str, update: MixInfoUpdate, federated: Option<&FederatedMixMutation>) -> Result<MixMutationOutcome>;
             fn update_mix_config(&self, channel_id: Uuid, actor: &str, update: MixConfigUpdate, roles: MixRoleUpdate, federated: Option<&FederatedMixMutation>) -> Result<MixMutationOutcome>;

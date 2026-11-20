@@ -31,6 +31,22 @@ impl ControlledRepository {
         anyhow::anyhow!("Stage4 repository method has no supplied reply: {name}")
     }
 }
+impl MixMamReadRepository for ControlledRepository {
+    async fn read_mix_mam(&self, _command: MixMamReadCommand) -> Result<MixMamReadOutcome> {
+        Err(self.unused("read_mix_mam"))
+    }
+
+    async fn admit_federated_mix_mam(
+        &self,
+        _command: MixMamReadCommand,
+        _target_domain: &str,
+        _policy: S2sOutboxPolicy,
+        _render: impl FnOnce(MixMamReadOutcome) -> Result<Vec<String>> + Send,
+    ) -> Result<MixMamAdmissionOutcome> {
+        Err(self.unused("admit_federated_mix_mam"))
+    }
+}
+
 #[allow(unused_variables)]
 impl MixRepository for ControlledRepository {
     fn link_local_muc_mirror(
@@ -216,25 +232,6 @@ impl MixRepository for ControlledRepository {
         federated: Option<&FederatedMixMutation>,
     ) -> impl std::future::Future<Output = Result<bool>> + Send {
         std::future::ready(Err(self.unused("retract_mix_avatar")))
-    }
-    fn authorized_mix_mam_page(
-        &self,
-        channel_id: Uuid,
-        actor: &str,
-        viewer_id: Option<Uuid>,
-        query: &MamArchiveQuery,
-    ) -> impl std::future::Future<Output = Result<MixReadOutcome<MixMamPage>>> + Send {
-        std::future::ready(Err(self.unused("authorized_mix_mam_page")))
-    }
-    fn authorized_mix_mam_boundaries(
-        &self,
-        channel_id: Uuid,
-        actor: &str,
-        viewer_id: Option<Uuid>,
-    ) -> impl std::future::Future<
-        Output = Result<MixReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>>,
-    > + Send {
-        std::future::ready(Err(self.unused("authorized_mix_mam_boundaries")))
     }
     fn authorized_mix_access_entries(
         &self,

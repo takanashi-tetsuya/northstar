@@ -30,7 +30,7 @@ use self::channel_delivery::{
     ChannelStanzaDatabaseLane, ChannelStanzaDelivery, ChannelStanzaDeliveryOutcome,
 };
 use self::channel_iq::{handle_channel_iq, join_error};
-use self::channel_mam::handle_mix_mam_iq;
+use self::channel_mam::{is_mix_mam_request, MixMamReply};
 use self::channel_pubsub::{
     field_first, pubsub_get, pubsub_publish, pubsub_retract, validate_form_fields,
     PubSubRetractRequest,
@@ -74,17 +74,16 @@ use northstar_federation_core::FederationRoute;
 use northstar_room_application::mix_service::outbox;
 use northstar_room_application::mix_service::outbox::core as mix_worker;
 use northstar_room_application::mix_service::{
-    ArchiveBoundary, BeginRemotePamJoin, BeginRemotePamLeave, ClaimedPamResult,
-    CreateChannelOutcome, FederatedMixIqReplay, FederatedMixMutation, JoinChannelOutcome,
-    JoinMixRequest, MamArchiveQuery, MixAccessEntryOperation, MixAccessEntryUpdate, MixAccessList,
-    MixBusinessReplay, MixChannel, MixConfigUpdate, MixEvent, MixInfoUpdate, MixInvitationProof,
-    MixMutationOutcome, MixParticipant, MixParticipantPreference, MixPresenceProbeTarget,
-    MixReadOutcome, MixReplayIdentity, MixRoleUpdate, PamMembership, PamOperationReplay,
-    PresenceOutcome, RegisterMixNickOutcome, RemotePamCompletionOutcome, RemotePamJoin,
-    RetractMixMessageOutcome, RetractMixMessageRequest, SetNickError, SourceArchiveAdmission,
-    StoreEventOutcome, StoreMixMessageRequest, ALL_NODES, NODE_ALLOWED, NODE_AVATAR_DATA,
-    NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG, NODE_INFO, NODE_JIDMAP, NODE_MESSAGES,
-    NODE_PRESENCE,
+    BeginRemotePamJoin, BeginRemotePamLeave, ClaimedPamResult, CreateChannelOutcome,
+    FederatedMixIqReplay, FederatedMixMutation, JoinChannelOutcome, JoinMixRequest,
+    MixAccessEntryOperation, MixAccessEntryUpdate, MixAccessList, MixBusinessReplay, MixChannel,
+    MixConfigUpdate, MixInfoUpdate, MixInvitationProof, MixMamReadActor, MixMutationOutcome,
+    MixParticipant, MixParticipantPreference, MixPresenceProbeTarget, MixReadOutcome,
+    MixReplayIdentity, MixRoleUpdate, PamMembership, PamOperationReplay, PresenceOutcome,
+    RegisterMixNickOutcome, RemotePamCompletionOutcome, RemotePamJoin, RetractMixMessageOutcome,
+    RetractMixMessageRequest, SetNickError, SourceArchiveAdmission, StoreEventOutcome,
+    StoreMixMessageRequest, ALL_NODES, NODE_ALLOWED, NODE_AVATAR_DATA, NODE_AVATAR_METADATA,
+    NODE_BANNED, NODE_CONFIG, NODE_INFO, NODE_JIDMAP, NODE_MESSAGES, NODE_PRESENCE,
 };
 pub use northstar_room_core::mix::{
     MixSessionCapability, ADMIN_NS, ANON_NS, CORE_NS, MISC_NS, PAM_NS, PRESENCE_NS,

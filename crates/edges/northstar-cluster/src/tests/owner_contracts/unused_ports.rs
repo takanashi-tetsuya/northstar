@@ -9,6 +9,22 @@ mod mix {
     use northstar_time::{DateTime, Utc};
     use uuid::Uuid;
 
+    impl MixMamReadRepository for UnusedPorts {
+        async fn read_mix_mam(&self, _command: MixMamReadCommand) -> Result<MixMamReadOutcome> {
+            panic!("unexpected repository call: read_mix_mam")
+        }
+
+        async fn admit_federated_mix_mam(
+            &self,
+            _command: MixMamReadCommand,
+            _target_domain: &str,
+            _policy: S2sOutboxPolicy,
+            _render: impl FnOnce(MixMamReadOutcome) -> Result<Vec<String>> + Send,
+        ) -> Result<MixMamAdmissionOutcome> {
+            panic!("unexpected repository call: admit_federated_mix_mam")
+        }
+    }
+
     impl MixRepository for UnusedPorts {
         async fn link_local_muc_mirror(
             &self,
@@ -224,25 +240,6 @@ mod mix {
             _federated: Option<&FederatedMixMutation>,
         ) -> Result<bool> {
             panic!("unused MixRepository::retract_mix_avatar port");
-        }
-
-        async fn authorized_mix_mam_page(
-            &self,
-            _channel_id: Uuid,
-            _actor: &str,
-            _viewer_id: Option<Uuid>,
-            _query: &MamArchiveQuery,
-        ) -> Result<MixReadOutcome<MixMamPage>> {
-            panic!("unused MixRepository::authorized_mix_mam_page port");
-        }
-
-        async fn authorized_mix_mam_boundaries(
-            &self,
-            _channel_id: Uuid,
-            _actor: &str,
-            _viewer_id: Option<Uuid>,
-        ) -> Result<MixReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>> {
-            panic!("unused MixRepository::authorized_mix_mam_boundaries port");
         }
 
         async fn authorized_mix_access_entries(

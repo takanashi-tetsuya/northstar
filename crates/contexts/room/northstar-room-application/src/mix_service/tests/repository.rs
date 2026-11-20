@@ -71,6 +71,22 @@ macro_rules! recording_ports {
     };
 }
 
+impl MixMamReadRepository for Repository {
+    async fn read_mix_mam(&self, _command: MixMamReadCommand) -> Result<MixMamReadOutcome> {
+        panic!("unexpected repository call: read_mix_mam")
+    }
+
+    async fn admit_federated_mix_mam(
+        &self,
+        _command: MixMamReadCommand,
+        _target_domain: &str,
+        _policy: S2sOutboxPolicy,
+        _render: impl FnOnce(MixMamReadOutcome) -> Result<Vec<String>> + Send,
+    ) -> Result<MixMamAdmissionOutcome> {
+        panic!("unexpected repository call: admit_federated_mix_mam")
+    }
+}
+
 impl MixRepository for Repository {
     recording_ports! {
         destroy_mix_channel(channel_id: Uuid, actor: &str, federated: Option<&FederatedMixMutation>) -> bool;
@@ -329,8 +345,6 @@ impl MixRepository for Repository {
         lookup_mix_message_replay(channel_id: Uuid, actor: &str, identity: &MixReplayIdentity, authenticators: &northstar_abuse_policy::ContentIdentityAuthenticators) -> MixBusinessReplay;
         lookup_mix_retraction_replay(channel_id: Uuid, actor: &str, target_id: Uuid, identity: &MixReplayIdentity, authenticators: &northstar_abuse_policy::ContentIdentityAuthenticators) -> MixBusinessReplay;
         authorized_mix_event_page(channel_id: Uuid, actor: &str, node: &str, before: Option<(DateTime<Utc>, Uuid)>, limit: i64) -> MixReadOutcome<MixEventPage>;
-        authorized_mix_mam_page(channel_id: Uuid, actor: &str, viewer_id: Option<Uuid>, query: &MamArchiveQuery) -> MixReadOutcome<MixMamPage>;
-        authorized_mix_mam_boundaries(channel_id: Uuid, actor: &str, viewer_id: Option<Uuid>) -> MixReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>;
         authorized_mix_access_entries(channel_id: Uuid, actor: &str, banned: bool, limit: i64) -> MixReadOutcome<Vec<String>>;
         mix_participant_preference(channel_id: Uuid, actor: &str) -> Option<MixParticipantPreference>;
         authorized_mix_jid_map_entries(channel_id: Uuid, actor: &str, limit: i64) -> MixReadOutcome<Vec<(String, String)>>;

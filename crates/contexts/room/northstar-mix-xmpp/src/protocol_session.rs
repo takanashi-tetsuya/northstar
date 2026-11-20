@@ -25,6 +25,7 @@ impl<H: SessionHost + MixHost> MixSession for ProtocolSession<H> {
         self.authenticated.as_ref().map(|user| MixSessionUser {
             id: user.id,
             username: &user.username,
+            auth_generation: user.auth_generation,
         })
     }
 

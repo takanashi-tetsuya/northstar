@@ -8,6 +8,7 @@ mod mix_delivery_capacity;
 mod mix_delivery_route_wake;
 mod mix_identity;
 mod mix_mam;
+mod mix_mam_authority;
 mod mix_muc;
 mod mix_pam_durability;
 mod mix_sequence_retention;

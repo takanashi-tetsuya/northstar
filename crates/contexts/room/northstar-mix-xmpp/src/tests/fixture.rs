@@ -41,6 +41,12 @@ impl Drop for DropFlag {
     }
 }
 
+pub struct PublisherWrite {
+    pub identity: MixPublisherIdentity,
+    pub payload: String,
+    pub tombstone: Option<String>,
+}
+
 pub struct State {
     pub calls: Mutex<Vec<Call>>,
     pub changed: tokio::sync::Notify,
@@ -65,6 +71,9 @@ pub struct State {
     pub mutation_iq: Mutex<Option<(String, [u8; 32])>>,
     pub reject_mam: AtomicBool,
     pub outbox_wakes: std::sync::atomic::AtomicUsize,
+    pub publisher_visibility: Mutex<VecDeque<&'static str>>,
+    pub publisher_mismatches: Mutex<VecDeque<bool>>,
+    pub publisher_writes: Mutex<Vec<PublisherWrite>>,
 }
 
 impl State {
@@ -75,6 +84,21 @@ impl State {
 
     pub fn calls(&self) -> Vec<Call> {
         self.calls.lock().unwrap().clone()
+    }
+
+    fn publisher_mismatch(
+        &self,
+        identity: &MixPublisherIdentity,
+        payload: &str,
+        tombstone: Option<&str>,
+    ) -> Option<bool> {
+        let mismatch = self.publisher_mismatches.lock().unwrap().pop_front()?;
+        self.publisher_writes.lock().unwrap().push(PublisherWrite {
+            identity: identity.clone(),
+            payload: payload.to_owned(),
+            tombstone: tombstone.map(str::to_owned),
+        });
+        Some(mismatch)
     }
 
     pub async fn until(&self, predicate: impl Fn(&[Call]) -> bool) {
@@ -323,7 +347,11 @@ impl MixRepository for Repository {
     ) -> Result<Option<MixChannel>> {
         self.0
             .record(Call::Channel(service_domain.into(), localpart.into()));
-        Ok(Some(channel()))
+        let mut channel = channel();
+        if let Some(visibility) = self.0.publisher_visibility.lock().unwrap().pop_front() {
+            channel.jid_visibility = visibility.into();
+        }
+        Ok(Some(channel))
     }
     async fn mix_participant(&self, channel_id: Uuid, jid: &str) -> Result<Option<MixParticipant>> {
         self.0.record(Call::Member(channel_id, jid.into()));
@@ -343,12 +371,21 @@ impl MixRepository for Repository {
     }
     async fn store_mix_message(
         &self,
-        _request: StoreMixMessageRequest<'_>,
+        request: StoreMixMessageRequest<'_>,
         _authenticators: Option<&ContentIdentityAuthenticators>,
     ) -> Result<StoreMixMessageAdmission> {
         self.0.record(Call::Store(false));
+        let outcome =
+            match self
+                .0
+                .publisher_mismatch(request.publisher_identity, request.payload, None)
+            {
+                Some(true) => StoreEventOutcome::IdentityPolicyChanged,
+                Some(false) => StoreEventOutcome::Stored(Uuid::parse_str(request.item_id)?),
+                None => StoreEventOutcome::NotParticipant,
+            };
         Ok(StoreMixMessageAdmission {
-            outcome: StoreEventOutcome::NotParticipant,
+            outcome,
             recipients: vec![],
         })
     }
@@ -357,13 +394,35 @@ impl MixRepository for Repository {
         request: &foreground::StoreRequest,
         _authenticators: Option<&ContentIdentityAuthenticators>,
     ) -> Result<StoreMixMessageAdmission> {
-        let original = self.0.foreground_owner.lock().unwrap();
-        assert!(std::ptr::eq(
-            request.observation().ingress(),
-            original.as_ref().unwrap().ingress()
-        ));
+        {
+            let original = self.0.foreground_owner.lock().unwrap();
+            assert!(std::ptr::eq(
+                request.observation().ingress(),
+                original.as_ref().unwrap().ingress()
+            ));
+        }
         self.0.record(Call::Store(true));
-        anyhow::bail!("recorded observed store")
+        let command = request.command();
+        let outcome =
+            match self
+                .0
+                .publisher_mismatch(request.publisher_identity(), &command.payload, None)
+            {
+                Some(true) => StoreEventOutcome::IdentityPolicyChanged,
+                Some(false) => {
+                    let mut stored = foreground::fixture::stored(false);
+                    stored.authoritative_id = command.item_id;
+                    stored.channel_id = command.channel_id;
+                    stored.channel_jid = request.observation().ingress().channel_jid.clone();
+                    request.received(request.enter_commit(stored)?)?;
+                    StoreEventOutcome::Stored(command.item_id)
+                }
+                None => anyhow::bail!("recorded observed store"),
+            };
+        Ok(StoreMixMessageAdmission {
+            outcome,
+            recipients: vec![],
+        })
     }
     async fn lookup_mix_message_replay_observed(
         &self,
@@ -416,8 +475,17 @@ impl MixRepository for Repository {
             request.actor.into(),
             request.target_id,
         ));
+        let outcome = match self.0.publisher_mismatch(
+            request.publisher_identity,
+            request.retraction_payload,
+            Some(request.tombstone_payload),
+        ) {
+            Some(true) => RetractMixMessageOutcome::IdentityPolicyChanged,
+            Some(false) => RetractMixMessageOutcome::Retracted,
+            None => RetractMixMessageOutcome::NotFound,
+        };
         Ok(RetractMixMessageAdmission {
-            outcome: RetractMixMessageOutcome::NotFound,
+            outcome,
             recipients: vec![],
         })
     }
@@ -604,6 +672,9 @@ impl Context {
             mutation_iq: Mutex::new(None),
             reject_mam: AtomicBool::new(false),
             outbox_wakes: std::sync::atomic::AtomicUsize::new(0),
+            publisher_visibility: Mutex::new(VecDeque::new()),
+            publisher_mismatches: Mutex::new(VecDeque::new()),
+            publisher_writes: Mutex::new(Vec::new()),
         });
         let generations = Arc::new(Vec::new());
         let service = MixService::new_with_outbox_database_admission(

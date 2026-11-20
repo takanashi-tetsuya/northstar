@@ -93,6 +93,9 @@ fn retract_mix_message_admission(
     let outcome = match &admission.outcome {
         crate::mix::RetractMixMessageOutcome::Existing(existing) => existing_outcome(existing),
         crate::mix::RetractMixMessageOutcome::Retracted => RetractMixMessageOutcome::Retracted,
+        crate::mix::RetractMixMessageOutcome::IdentityPolicyChanged => {
+            RetractMixMessageOutcome::IdentityPolicyChanged
+        }
         crate::mix::RetractMixMessageOutcome::NotFound => RetractMixMessageOutcome::NotFound,
         crate::mix::RetractMixMessageOutcome::Forbidden => RetractMixMessageOutcome::Forbidden,
     };
@@ -197,6 +200,9 @@ fn store_event_outcome(outcome: crate::mix::StoreEventOutcome) -> StoreEventOutc
         }
         crate::mix::StoreEventOutcome::NotParticipant => StoreEventOutcome::NotParticipant,
         crate::mix::StoreEventOutcome::Conflict => StoreEventOutcome::Conflict,
+        crate::mix::StoreEventOutcome::IdentityPolicyChanged => {
+            StoreEventOutcome::IdentityPolicyChanged
+        }
         crate::mix::StoreEventOutcome::TooLarge => StoreEventOutcome::TooLarge,
     }
 }

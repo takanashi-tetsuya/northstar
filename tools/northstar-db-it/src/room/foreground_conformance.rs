@@ -3,7 +3,7 @@ use northstar_abuse_application::guard::{
 };
 use northstar_room_application::{
     mix::*,
-    mix_service::{MixBusinessReplay, MixService, StoreEventOutcome},
+    mix_service::{MixBusinessReplay, MixPublisherIdentity, MixService, StoreEventOutcome},
 };
 use northstar_room_core::mix::{Ingress, Replay, ReplayIdentity, StoreCommand};
 use northstar_room_postgres::mix as db;
@@ -15,6 +15,7 @@ async fn prepare(
     channel: Uuid,
     item: Uuid,
     semantics: &[u8],
+    publisher_identity: &MixPublisherIdentity,
 ) -> (Observation, StoreRequest) {
     let identity = ReplayIdentity {
         client_id: "foreground-origin".into(),
@@ -41,16 +42,19 @@ async fn prepare(
         MixBusinessReplay::Miss
     );
     let request = observation
-        .store_request(StoreCommand {
-            channel_id: channel,
-            actor: "sender@remote.test".into(),
-            item_id: item,
-            payload: "<body>archive input</body>".into(),
-            identity: Some(identity),
-            delivery_payload: "<body>foreground</body>".into(),
-            visible_jid: Some("sender@remote.test".into()),
-            encrypted: true,
-        })
+        .store_request(
+            StoreCommand {
+                channel_id: channel,
+                actor: "sender@remote.test".into(),
+                item_id: item,
+                payload: "<body>archive input</body>".into(),
+                identity: Some(identity),
+                delivery_payload: "<body>foreground</body>".into(),
+                visible_jid: Some("sender@remote.test".into()),
+                encrypted: true,
+            },
+            publisher_identity.clone(),
+        )
         .unwrap();
     (observation, request)
 }
@@ -76,27 +80,33 @@ async fn foreground_receipts_bind_durable_projection_and_authenticate_replay_aft
         panic!("fixture channel was not created");
     };
     let nodes = vec![db::NODE_MESSAGES.to_owned()];
-    assert!(matches!(
-        db::join_mix_channel(
-            &WorkflowRoomEffects,
-            &pool,
-            channel,
-            db::JoinMixRequest {
-                actor_jid: "sender@remote.test",
-                nick: Some("Sender"),
-                nodes: &nodes,
-                pam_user_id: None,
-                invitation: None,
-                preference: None,
-                anonymous_profile: false,
-            },
-            &payloads,
-            None
-        )
+    let joined = db::join_mix_channel(
+        &WorkflowRoomEffects,
+        &pool,
+        channel,
+        db::JoinMixRequest {
+            actor_jid: "sender@remote.test",
+            nick: Some("Sender"),
+            nodes: &nodes,
+            pam_user_id: None,
+            invitation: None,
+            preference: None,
+            anonymous_profile: false,
+        },
+        &payloads,
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(joined, db::JoinChannelOutcome::Joined { .. }));
+    let db::JoinChannelOutcome::Joined { participant, .. } = joined else {
+        unreachable!("the sender joined above");
+    };
+    let channel_state = db::mix_channel_by_id(&pool, channel)
         .await
-        .unwrap(),
-        db::JoinChannelOutcome::Joined { .. }
-    ));
+        .unwrap()
+        .unwrap();
+    let publisher_identity = MixPublisherIdentity::from_state(&channel_state, &participant);
     let schema: String = sqlx::query_scalar("SELECT current_schema()")
         .fetch_one(&pool)
         .await
@@ -110,13 +120,20 @@ async fn foreground_receipts_bind_durable_projection_and_authenticate_replay_aft
     )
     .unwrap();
     let original = Uuid::from_u128(0x573_153401);
-    let (stored_observation, stored_request) =
-        prepare(&service, channel, original, b"original semantics").await;
+    let (stored_observation, stored_request) = prepare(
+        &service,
+        channel,
+        original,
+        b"original semantics",
+        &publisher_identity,
+    )
+    .await;
     let (replay_observation, replay_request) = prepare(
         &service,
         channel,
         Uuid::from_u128(0x573_153402),
         b"original semantics",
+        &publisher_identity,
     )
     .await;
     let (conflict_observation, conflict_request) = prepare(
@@ -124,6 +141,7 @@ async fn foreground_receipts_bind_durable_projection_and_authenticate_replay_aft
         channel,
         Uuid::from_u128(0x573_153403),
         b"changed semantics",
+        &publisher_identity,
     )
     .await;
     let admission = service
@@ -260,11 +278,14 @@ async fn foreground_receipts_bind_durable_projection_and_authenticate_replay_aft
         .unwrap();
     let observation = Observation::new(prepared);
     let request = observation
-        .store_request(StoreCommand {
-            item_id: Uuid::from_u128(0x573_153404),
-            identity: None,
-            ..stored_request.command().clone()
-        })
+        .store_request(
+            StoreCommand {
+                item_id: Uuid::from_u128(0x573_153404),
+                identity: None,
+                ..stored_request.command().clone()
+            },
+            publisher_identity,
+        )
         .unwrap();
     assert!(matches!(
         service

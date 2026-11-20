@@ -1,6 +1,8 @@
 //! MIX JID maps, invitations, private message recipients and message retraction.
 
+use super::publish::matches_locked_publisher_identity;
 use super::*;
+use northstar_room_application::mix_service::MixPublisherIdentity;
 
 #[cfg(any(test, feature = "test-support"))]
 pub async fn mix_jid_map_entries(
@@ -206,6 +208,7 @@ pub async fn mix_private_message_recipient(
 pub enum RetractMixMessageOutcome {
     Retracted,
     Existing(MixIntentEvidence),
+    IdentityPolicyChanged,
     NotFound,
     Forbidden,
 }
@@ -229,6 +232,7 @@ pub async fn retract_mix_message(
     tombstone_payload: &str,
     retraction_payload: &str,
     identity: Option<MixBusinessIdentity<'_>>,
+    publisher_identity: &MixPublisherIdentity,
     visible_jid: Option<&str>,
     payloads: &dyn MixEventPayloadRenderer,
 ) -> Result<RetractMixMessageAdmission> {
@@ -298,6 +302,28 @@ pub async fn retract_mix_message(
             recipients: Vec::new(),
         });
     }
+    let Some(sender) = mix_participant(&mut *transaction, channel_id, &actor).await? else {
+        transaction.rollback().await?;
+        return Ok(RetractMixMessageAdmission {
+            outcome: RetractMixMessageOutcome::Forbidden,
+            recipients: Vec::new(),
+        });
+    };
+    if !matches_locked_publisher_identity(
+        &mut transaction,
+        &channel,
+        &sender,
+        publisher_identity,
+        visible_jid,
+    )
+    .await?
+    {
+        transaction.rollback().await?;
+        return Ok(RetractMixMessageAdmission {
+            outcome: RetractMixMessageOutcome::IdentityPolicyChanged,
+            recipients: Vec::new(),
+        });
+    }
     if let Some(identity) = identity {
         if let Some(existing) = admit_mix_business_intent_tx(
             &mut transaction,
@@ -326,37 +352,22 @@ pub async fn retract_mix_message(
     .bind(tombstone_payload)
     .execute(&mut *transaction)
     .await?;
-    let actor_participant = sqlx::query(
-        "SELECT channel_id, participant_id, jid, nick, role, joined_at FROM mix_participants WHERE channel_id = $1 AND jid = $2",
-    )
-    .bind(channel_id)
-    .bind(&actor)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .map(|row| participant_from_row(&row));
     let _ = store_mix_event_tx(
         &mut transaction,
         &channel,
         NODE_MESSAGES,
         &retraction_id.to_string(),
-        actor_participant.as_ref(),
+        Some(&sender),
         retraction_payload,
     )
     .await?;
     let recipients = mix_subscribers_tx(&mut transaction, channel_id, NODE_MESSAGES).await?;
-    let Some(sender) = actor_participant.as_ref() else {
-        transaction.rollback().await?;
-        return Ok(RetractMixMessageAdmission {
-            outcome: RetractMixMessageOutcome::Forbidden,
-            recipients: Vec::new(),
-        });
-    };
     let stanza_template = recipients
         .first()
         .map(|recipient| {
             payloads.retraction_delivery_stanza(
                 &channel,
-                sender,
+                &sender,
                 recipient,
                 retraction_id,
                 target_id,

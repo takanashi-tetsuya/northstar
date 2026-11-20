@@ -1,6 +1,9 @@
 //! Channel and private message processing, reflected identity checks and retraction.
 
 use super::*;
+use northstar_room_application::mix_service::{
+    foreground, participant_jid_visible, MixPublisherIdentity,
+};
 
 pub fn message_children(raw: &str) -> Result<(String, bool)> {
     let document = Document::parse(raw).context("malformed MIX message")?;
@@ -578,78 +581,18 @@ pub async fn process_channel_message(
             MixBusinessReplay::Miss => {}
         }
     }
-    let Some(participant) = state
-        .mix_service()
-        .mix_participant(channel.id, actor_bare)
-        .await?
-    else {
-        return Ok(Some(message_error(
-            &id,
-            &channel.jid(),
-            actor_full,
-            "auth",
-            "forbidden",
-        )));
-    };
-    let preference = state
-        .mix_service()
-        .mix_participant_preference(channel.id, actor_bare)
-        .await?
-        .unwrap_or_default();
-    if let Some(target_id) = retraction_target {
-        anyhow::ensure!(
-            !id.is_empty() && id.len() <= 1_024 && !id.chars().any(char::is_control),
-            "MIX retraction requires a bounded client action id"
-        );
-        let retraction_id = Uuid::new_v4();
-        let now =
-            northstar_time::Utc::now().to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true);
-        let archived_actor = if channel.jid_visibility == "visible" {
-            actor_bare.to_owned()
-        } else {
-            encoded_participant_jid(&channel.jid(), &participant.participant_id.to_string())?
-        };
-        let tombstone = XmlElement::namespaced("message", "jabber:client")
-            .attr("from", channel.jid())
-            .attr("id", target_id)
-            .attr("type", "groupchat")
-            .child(
-                XmlElement::namespaced("retracted", MISC_NS)
-                    .attr("by", archived_actor)
-                    .attr("time", now),
-            )
-            .finish();
-        let tombstone = add_stanza_id(&tombstone, &channel.jid(), target_id);
-        let archived_jid = (channel.jid_visibility == "visible").then_some(actor_bare);
-        let live_jid =
-            northstar_room_application::mix_service::participant_jid_visible(&channel, &preference)
-                .then_some(actor_bare);
-        let archived_action = mix_retraction_action(
-            &channel.jid(),
-            None,
-            retraction_id,
-            target_id,
-            participant.nick.as_deref(),
-            archived_jid,
-        );
-        if let Some(observation) = observation {
-            observation.enter(MixFrameStage::Admission);
-        }
-        let admission = state
-            .mix_service()
-            .retract_mix_message(RetractMixMessageRequest {
-                channel_id: channel.id,
-                actor: actor_bare,
-                target_id,
-                retraction_id,
-                tombstone_payload: &tombstone,
-                retraction_payload: &archived_action,
-                identity: retraction_identity,
-                visible_jid: live_jid,
-            })
-            .await?;
-        match admission.outcome {
-            RetractMixMessageOutcome::NotFound => {
+    let service = state.mix_service();
+    let mut channel = channel;
+    let mut authoritative_id = None;
+    let mut retry = false;
+    let mut previous_request: Option<foreground::StoreRequest> = None;
+    loop {
+        if retry {
+            let Some(current) = service
+                .mix_channel(&mix_domain, channel_localpart)
+                .await?
+                .filter(|current| current.id == channel.id)
+            else {
                 return Ok(Some(message_error(
                     &id,
                     &channel.jid(),
@@ -657,89 +600,10 @@ pub async fn process_channel_message(
                     "cancel",
                     "item-not-found",
                 )));
-            }
-            RetractMixMessageOutcome::Forbidden => {
-                return Ok(Some(message_error(
-                    &id,
-                    &channel.jid(),
-                    actor_full,
-                    "auth",
-                    "forbidden",
-                )));
-            }
-            RetractMixMessageOutcome::Retracted => {}
-            RetractMixMessageOutcome::Replay(_) => return Ok(None),
-            RetractMixMessageOutcome::Conflict => {
-                return Ok(Some(message_error(
-                    &id,
-                    &channel.jid(),
-                    actor_full,
-                    "cancel",
-                    "conflict",
-                )));
-            }
+            };
+            channel = current;
         }
-        return Ok(None);
-    }
-    let children = message_children.expect("non-retraction MIX message has parsed children");
-    let archive_id = Uuid::new_v4();
-    let archived_jid = (channel.jid_visibility == "visible").then_some(actor_bare);
-    let live_jid =
-        northstar_room_application::mix_service::participant_jid_visible(&channel, &preference)
-            .then_some(actor_bare);
-    let archive = mix_channel_message(MixChannelMessage {
-        from: &channel.jid(),
-        to: None,
-        id: archive_id,
-        payload: Some(&children),
-        nick: participant.nick.as_deref(),
-        jid: archived_jid,
-    })?;
-    // The durable archive and subscriber snapshot share the channel-locked
-    // transaction. This prevents delivery to a participant who concurrently
-    // left and prevents a post-join subscriber from missing an archive that
-    // linearized after their subscription.
-    if let Some(observation) = observation {
-        observation.enter(MixFrameStage::Admission);
-    }
-    let admission = if let Some(owner) = &foreground {
-        let request = owner.store_request(
-            northstar_room_application::mix_service::foreground::StoreCommand {
-                channel_id: channel.id,
-                actor: actor_bare.to_owned(),
-                item_id: archive_id,
-                payload: archive,
-                identity: message_replay_identity,
-                delivery_payload: children,
-                visible_jid: live_jid.map(str::to_owned),
-                encrypted: message_encrypted,
-            },
-        )?;
-        state
-            .mix_service()
-            .store_mix_message_observed(&request)
-            .await?
-    } else {
-        Arc::new(
-            state
-                .mix_service()
-                .store_mix_message(StoreMixMessageRequest {
-                    channel_id: channel.id,
-                    actor: actor_bare,
-                    item_id: &archive_id.to_string(),
-                    payload: &archive,
-                    identity: message_replay_identity,
-                    delivery_payload: &children,
-                    visible_jid: live_jid,
-                    encrypted: message_encrypted,
-                })
-                .await?,
-        )
-    };
-    match admission.outcome {
-        StoreEventOutcome::Stored(_) => {}
-        StoreEventOutcome::Replay(_) => return Ok(None),
-        StoreEventOutcome::NotParticipant => {
+        let Some(participant) = service.mix_participant(channel.id, actor_bare).await? else {
             return Ok(Some(message_error(
                 &id,
                 &channel.jid(),
@@ -747,27 +611,162 @@ pub async fn process_channel_message(
                 "auth",
                 "forbidden",
             )));
+        };
+        let preference = service
+            .mix_participant_preference(channel.id, actor_bare)
+            .await?
+            .unwrap_or_default();
+        let publisher_identity = MixPublisherIdentity::from_state(&channel, &participant);
+        let archived_jid = publisher_identity.archive_jid_visible.then_some(actor_bare);
+        let live_jid = participant_jid_visible(&channel, &preference).then_some(actor_bare);
+        let channel_jid = channel.jid();
+        if retraction_target.is_some() {
+            anyhow::ensure!(
+                !id.is_empty() && id.len() <= 1_024 && !id.chars().any(char::is_control),
+                "MIX retraction requires a bounded client action id"
+            );
         }
-        StoreEventOutcome::Conflict => {
+        let item_id = *authoritative_id.get_or_insert_with(Uuid::new_v4);
+        let error = if let Some(target_id) = retraction_target {
+            let tombstone = mix_retraction_tombstone(
+                &channel_jid,
+                target_id,
+                archived_jid,
+                publisher_identity.participant_id,
+            )?;
+            let archived_action = mix_retraction_action(
+                &channel_jid,
+                None,
+                item_id,
+                target_id,
+                publisher_identity.nick.as_deref(),
+                archived_jid,
+            );
+            enter_first_admission(observation, retry);
+            let admission = service
+                .retract_mix_message(RetractMixMessageRequest {
+                    channel_id: channel.id,
+                    actor: actor_bare,
+                    target_id,
+                    retraction_id: item_id,
+                    tombstone_payload: &tombstone,
+                    retraction_payload: &archived_action,
+                    identity: retraction_identity.clone(),
+                    publisher_identity: &publisher_identity,
+                    visible_jid: live_jid,
+                })
+                .await?;
+            match admission.outcome {
+                RetractMixMessageOutcome::NotFound => Some(("cancel", "item-not-found")),
+                RetractMixMessageOutcome::Forbidden => Some(("auth", "forbidden")),
+                RetractMixMessageOutcome::Retracted | RetractMixMessageOutcome::Replay(_) => {
+                    return Ok(None);
+                }
+                RetractMixMessageOutcome::IdentityPolicyChanged if !retry => None,
+                RetractMixMessageOutcome::Conflict
+                | RetractMixMessageOutcome::IdentityPolicyChanged => Some(("cancel", "conflict")),
+            }
+        } else {
+            let children = message_children
+                .as_deref()
+                .expect("non-retraction MIX message has parsed children");
+            let archive = mix_channel_message(MixChannelMessage {
+                from: &channel_jid,
+                to: None,
+                id: item_id,
+                payload: Some(children),
+                nick: publisher_identity.nick.as_deref(),
+                jid: archived_jid,
+            })?;
+            enter_first_admission(observation, retry);
+            let outcome = if let Some(owner) = &foreground {
+                let command = foreground::StoreCommand {
+                    channel_id: channel.id,
+                    actor: actor_bare.to_owned(),
+                    item_id,
+                    payload: archive,
+                    identity: message_replay_identity.clone(),
+                    delivery_payload: children.to_owned(),
+                    visible_jid: live_jid.map(str::to_owned),
+                    encrypted: message_encrypted,
+                };
+                let request = match previous_request.take() {
+                    Some(previous) => previous.retry_with_identity(command, publisher_identity)?,
+                    None => owner.store_request(command, publisher_identity)?,
+                };
+                let outcome = service.store_mix_message_observed(&request).await?.outcome;
+                if outcome == StoreEventOutcome::IdentityPolicyChanged && !retry {
+                    previous_request = Some(request);
+                }
+                outcome
+            } else {
+                service
+                    .store_mix_message(StoreMixMessageRequest {
+                        channel_id: channel.id,
+                        actor: actor_bare,
+                        item_id: &item_id.to_string(),
+                        payload: &archive,
+                        identity: message_replay_identity.clone(),
+                        delivery_payload: children,
+                        publisher_identity: &publisher_identity,
+                        visible_jid: live_jid,
+                        encrypted: message_encrypted,
+                    })
+                    .await?
+                    .outcome
+            };
+            match outcome {
+                StoreEventOutcome::Stored(_) | StoreEventOutcome::Replay(_) => return Ok(None),
+                StoreEventOutcome::NotParticipant => Some(("auth", "forbidden")),
+                StoreEventOutcome::TooLarge => Some(("modify", "policy-violation")),
+                StoreEventOutcome::IdentityPolicyChanged if !retry => None,
+                StoreEventOutcome::Conflict | StoreEventOutcome::IdentityPolicyChanged => {
+                    Some(("cancel", "conflict"))
+                }
+            }
+        };
+        if let Some((error_type, condition)) = error {
             return Ok(Some(message_error(
                 &id,
-                &channel.jid(),
+                &channel_jid,
                 actor_full,
-                "cancel",
-                "conflict",
+                error_type,
+                condition,
             )));
         }
-        StoreEventOutcome::TooLarge => {
-            return Ok(Some(message_error(
-                &id,
-                &channel.jid(),
-                actor_full,
-                "modify",
-                "policy-violation",
-            )));
-        }
+        retry = true;
     }
-    Ok(None)
+}
+
+fn enter_first_admission(observation: Option<&dyn MixFrameObserver>, retry: bool) {
+    if let Some(observation) = observation.filter(|_| !retry) {
+        observation.enter(MixFrameStage::Admission);
+    }
+}
+
+fn mix_retraction_tombstone(
+    channel_jid: &str,
+    target_id: Uuid,
+    archived_jid: Option<&str>,
+    participant_id: Uuid,
+) -> Result<String> {
+    let now =
+        northstar_time::Utc::now().to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true);
+    let archived_actor = match archived_jid {
+        Some(jid) => jid.to_owned(),
+        None => encoded_participant_jid(channel_jid, &participant_id.to_string())?,
+    };
+    let tombstone = XmlElement::namespaced("message", "jabber:client")
+        .attr("from", channel_jid)
+        .attr("id", target_id)
+        .attr("type", "groupchat")
+        .child(
+            XmlElement::namespaced("retracted", MISC_NS)
+                .attr("by", archived_actor)
+                .attr("time", now),
+        )
+        .finish();
+    Ok(add_stanza_id(&tombstone, channel_jid, target_id))
 }
 
 pub fn message_error(id: &str, from: &str, to: &str, error_type: &str, condition: &str) -> String {

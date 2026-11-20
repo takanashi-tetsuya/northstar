@@ -278,6 +278,7 @@ impl<E: RoomEffects> MixRepository for PostgresMixRepository<E> {
             payload,
             identity,
             delivery_payload,
+            publisher_identity,
             visible_jid,
             encrypted,
         } = request;
@@ -302,6 +303,7 @@ impl<E: RoomEffects> MixRepository for PostgresMixRepository<E> {
             payload,
             db_identity,
             delivery_payload,
+            publisher_identity,
             visible_jid,
             encrypted,
             &MixPayloads,
@@ -774,6 +776,7 @@ impl<E: RoomEffects> MixRepository for PostgresMixRepository<E> {
             tombstone_payload,
             retraction_payload,
             identity,
+            publisher_identity,
             visible_jid,
         } = request;
         let db_identity =
@@ -798,6 +801,7 @@ impl<E: RoomEffects> MixRepository for PostgresMixRepository<E> {
             tombstone_payload,
             retraction_payload,
             db_identity,
+            publisher_identity,
             visible_jid,
             &MixPayloads,
         )

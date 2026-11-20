@@ -54,6 +54,7 @@ pub enum Outcome {
     Replay(Id),
     NotParticipant,
     Conflict,
+    IdentityPolicyChanged,
     TooLarge,
 }
 

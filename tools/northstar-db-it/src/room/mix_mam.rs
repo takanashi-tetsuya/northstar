@@ -1,3 +1,4 @@
+use northstar_room_application::mix_service::MixPublisherIdentity;
 use northstar_room_postgres::mix::*;
 use sha2::{Digest, Sha256};
 use sqlx::Row;
@@ -695,6 +696,11 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
     .unwrap());
 
     let target_id = Uuid::new_v4();
+    let publisher = mix_participant(&pool, channel_id, &owner)
+        .await
+        .unwrap()
+        .unwrap();
+    let publisher_identity = MixPublisherIdentity::from_state(&channel, &publisher);
     let message_admission = store_mix_message(
         &pool,
         channel_id,
@@ -703,7 +709,8 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
         "<message><body>remove me</body></message>",
         None,
         "<body>remove me</body>",
-        None,
+        &publisher_identity,
+        Some(&owner),
         false,
         &payloads,
     )
@@ -732,7 +739,8 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
         "<message><retracted xmlns='urn:xmpp:mix:misc:0'/></message>",
         "<message><retract xmlns='urn:xmpp:mix:misc:0'/></message>",
         None,
-        None,
+        &publisher_identity,
+        Some(&owner),
         &payloads,
     )
     .await
@@ -847,7 +855,8 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
         "<message><body>after unsubscribe</body></message>",
         None,
         "<body>after unsubscribe</body>",
-        None,
+        &publisher_identity,
+        Some(&owner),
         false,
         &payloads,
     )

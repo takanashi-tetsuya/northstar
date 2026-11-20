@@ -462,7 +462,9 @@ fn outcome(v: m::Outcome) -> w::MixOutcome<w::EvidenceId> {
         m::Outcome::Stored(v) => w::MixOutcome::Stored(one(v)),
         m::Outcome::Replay(v) => w::MixOutcome::Replay(one(v)),
         m::Outcome::NotParticipant => w::MixOutcome::NotParticipant(w::Empty {}),
-        m::Outcome::Conflict => w::MixOutcome::Conflict(w::Empty {}),
+        m::Outcome::Conflict | m::Outcome::IdentityPolicyChanged => {
+            w::MixOutcome::Conflict(w::Empty {})
+        }
         m::Outcome::TooLarge => w::MixOutcome::TooLarge(w::Empty {}),
     }
 }

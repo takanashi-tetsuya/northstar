@@ -83,7 +83,10 @@ async fn configured_foreground_service_binds_requests_and_wakes_only_committed_a
     ] {
         let owner = foreground::Observation::new(foreground::fixture::prepared(false));
         let request = owner
-            .store_request(foreground::fixture::command(false))
+            .store_request(
+                foreground::fixture::command(false),
+                foreground::fixture::publisher_identity(),
+            )
             .unwrap();
         let repository = Repository {
             reply,
@@ -109,7 +112,10 @@ async fn configured_foreground_service_binds_requests_and_wakes_only_committed_a
         );
         let foreign_owner = foreground::Observation::new(foreground::PreparedIngress::new(foreign));
         let foreign_request = foreign_owner
-            .store_request(foreground::fixture::command(false))
+            .store_request(
+                foreground::fixture::command(false),
+                foreground::fixture::publisher_identity(),
+            )
             .unwrap();
         assert!(
             service
@@ -200,7 +206,10 @@ async fn configured_foreground_service_binds_requests_and_wakes_only_committed_a
 
     let owner = foreground::Observation::new(foreground::fixture::prepared(false));
     let request = owner
-        .store_request(foreground::fixture::command(false))
+        .store_request(
+            foreground::fixture::command(false),
+            foreground::fixture::publisher_identity(),
+        )
         .unwrap();
     let repository = Repository {
         reply: Reply::PendingCommit,
@@ -274,11 +283,17 @@ async fn configured_foreground_service_binds_requests_and_wakes_only_committed_a
     );
     assert_eq!(owner.snapshot(), before);
     owner
-        .store_request(foreground::fixture::command(false))
+        .store_request(
+            foreground::fixture::command(false),
+            foreground::fixture::publisher_identity(),
+        )
         .unwrap();
     assert!(
         matches!(
-            same.store_request(foreground::fixture::command(false)),
+            same.store_request(
+                foreground::fixture::command(false),
+                foreground::fixture::publisher_identity(),
+            ),
             Err(foreground::Rejected::AlreadyIssued)
         ),
         "same slot owner"
@@ -909,7 +924,10 @@ async fn all_producers_wait_before_repository() {
     use futures::future::BoxFuture;
     let owner = foreground::Observation::new(foreground::fixture::prepared(false));
     let observed = owner
-        .store_request(foreground::fixture::command(false))
+        .store_request(
+            foreground::fixture::command(false),
+            foreground::fixture::publisher_identity(),
+        )
         .unwrap();
     let repository = Repository {
         request_address: Some(std::ptr::from_ref(&observed) as usize),
@@ -1052,6 +1070,7 @@ async fn all_producers_wait_before_repository() {
                     payload,
                     identity: None,
                     delivery_payload: "<body>delivery</body>",
+                    publisher_identity: &foreground::fixture::publisher_identity(),
                     visible_jid: Some(actor),
                     encrypted: true,
                 })
@@ -1119,6 +1138,7 @@ async fn all_producers_wait_before_repository() {
                     tombstone_payload: "<tombstone/>",
                     retraction_payload: "<retract/>",
                     identity: None,
+                    publisher_identity: &foreground::fixture::publisher_identity(),
                     visible_jid: Some(actor),
                 })
                 .await

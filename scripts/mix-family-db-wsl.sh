@@ -34,6 +34,12 @@ run_exact_ignored \
   room::mix_sequence_retention::event_gc_preserves_a_requeue_committed_after_its_snapshot
 
 run_exact_ignored \
+  room::mix_publisher_visibility::locked_visibility_rejects_stale_message_and_retraction_payloads_without_writes
+
+run_exact_ignored \
+  room::mix_publisher_visibility::unfiltered_mix_mam_preserves_payload_committed_under_visible_policy
+
+run_exact_ignored \
   room::mix_sequence_retention::empty_delivery_claim_avoids_the_event_lock_and_recovers_after_insert
 
 run_exact_ignored \

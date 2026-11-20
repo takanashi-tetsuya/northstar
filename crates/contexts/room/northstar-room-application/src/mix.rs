@@ -1,6 +1,7 @@
 //! One foreground MIX invocation. PostgreSQL owns durable authority; this
 //! owner retains observed facts and grants only one synchronous local wake.
 
+use crate::mix_service::MixPublisherIdentity;
 use northstar_room_core::mix::{
     Admission, Existing, Ingress, Outcome, Replay, StoreCommand, Stored,
 };
@@ -181,7 +182,7 @@ impl Snapshot {
                 Some(Returned::Admission(admission)) => match admission.outcome {
                     Outcome::Stored(_) => ReturnClass::Stored,
                     Outcome::Replay(_) => ReturnClass::Replay,
-                    Outcome::Conflict => ReturnClass::Conflict,
+                    Outcome::Conflict | Outcome::IdentityPolicyChanged => ReturnClass::Conflict,
                     Outcome::TooLarge => ReturnClass::TooLarge,
                     Outcome::NotParticipant => ReturnClass::NotParticipant,
                 },
@@ -195,6 +196,7 @@ impl Snapshot {
 struct State {
     snapshot: Snapshot,
     command: Option<Arc<StoreCommand>>,
+    retried: bool,
 }
 struct Invocation {
     prepared: PreparedIngress,
@@ -249,6 +251,7 @@ impl Observation {
             prepared,
             state: Mutex::new(State {
                 command: None,
+                retried: false,
                 snapshot: Snapshot {
                     replay: ReadKnowledge::default(),
                     request_issued: false,
@@ -299,7 +302,11 @@ impl Observation {
             observation: self.clone(),
         }))
     }
-    pub fn store_request(&self, command: StoreCommand) -> Result<StoreRequest, Rejected> {
+    pub fn store_request(
+        &self,
+        command: StoreCommand,
+        publisher_identity: MixPublisherIdentity,
+    ) -> Result<StoreRequest, Rejected> {
         let mut state = self.state();
         active(&state.snapshot)?;
         if state.snapshot.request_issued {
@@ -320,6 +327,7 @@ impl Observation {
         Ok(StoreRequest {
             observation: self.clone(),
             command,
+            publisher_identity,
         })
     }
 }
@@ -394,13 +402,58 @@ impl ReplayRequest {
 pub struct StoreRequest {
     observation: Observation,
     command: Arc<StoreCommand>,
+    publisher_identity: MixPublisherIdentity,
 }
 impl StoreRequest {
     pub fn command(&self) -> &StoreCommand {
         &self.command
     }
+    pub fn publisher_identity(&self) -> &MixPublisherIdentity {
+        &self.publisher_identity
+    }
     pub fn observation(&self) -> &Observation {
         &self.observation
+    }
+    /// Replace a rendered command only after a store rejected its identity
+    /// facts without entering COMMIT. The original ingress and item ID bind
+    /// the second attempt to the same frame and replay commitment.
+    pub fn retry_with_identity(
+        self,
+        command: StoreCommand,
+        publisher_identity: MixPublisherIdentity,
+    ) -> Result<Self, Rejected> {
+        let mut state = self.observation.state();
+        active(&state.snapshot)?;
+        if state.retried {
+            return Err(Rejected::AlreadyIssued);
+        }
+        if !command.matches_ingress(self.observation.ingress())
+            || command.item_id != self.command.item_id
+            || !state
+                .command
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, &self.command))
+        {
+            return Err(Rejected::Input);
+        }
+        if !matches!(&state.snapshot.returned, Some(Returned::Admission(admission))
+            if admission.outcome == Outcome::IdentityPolicyChanged && admission.recipients.is_empty())
+            || state.snapshot.knowledge != Knowledge::NoCommitRequested
+            || state.snapshot.existing.raw.is_some()
+        {
+            return Err(Rejected::Result);
+        }
+        let command = Arc::new(command);
+        state.command = Some(command.clone());
+        state.retried = true;
+        state.snapshot.repository_started = false;
+        state.snapshot.returned = None;
+        drop(state);
+        Ok(Self {
+            observation: self.observation,
+            command,
+            publisher_identity,
+        })
     }
     fn start(&self, configured_domain: &str) -> Result<(), Rejected> {
         let mut state = self.observation.state();
@@ -507,7 +560,10 @@ impl StoreRequest {
                             return Err(Rejected::MissingReadEvidence);
                         }
                     }
-                    Outcome::Conflict | Outcome::TooLarge | Outcome::NotParticipant => {
+                    Outcome::Conflict
+                    | Outcome::IdentityPolicyChanged
+                    | Outcome::TooLarge
+                    | Outcome::NotParticipant => {
                         if state.snapshot.existing.raw.is_some() {
                             return Err(Rejected::Result);
                         }
@@ -647,10 +703,13 @@ pub(crate) fn assert_store_allocations_cannot_be_substituted() {
     use crate::mix_service::foreground::fixture;
 
     let observation = Observation::new(fixture::prepared(false));
-    let request = observation.store_request(fixture::command(false)).unwrap();
+    let request = observation
+        .store_request(fixture::command(false), fixture::publisher_identity())
+        .unwrap();
     let substitute = StoreRequest {
         observation: observation.clone(),
         command: Arc::new(fixture::command(false)),
+        publisher_identity: fixture::publisher_identity(),
     };
     let before = observation.snapshot();
     assert_eq!(
@@ -691,6 +750,7 @@ pub(crate) fn assert_store_allocations_cannot_be_substituted() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mix_service::foreground::fixture::publisher_identity;
     use northstar_room_core::mix::{
         DeliveryProjection, Id, Participant, RecipientProjection, ReplayIdentity,
     };
@@ -779,7 +839,9 @@ mod tests {
         owner
     }
     fn started_request(owner: &Observation, identity: bool) -> StoreRequest {
-        let request = owner.store_request(command(identity)).unwrap();
+        let request = owner
+            .store_request(command(identity), publisher_identity())
+            .unwrap();
         request.start("mix.local.test").unwrap();
         request
     }
@@ -789,17 +851,58 @@ mod tests {
     }
 
     #[test]
+    fn identity_retry_requires_a_no_commit_mismatch_and_can_only_be_issued_once() {
+        let observation = owner(true);
+        let request = started_request(&observation, true);
+        assert!(matches!(
+            request.retry_with_identity(command(true), publisher_identity()),
+            Err(Rejected::Result)
+        ));
+
+        let observation = owner(true);
+        let request = started_request(&observation, true);
+        let complete = request
+            .returned(Admission {
+                outcome: Outcome::IdentityPolicyChanged,
+                recipients: Vec::new(),
+            })
+            .unwrap();
+        assert!(complete.into_wake(&observation).unwrap().1.is_none());
+        let mut updated = command(true);
+        updated
+            .payload
+            .push_str("<!-- rendered under the replacement policy -->");
+        let retry = request
+            .retry_with_identity(updated.clone(), publisher_identity())
+            .unwrap();
+        assert_eq!(retry.command(), &updated);
+        retry.start("mix.local.test").unwrap();
+        retry
+            .returned(Admission {
+                outcome: Outcome::IdentityPolicyChanged,
+                recipients: Vec::new(),
+            })
+            .unwrap();
+        assert!(matches!(
+            retry.retry_with_identity(updated, publisher_identity()),
+            Err(Rejected::AlreadyIssued)
+        ));
+    }
+
+    #[test]
     fn private_input_domain_and_single_start_are_enforced_before_changes() {
         let observation = owner(false);
         let mut changed = command(false);
         changed.delivery_payload.push('x');
         let before = observation.snapshot();
         assert!(matches!(
-            observation.store_request(changed),
+            observation.store_request(changed, publisher_identity()),
             Err(Rejected::Input)
         ));
         assert_eq!(observation.snapshot(), before);
-        let request = observation.store_request(command(false)).unwrap();
+        let request = observation
+            .store_request(command(false), publisher_identity())
+            .unwrap();
         assert_eq!(request.start("mix.attacker.test"), Err(Rejected::Input));
         assert!(!observation.snapshot().repository_started);
         request.start("mix.local.test").unwrap();
@@ -808,7 +911,7 @@ mod tests {
             Err(Rejected::AlreadyStarted)
         );
         assert!(matches!(
-            observation.store_request(command(false)),
+            observation.store_request(command(false), publisher_identity()),
             Err(Rejected::AlreadyIssued)
         ));
         let mut claimed = ingress(false);
@@ -842,7 +945,7 @@ mod tests {
     fn replay_is_authenticated_read_evidence_and_preserves_original_id() {
         let observation = Observation::new(PreparedIngress::new(ingress(true)));
         assert!(matches!(
-            observation.store_request(command(true)),
+            observation.store_request(command(true), publisher_identity()),
             Err(Rejected::Read)
         ));
         let read = observation.replay_request().unwrap().unwrap();
@@ -857,7 +960,7 @@ mod tests {
             Ok(Replay::Replay(Id::from_u128(99)))
         );
         assert!(matches!(
-            observation.store_request(command(true)),
+            observation.store_request(command(true), publisher_identity()),
             Err(Rejected::Read)
         ));
         assert_eq!(
@@ -883,7 +986,7 @@ mod tests {
                 Some(ReadReturned::Outcome(result))
             );
             assert!(matches!(
-                observation.store_request(command(true)),
+                observation.store_request(command(true), publisher_identity()),
                 Err(Rejected::Read)
             ));
         }
@@ -1043,7 +1146,7 @@ mod tests {
             Err(Rejected::Retired)
         ));
         assert!(matches!(
-            observation.store_request(command(true)),
+            observation.store_request(command(true), publisher_identity()),
             Err(Rejected::Retired)
         ));
         assert_eq!(observation.snapshot(), frozen);

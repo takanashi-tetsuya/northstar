@@ -883,7 +883,9 @@ async fn mix_foreground_receipt_survives_actual_frame_boundaries_without_generic
             .mix_foreground(|| Ok(prepared.clone()))
             .unwrap()
             .unwrap();
-        let request = owner.store_request(fixture::command(false)).unwrap();
+        let request = owner
+            .store_request(fixture::command(false), fixture::publisher_identity())
+            .unwrap();
         let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let marker = MixChildDropMarker {
             owner: owner.clone(),

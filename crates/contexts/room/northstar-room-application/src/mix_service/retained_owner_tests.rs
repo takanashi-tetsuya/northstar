@@ -392,7 +392,9 @@ async fn mix_foreground_authenticated_replay_never_starts_membership_or_store_ef
         // A replay/conflict cannot mint the immutable first-execution request.
         // The production source pin separately requires this return before
         // its mutable participant/preference calls.
-        if let Ok(store) = owner.store_request(fixture::command(true)) {
+        if let Ok(store) =
+            owner.store_request(fixture::command(true), fixture::publisher_identity())
+        {
             calls.membership.fetch_add(1, Ordering::Relaxed);
             fixture::admit(&store, fixture::Cut::Return, true, &calls)
                 .await
@@ -410,7 +412,7 @@ async fn mix_foreground_authenticated_replay_never_starts_membership_or_store_ef
         assert_eq!(owner.snapshot().knowledge, Knowledge::NoCommitRequested);
         assert_eq!(owner.snapshot().wake, Wake::Unavailable);
         assert!(matches!(
-            owner.store_request(fixture::command(true)),
+            owner.store_request(fixture::command(true), fixture::publisher_identity()),
             Err(Rejected::Read)
         ));
     }
@@ -428,7 +430,9 @@ async fn mix_foreground_raw_existing_survives_cancelled_rollback_without_authent
     })
     .await
     .unwrap();
-    let request = owner.store_request(fixture::command(true)).unwrap();
+    let request = owner
+        .store_request(fixture::command(true), fixture::publisher_identity())
+        .unwrap();
     let raw = fixture::existing();
     let mut effect = Box::pin(admit_observed(&request, "mix.local.test", async {
         request.observed_existing(raw.clone())?;
@@ -462,7 +466,9 @@ async fn mix_foreground_actual_projection_and_receipt_error_have_exclusive_wake_
     use std::sync::atomic::Ordering;
     for audience in [false, true] {
         let owner = Observation::new(fixture::prepared(false));
-        let request = owner.store_request(fixture::command(false)).unwrap();
+        let request = owner
+            .store_request(fixture::command(false), fixture::publisher_identity())
+            .unwrap();
         let calls = fixture::Calls::default();
         let completion = fixture::admit(&request, fixture::Cut::Return, audience, &calls)
             .await
@@ -496,7 +502,9 @@ async fn mix_foreground_actual_projection_and_receipt_error_have_exclusive_wake_
         );
     }
     let owner = Observation::new(fixture::prepared(false));
-    let request = owner.store_request(fixture::command(false)).unwrap();
+    let request = owner
+        .store_request(fixture::command(false), fixture::publisher_identity())
+        .unwrap();
     let calls = fixture::Calls::default();
     assert!(
         fixture::admit(&request, fixture::Cut::FailAfterReceipt, true, &calls)
@@ -544,7 +552,9 @@ async fn mix_foreground_constructed_unpolled_commit_does_not_enter_message_commi
     use crate::mix_service::foreground::{fixture, Observation};
     use std::sync::atomic::Ordering;
     let owner = Observation::new(fixture::prepared(false));
-    let request = owner.store_request(fixture::command(false)).unwrap();
+    let request = owner
+        .store_request(fixture::command(false), fixture::publisher_identity())
+        .unwrap();
     let calls = fixture::Calls::default();
     let mut effect = Box::pin(admit_observed(&request, "mix.local.test", async {
         calls.repository.fetch_add(1, Ordering::Relaxed);

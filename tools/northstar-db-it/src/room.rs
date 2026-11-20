@@ -11,6 +11,7 @@ mod mix_mam;
 mod mix_mam_authority;
 mod mix_muc;
 mod mix_pam_durability;
+mod mix_publisher_visibility;
 mod mix_sequence_retention;
 mod muc;
 mod muc_service;

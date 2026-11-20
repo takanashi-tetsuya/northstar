@@ -1100,7 +1100,10 @@ impl Bridge {
                     "fresh foreground did not read Miss"
                 );
             }
-            let request = child_owner.store_request(command)?;
+            let request = child_owner.store_request(
+                command,
+                northstar_room_application::mix_service::foreground::fixture::publisher_identity(),
+            )?;
             *child_capture
                 .command
                 .lock()

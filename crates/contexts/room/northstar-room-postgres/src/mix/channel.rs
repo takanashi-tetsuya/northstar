@@ -31,6 +31,7 @@ pub enum StoreEventOutcome {
     Existing(MixIntentEvidence),
     NotParticipant,
     Conflict,
+    IdentityPolicyChanged,
     TooLarge,
 }
 

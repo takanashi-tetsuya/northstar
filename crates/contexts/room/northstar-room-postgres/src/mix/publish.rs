@@ -1,6 +1,7 @@
 //! MIX presence and message storage, node read authorization, event pages and avatars.
 
 use super::*;
+use northstar_room_application::mix_service::{participant_jid_visible, MixPublisherIdentity};
 
 pub async fn store_mix_presence(
     pool: &PgPool,
@@ -217,6 +218,7 @@ pub async fn store_mix_message(
     payload: &str,
     identity: Option<MixBusinessIdentity<'_>>,
     delivery_payload: &str,
+    publisher_identity: &MixPublisherIdentity,
     visible_jid: Option<&str>,
     encrypted: bool,
     payloads: &dyn MixEventPayloadRenderer,
@@ -229,6 +231,7 @@ pub async fn store_mix_message(
         payload,
         identity,
         delivery_payload,
+        publisher_identity,
         visible_jid,
         encrypted,
         payloads,
@@ -252,6 +255,7 @@ pub async fn store_mix_message_observed(
         &command.payload,
         identity,
         &command.delivery_payload,
+        request.publisher_identity(),
         command.visible_jid.as_deref(),
         command.encrypted,
         payloads,
@@ -272,6 +276,7 @@ pub async fn store_mix_message_inner(
     payload: &str,
     identity: Option<MixBusinessIdentity<'_>>,
     delivery_payload: &str,
+    publisher_identity: &MixPublisherIdentity,
     visible_jid: Option<&str>,
     encrypted: bool,
     payloads: &dyn MixEventPayloadRenderer,
@@ -315,21 +320,28 @@ pub async fn store_mix_message_inner(
             });
         }
     }
-    let participant_row = sqlx::query(
-        "SELECT channel_id, participant_id, jid, nick, role, joined_at FROM mix_participants WHERE channel_id = $1 AND jid = $2",
-    )
-    .bind(channel_id)
-    .bind(&actor)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    let Some(participant_row) = participant_row else {
+    let Some(participant) = mix_participant(&mut *transaction, channel_id, &actor).await? else {
         transaction.rollback().await?;
         return Ok(StoreMixMessageAdmission {
             outcome: StoreEventOutcome::NotParticipant,
             recipients: Vec::new(),
         });
     };
-    let participant = participant_from_row(&participant_row);
+    if !matches_locked_publisher_identity(
+        &mut transaction,
+        &channel,
+        &participant,
+        publisher_identity,
+        visible_jid,
+    )
+    .await?
+    {
+        transaction.rollback().await?;
+        return Ok(StoreMixMessageAdmission {
+            outcome: StoreEventOutcome::IdentityPolicyChanged,
+            recipients: Vec::new(),
+        });
+    }
     if let Some(identity) = identity {
         if let Some(existing) = admit_mix_business_intent_tx(
             &mut transaction,
@@ -431,6 +443,30 @@ pub async fn store_mix_message_inner(
         }
         Err(error) => Err(error),
     }
+}
+
+// Channel and participant mutations take the channel lock before changing
+// these inputs. The renderer's bytes can only be admitted under those facts.
+pub(super) async fn matches_locked_publisher_identity(
+    transaction: &mut Transaction<'_, Postgres>,
+    channel: &MixChannel,
+    participant: &MixParticipant,
+    rendered: &MixPublisherIdentity,
+    visible_jid: Option<&str>,
+) -> Result<bool> {
+    if MixPublisherIdentity::from_state(channel, participant) != *rendered {
+        return Ok(false);
+    }
+    let live_jid_visible = if channel.jid_visibility == "maybe" {
+        let preference =
+            mix_participant_preference(&mut **transaction, channel.id, &participant.jid)
+                .await?
+                .unwrap_or_default();
+        participant_jid_visible(channel, &preference)
+    } else {
+        rendered.archive_jid_visible
+    };
+    Ok(visible_jid == live_jid_visible.then_some(participant.jid.as_str()))
 }
 
 pub async fn authorize_mix_node_read_tx(

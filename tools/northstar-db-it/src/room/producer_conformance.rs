@@ -1,4 +1,4 @@
-use northstar_room_application::mix_service::MixPayloads;
+use northstar_room_application::mix_service::{MixPayloads, MixPublisherIdentity};
 use northstar_room_postgres::mix::*;
 use northstar_workflows::room_effects::WorkflowRoomEffects;
 use sqlx::PgPool;
@@ -7,6 +7,12 @@ use uuid::Uuid;
 const CHANNEL: Uuid = Uuid::from_u128(0x573_1801);
 const ACTOR: &str = "producer@remote.test";
 const ITEM: &str = "00000000-0000-0000-0000-000005731802";
+
+const ABSENT_PUBLISHER: MixPublisherIdentity = MixPublisherIdentity {
+    archive_jid_visible: true,
+    nick: None,
+    participant_id: Uuid::nil(),
+};
 
 async fn producer(pool: &PgPool, label: &str) -> anyhow::Result<()> {
     let effects = WorkflowRoomEffects;
@@ -98,6 +104,7 @@ async fn producer(pool: &PgPool, label: &str) -> anyhow::Result<()> {
                 "<body>producer</body>",
                 None,
                 "<body>producer</body>",
+                &ABSENT_PUBLISHER,
                 None,
                 false,
                 &payloads,
@@ -113,6 +120,7 @@ async fn producer(pool: &PgPool, label: &str) -> anyhow::Result<()> {
                 "<body>producer</body>",
                 None,
                 "<body>producer</body>",
+                &ABSENT_PUBLISHER,
                 None,
                 false,
                 &payloads,
@@ -244,6 +252,7 @@ async fn producer(pool: &PgPool, label: &str) -> anyhow::Result<()> {
                 "<retracted/>",
                 "<retract/>",
                 None,
+                &ABSENT_PUBLISHER,
                 None,
                 &payloads,
             )
@@ -357,6 +366,7 @@ async fn committed_reconciliation_survives_a_refused_message_producer() {
         "<body>refused</body>",
         None,
         "<body>refused</body>",
+        &ABSENT_PUBLISHER,
         None,
         false,
         &MixPayloads,
@@ -447,6 +457,8 @@ async fn wrappers_preserve_original_presence_and_message_projections_after_the_f
             .await
             .unwrap();
         let writer_pool = pool.clone();
+        let channel_state = mix_channel_by_id(&pool, channel).await.unwrap().unwrap();
+        let publisher_identity = MixPublisherIdentity::from_state(&channel_state, &participant);
         let writer = tokio::spawn(async move {
             match label {
                 "message wrapper" => {
@@ -458,6 +470,7 @@ async fn wrappers_preserve_original_presence_and_message_projections_after_the_f
                         "<body>original archive</body>",
                         None,
                         "<body>original delivery</body>",
+                        &publisher_identity,
                         Some(ACTOR),
                         true,
                         &MixPayloads,

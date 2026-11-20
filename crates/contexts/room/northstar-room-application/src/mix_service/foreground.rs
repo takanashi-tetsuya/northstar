@@ -110,6 +110,13 @@ pub mod fixture {
             encrypted: false,
         }
     }
+    pub fn publisher_identity() -> crate::mix_service::MixPublisherIdentity {
+        crate::mix_service::MixPublisherIdentity {
+            archive_jid_visible: false,
+            nick: None,
+            participant_id: Uuid::from_u128(73),
+        }
+    }
     pub fn participant() -> Participant {
         Participant {
             participant_id: Uuid::from_u128(73),

@@ -1,5 +1,5 @@
 use super::*;
-use northstar_room_application::mix_service::foreground;
+use northstar_room_application::mix_service::{foreground, MixPublisherIdentity};
 use northstar_room_core::mix_iq_relay::MixIqRelayIndex;
 
 pub async fn local_and_cluster_contracts() {
@@ -283,6 +283,135 @@ pub async fn local_and_cluster_contracts() {
             "{label}: compare the actual return with the recorded commit receipt"
         );
         assert_eq!(snapshot.aborted, mismatch, "{label}");
+    }
+}
+
+#[test]
+fn archive_publisher_identity_uses_channel_visibility_and_participant_nick() {
+    let mut channel = fixture::channel();
+    let participant = MixParticipant {
+        participant_id: Uuid::from_u128(94),
+        jid: "bob@local.test".into(),
+        nick: Some("Bob".into()),
+    };
+    for (visibility, archive_jid_visible) in
+        [("visible", true), ("hidden", false), ("maybe", false)]
+    {
+        channel.jid_visibility = visibility.into();
+        assert_eq!(
+            MixPublisherIdentity::from_state(&channel, &participant),
+            MixPublisherIdentity {
+                archive_jid_visible,
+                nick: Some("Bob".into()),
+                participant_id: participant.participant_id,
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn channel_archive_identity_is_rendered_once_more_and_second_mismatch_conflicts() {
+    for (observed, retract) in [(true, false), (false, false), (false, true)] {
+        for second_mismatch in [false, true] {
+            let context = Context::new(1);
+            *context.state.publisher_visibility.lock().unwrap() =
+                ["visible", "hidden", "visible"].into();
+            *context.state.publisher_mismatches.lock().unwrap() =
+                [true, second_mismatch, false].into();
+            let host = Arc::new(Host {
+                context: context.clone(),
+                relay: MixIqRelayIndex::new(),
+            });
+            let observer = Observer {
+                state: context.state.clone(),
+                present: observed,
+                reject: false,
+            };
+            let child = if retract {
+                format!(
+                    "<retract xmlns='urn:xmpp:mix:misc:0' id='{}'/>",
+                    Uuid::from_u128(95)
+                )
+            } else {
+                "<body>ordinary</body><origin-id xmlns='urn:xmpp:sid:0' id='origin'/>".into()
+            };
+            let raw = format!(
+                "<message type='groupchat' id='message' to='room@mix.local.test'>{child}</message>"
+            );
+            let result = process_channel_message(
+                &host,
+                "bob@local.test",
+                "bob@local.test/phone",
+                &raw,
+                Some(&observer),
+            )
+            .await
+            .unwrap();
+            let expected = second_mismatch.then(|| {
+                message::message_error(
+                    "message",
+                    "room@mix.local.test",
+                    "bob@local.test/phone",
+                    "cancel",
+                    "conflict",
+                )
+            });
+            assert_eq!(
+                result, expected,
+                "observed={observed}, retraction={retract}"
+            );
+            let writes = context.state.publisher_writes.lock().unwrap();
+            assert_eq!(writes.len(), 2);
+            assert!(writes[0].identity.archive_jid_visible);
+            assert!(!writes[1].identity.archive_jid_visible);
+            let first = Document::parse(&writes[0].payload).unwrap();
+            let second = Document::parse(&writes[1].payload).unwrap();
+            assert_eq!(
+                first.root_element().attribute("id"),
+                second.root_element().attribute("id")
+            );
+            assert!(writes[0].payload.contains("<jid>bob@local.test</jid>"));
+            assert!(!writes[1].payload.contains("<jid>"));
+            if retract {
+                assert!(writes[0]
+                    .tombstone
+                    .as_ref()
+                    .unwrap()
+                    .contains("by='bob@local.test'"));
+                let alias = encoded_participant_jid(
+                    "room@mix.local.test",
+                    &writes[1].identity.participant_id.to_string(),
+                )
+                .unwrap();
+                assert!(writes[1]
+                    .tombstone
+                    .as_ref()
+                    .unwrap()
+                    .contains(&format!("by='{alias}'")));
+            }
+            let calls = context.state.calls();
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|call| matches!(call, Call::Channel(..)))
+                    .count(),
+                2
+            );
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|call| matches!(call, Call::Replay(_)))
+                    .count(),
+                usize::from(!retract)
+            );
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|call| matches!(call, Call::Frame(MixFrameStage::Admission)))
+                    .count(),
+                1
+            );
+        }
     }
 }
 

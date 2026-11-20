@@ -306,6 +306,7 @@ pub enum RetractMixMessageOutcome {
     Retracted,
     Replay(Uuid),
     Conflict,
+    IdentityPolicyChanged,
     NotFound,
     Forbidden,
 }
@@ -317,6 +318,7 @@ pub struct StoreMixMessageRequest<'a> {
     pub payload: &'a str,
     pub identity: Option<MixReplayIdentity>,
     pub delivery_payload: &'a str,
+    pub publisher_identity: &'a MixPublisherIdentity,
     pub visible_jid: Option<&'a str>,
     pub encrypted: bool,
 }
@@ -329,6 +331,7 @@ pub struct RetractMixMessageRequest<'a> {
     pub tombstone_payload: &'a str,
     pub retraction_payload: &'a str,
     pub identity: Option<MixReplayIdentity>,
+    pub publisher_identity: &'a MixPublisherIdentity,
     pub visible_jid: Option<&'a str>,
 }
 

@@ -1,6 +1,7 @@
 //! MAM archive sources, visibility filters, boundaries and page queries.
 
 use super::*;
+use northstar_archive_core::{MamAccountOutcome, MamLocalAuthority};
 
 #[derive(Clone, Copy)]
 pub enum MamArchiveSource {
@@ -355,6 +356,42 @@ pub async fn mam_archive_page_for_in_transaction(
         first_index,
         complete,
     }))
+}
+
+pub async fn mam_personal_page(
+    pool: &PgPool,
+    authority: &MamLocalAuthority,
+    query: &MamArchiveQuery,
+) -> Result<MamAccountOutcome<Option<ArchivePage>>> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *transaction)
+        .await?;
+    if !mam_account_is_current(&mut transaction, authority).await? {
+        transaction.rollback().await?;
+        return Ok(MamAccountOutcome::StaleAccount);
+    }
+    let page = mam_user_archive_page_in_transaction(&mut transaction, authority.id, query).await?;
+    transaction.commit().await?;
+    Ok(MamAccountOutcome::Authorized(page))
+}
+
+pub async fn mam_personal_boundaries(
+    pool: &PgPool,
+    authority: &MamLocalAuthority,
+) -> Result<MamAccountOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *transaction)
+        .await?;
+    if !mam_account_is_current(&mut transaction, authority).await? {
+        transaction.rollback().await?;
+        return Ok(MamAccountOutcome::StaleAccount);
+    }
+    let boundaries =
+        archive_boundaries_visible_in_transaction(&mut transaction, authority.id).await?;
+    transaction.commit().await?;
+    Ok(MamAccountOutcome::Authorized(boundaries))
 }
 
 pub async fn mam_user_archive_page(

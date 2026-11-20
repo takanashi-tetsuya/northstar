@@ -2,8 +2,9 @@
 
 use super::*;
 use northstar_archive_application::{
-    FederatedMamMetadataCommand, MamMetadataCommand, MamMetadataResult, MamQueryCommand,
-    MamQueryRepository, MamQueryResult, MamQueryScope,
+    FederatedMamMetadataCommand, MamAccountOutcome, MamLocalAuthority, MamMetadataCommand,
+    MamMetadataResult, MamQueryCommand, MamQueryRepository, MamQueryResult, MamQueryScope,
+    MamRoomReadAuthority,
 };
 use northstar_message_core::{OfflineStoreOutcome, OfflineStorePolicy};
 use std::sync::Arc;
@@ -213,12 +214,22 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
     crate::support::migrate(&pool).await.unwrap();
 
     let viewer_id = Uuid::new_v4();
+    let viewer_account = MamLocalAuthority {
+        id: viewer_id,
+        username: format!("mam-snapshot-{}", &viewer_id.simple().to_string()[..12]),
+        auth_generation: 0,
+    };
+    let local_viewer = MamRoomReadAuthority {
+        full_jid: format!("{}@local.test/phone", viewer_account.username),
+        occupancy: None,
+    };
+    let federated_viewer = MamRoomReadAuthority {
+        full_jid: "remote@remote.test/phone".to_owned(),
+        occupancy: None,
+    };
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
         .bind(viewer_id)
-        .bind(format!(
-            "mam-snapshot-{}",
-            &viewer_id.simple().to_string()[..12]
-        ))
+        .bind(&viewer_account.username)
         .execute(&pool)
         .await
         .unwrap();
@@ -310,9 +321,12 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         always: Vec::new(),
         never: vec!["peer@remote.test".to_owned()],
     };
-    set_mam_preferences(&pool, viewer_id, &old_preferences)
-        .await
-        .unwrap();
+    assert_eq!(
+        set_mam_preferences(&pool, &viewer_account, &old_preferences)
+            .await
+            .unwrap(),
+        MamAccountOutcome::Authorized(())
+    );
     let mut preference_snapshot = pool.begin().await.unwrap();
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .execute(&mut *preference_snapshot)
@@ -328,9 +342,12 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         .unwrap(),
         "never"
     );
-    set_mam_preferences(&pool, viewer_id, &new_preferences)
-        .await
-        .unwrap();
+    assert_eq!(
+        set_mam_preferences(&pool, &viewer_account, &new_preferences)
+            .await
+            .unwrap(),
+        MamAccountOutcome::Authorized(())
+    );
     assert_eq!(
         mam_preferences_in_transaction(&mut preference_snapshot, viewer_id)
             .await
@@ -340,24 +357,27 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
     );
     preference_snapshot.commit().await.unwrap();
     assert_eq!(
-        mam_preferences(&pool, viewer_id).await.unwrap(),
-        new_preferences
+        mam_preferences(&pool, &viewer_account).await.unwrap(),
+        MamAccountOutcome::Authorized(new_preferences)
     );
     assert!(!archive_allowed(&pool, viewer_id, "peer@remote.test/Phone")
         .await
         .unwrap());
 
-    set_mam_preferences(
-        &pool,
-        viewer_id,
-        &MamPreferences {
-            default_policy: "never".to_owned(),
-            always: vec!["peer@remote.test/Phone".to_owned()],
-            never: vec!["peer@remote.test".to_owned()],
-        },
-    )
-    .await
-    .unwrap();
+    assert_eq!(
+        set_mam_preferences(
+            &pool,
+            &viewer_account,
+            &MamPreferences {
+                default_policy: "never".to_owned(),
+                always: vec!["peer@remote.test/Phone".to_owned()],
+                never: vec!["peer@remote.test".to_owned()],
+            },
+        )
+        .await
+        .unwrap(),
+        MamAccountOutcome::Authorized(())
+    );
     assert!(archive_allowed(&pool, viewer_id, "peer@remote.test/Phone")
         .await
         .unwrap());
@@ -366,17 +386,20 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
             .await
             .unwrap()
     );
-    set_mam_preferences(
-        &pool,
-        viewer_id,
-        &MamPreferences {
-            default_policy: "never".to_owned(),
-            always: vec!["peer@remote.test".to_owned()],
-            never: vec!["peer@remote.test/Phone".to_owned()],
-        },
-    )
-    .await
-    .unwrap();
+    assert_eq!(
+        set_mam_preferences(
+            &pool,
+            &viewer_account,
+            &MamPreferences {
+                default_policy: "never".to_owned(),
+                always: vec!["peer@remote.test".to_owned()],
+                never: vec!["peer@remote.test/Phone".to_owned()],
+            },
+        )
+        .await
+        .unwrap(),
+        MamAccountOutcome::Authorized(())
+    );
     assert!(!archive_allowed(&pool, viewer_id, "peer@remote.test/Phone")
         .await
         .unwrap());
@@ -384,17 +407,20 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         .await
         .unwrap());
 
-    set_mam_preferences(
-        &pool,
-        viewer_id,
-        &MamPreferences {
-            default_policy: "roster".to_owned(),
-            always: Vec::new(),
-            never: Vec::new(),
-        },
-    )
-    .await
-    .unwrap();
+    assert_eq!(
+        set_mam_preferences(
+            &pool,
+            &viewer_account,
+            &MamPreferences {
+                default_policy: "roster".to_owned(),
+                always: Vec::new(),
+                never: Vec::new(),
+            },
+        )
+        .await
+        .unwrap(),
+        MamAccountOutcome::Authorized(())
+    );
     sqlx::query("INSERT INTO roster_items(owner_id,contact_jid) VALUES($1,$2)")
         .bind(viewer_id)
         .bind("peer@remote.test")
@@ -446,13 +472,14 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         .execute(&pool)
         .await
         .unwrap();
-    let local_secret = match authorize_mam_room(&pool, "snapshot-room", viewer_id, false)
-        .await
-        .unwrap()
-    {
-        MamRoomReadOutcome::Allowed { access, .. } => access.occupant_id_secret,
-        other => panic!("legacy local room was not authorized: {other:?}"),
-    };
+    let local_secret =
+        match authorize_mam_room(&pool, "snapshot-room", &viewer_account, &local_viewer)
+            .await
+            .unwrap()
+        {
+            MamRoomReadOutcome::Allowed { access, .. } => access.occupant_id_secret,
+            other => panic!("legacy local room was not authorized: {other:?}"),
+        };
     assert_eq!(local_secret.len(), 32);
     sqlx::query("UPDATE muc_rooms SET occupant_id_secret=NULL WHERE id=$1")
         .bind(room_id)
@@ -460,7 +487,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         .await
         .unwrap();
     let federated_secret =
-        match authorize_federated_mam_room(&pool, "snapshot-room", "remote@remote.test", false)
+        match authorize_federated_mam_room(&pool, "snapshot-room", &federated_viewer)
             .await
             .unwrap()
         {
@@ -503,14 +530,13 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
             "snapshot-room".to_owned(),
             "remote.test",
             actor_full_jid,
-            false,
+            None,
         )
         .unwrap()
     };
-    let federated_scope = |viewer_bare_jid: &str| MamQueryScope::FederatedRoom {
+    let federated_scope = || MamQueryScope::FederatedRoom {
         localpart: "snapshot-room".to_owned(),
-        viewer_bare_jid: viewer_bare_jid.to_owned(),
-        currently_joined: false,
+        authority: federated_viewer.clone(),
     };
     let metadata = metadata_repository
         .get_federated_boundaries(federated_metadata("remote@remote.test/phone"))
@@ -534,7 +560,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
     assert!(matches!(
         metadata_repository
             .get_boundaries(MamMetadataCommand {
-                scope: federated_scope("remote@remote.test"),
+                scope: federated_scope(),
             })
             .await
             .unwrap(),
@@ -543,7 +569,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
     assert!(matches!(
         metadata_repository
             .query_archive(MamQueryCommand {
-                scope: federated_scope("remote@remote.test"),
+                scope: federated_scope(),
                 query: page_query(),
             })
             .await
@@ -554,17 +580,22 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
     let mut peer_query = page_query();
     peer_query.with_jid = Some("sender@remote.test/Phone".to_owned());
     assert!(matches!(
-        mam_room_archive_page_authorized(&pool, "snapshot-room", viewer_id, false, &peer_query,)
-            .await
-            .unwrap(),
+        mam_room_archive_page_authorized(
+            &pool,
+            "snapshot-room",
+            &viewer_account,
+            &local_viewer,
+            &peer_query,
+        )
+        .await
+        .unwrap(),
         MamRoomReadOutcome::Forbidden
     ));
     assert!(matches!(
         mam_federated_room_archive_page_authorized(
             &pool,
             "snapshot-room",
-            "remote@remote.test",
-            false,
+            &federated_viewer,
             &peer_query,
         )
         .await
@@ -577,9 +608,15 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         .await
         .unwrap();
     assert!(matches!(
-        mam_room_archive_page_authorized(&pool, "snapshot-room", viewer_id, false, &peer_query,)
-            .await
-            .unwrap(),
+        mam_room_archive_page_authorized(
+            &pool,
+            "snapshot-room",
+            &viewer_account,
+            &local_viewer,
+            &peer_query,
+        )
+        .await
+        .unwrap(),
         MamRoomReadOutcome::Allowed {
             value: Some(ArchivePage { total: 1, .. }),
             ..
@@ -589,8 +626,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         mam_federated_room_archive_page_authorized(
             &pool,
             "snapshot-room",
-            "remote@remote.test",
-            false,
+            &federated_viewer,
             &peer_query,
         )
         .await
@@ -606,11 +642,14 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         .execute(&mut *local_snapshot)
         .await
         .unwrap();
+    assert!(mam_account_is_current(&mut local_snapshot, &viewer_account)
+        .await
+        .unwrap());
     let local_access = match authorize_mam_room_in_transaction(
         &mut local_snapshot,
         "snapshot-room",
         viewer_id,
-        false,
+        &local_viewer,
         false,
     )
     .await
@@ -648,9 +687,15 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
     assert_eq!(local_page.rows[0].id, message_id);
     local_snapshot.commit().await.unwrap();
     assert!(matches!(
-        mam_room_archive_page_authorized(&pool, "snapshot-room", viewer_id, false, &page_query(),)
-            .await
-            .unwrap(),
+        mam_room_archive_page_authorized(
+            &pool,
+            "snapshot-room",
+            &viewer_account,
+            &local_viewer,
+            &page_query(),
+        )
+        .await
+        .unwrap(),
         MamRoomReadOutcome::Forbidden
     ));
 
@@ -665,8 +710,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
             &mut federated_snapshot,
             federated_room_id,
             "snapshot-room",
-            "remote@remote.test",
-            false,
+            &federated_viewer,
             &page_query(),
         )
         .await
@@ -703,8 +747,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         mam_federated_room_archive_page_authorized(
             &pool,
             "snapshot-room",
-            "remote@remote.test",
-            false,
+            &federated_viewer,
             &page_query(),
         )
         .await
@@ -754,7 +797,11 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         .unwrap();
     let reader_pool = pool.clone();
     let waiting_read = tokio::spawn(async move {
-        authorize_federated_mam_room(&reader_pool, "race-room", "new@remote.test", false).await
+        let authority = MamRoomReadAuthority {
+            full_jid: "new@remote.test/phone".to_owned(),
+            occupancy: None,
+        };
+        authorize_federated_mam_room(&reader_pool, "race-room", &authority).await
     });
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -873,13 +920,8 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         wake.clone(),
     );
     let query = page_query();
-    let request = FederatedMamStreamRequest::new(
-        "remote.test",
-        "snapshot-room",
-        "remote@remote.test",
-        false,
-        &query,
-    );
+    let request =
+        FederatedMamStreamRequest::new("remote.test", "snapshot-room", &federated_viewer, &query);
     let render = |_: &northstar_archive_application::FederatedMamStreamPage| {
         Ok(vec![
                 "<message xmlns='jabber:server' from='snapshot-room@conference.local.test' to='remote@remote.test' id='first'/>".to_owned(),
@@ -977,8 +1019,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         &mut identity_fence,
         identity_room_id,
         "snapshot-room",
-        "remote@remote.test",
-        false,
+        &federated_viewer,
         &page_query(),
     )
     .await

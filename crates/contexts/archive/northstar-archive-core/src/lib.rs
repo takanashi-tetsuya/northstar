@@ -3,7 +3,10 @@
 
 #![forbid(unsafe_code)]
 
+mod authority;
 pub mod mam_parse;
+
+pub use authority::*;
 
 use northstar_time::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -368,6 +371,7 @@ pub enum MamDbRoomReadOutcome<T> {
     },
     Missing,
     Forbidden,
+    StaleAccount,
 }
 
 /// Service-level read outcome exposing authorized room access (without room UUID).
@@ -376,6 +380,7 @@ pub enum MamRoomReadOutcome<T> {
     Allowed { access: MamRoomAccess, value: T },
     Missing,
     Forbidden,
+    StaleAccount,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -412,6 +417,7 @@ pub enum MamRoomAccessOutcome {
     Allowed(MamRoomAccess),
     Missing,
     Forbidden,
+    StaleAccount,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -518,8 +524,7 @@ pub fn validate_query_time_range(start: Option<DateTime<Utc>>, end: Option<DateT
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FederatedMamMetadataCommand {
     localpart: String,
-    viewer_bare_jid: String,
-    currently_joined: bool,
+    authority: MamRoomReadAuthority,
 }
 
 impl FederatedMamMetadataCommand {
@@ -529,7 +534,7 @@ impl FederatedMamMetadataCommand {
         localpart: String,
         authenticated_domain: &str,
         actor_full_jid: &str,
-        currently_joined: bool,
+        occupancy: Option<MamOccupancyProof>,
     ) -> Option<Self> {
         let domain = northstar_xmpp_types::CanonicalJid::parse(authenticated_domain).ok()?;
         let actor = northstar_xmpp_types::CanonicalJid::parse(actor_full_jid).ok()?;
@@ -543,8 +548,10 @@ impl FederatedMamMetadataCommand {
         }
         Some(Self {
             localpart,
-            viewer_bare_jid: actor.bare(),
-            currently_joined,
+            authority: MamRoomReadAuthority {
+                full_jid: actor.to_string(),
+                occupancy,
+            },
         })
     }
 
@@ -552,12 +559,8 @@ impl FederatedMamMetadataCommand {
         &self.localpart
     }
 
-    pub fn viewer_bare_jid(&self) -> &str {
-        &self.viewer_bare_jid
-    }
-
-    pub fn currently_joined(&self) -> bool {
-        self.currently_joined
+    pub fn authority(&self) -> &MamRoomReadAuthority {
+        &self.authority
     }
 }
 
@@ -571,6 +574,7 @@ pub enum MamMetadataResult {
     },
     ItemNotFound,
     Forbidden,
+    StaleAccount,
 }
 
 impl MamMetadataResult {
@@ -588,6 +592,7 @@ impl MamMetadataResult {
             },
             MamRoomReadOutcome::Missing => Self::ItemNotFound,
             MamRoomReadOutcome::Forbidden => Self::Forbidden,
+            MamRoomReadOutcome::StaleAccount => Self::StaleAccount,
         }
     }
 }
@@ -597,8 +602,7 @@ impl MamMetadataResult {
 pub struct FederatedMamStreamRequest<'a> {
     pub target_domain: &'a str,
     pub localpart: &'a str,
-    pub viewer_bare_jid: &'a str,
-    pub currently_joined: bool,
+    pub authority: &'a MamRoomReadAuthority,
     pub query: &'a MamArchiveQuery,
 }
 
@@ -606,15 +610,13 @@ impl<'a> FederatedMamStreamRequest<'a> {
     pub fn new(
         target_domain: &'a str,
         localpart: &'a str,
-        viewer_bare_jid: &'a str,
-        currently_joined: bool,
+        authority: &'a MamRoomReadAuthority,
         query: &'a MamArchiveQuery,
     ) -> Self {
         Self {
             target_domain,
             localpart,
-            viewer_bare_jid,
-            currently_joined,
+            authority,
             query,
         }
     }

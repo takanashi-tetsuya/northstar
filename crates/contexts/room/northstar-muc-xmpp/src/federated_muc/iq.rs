@@ -9,6 +9,7 @@ use super::owner::{
     federated_muc_owner, parse_federated_registration_action, FederatedRegistrationAction,
 };
 use super::*;
+use northstar_archive_core::{MamOccupancyProof, MamRoomAccessOutcome, MamRoomReadAuthority};
 
 /// Handle room/service IQs from an authenticated remote room actor. XML is
 /// converted to owned data before this future is created, so S2S connection
@@ -210,6 +211,23 @@ async fn federated_muc_iq_owned(
             "jid-malformed",
         ));
     }
+    if matches!(
+        &request.payload,
+        FederatedIqPayload::MamForm
+            | FederatedIqPayload::MamQuery(_)
+            | FederatedIqPayload::MamMetadata
+            | FederatedIqPayload::MamError(_)
+    ) {
+        return federated_muc_mam_iq(
+            state,
+            authenticated_domain,
+            &request,
+            &room_jid,
+            &actor_full_jid,
+        )
+        .await;
+    }
+
     let Some(room) = state
         .muc_service()
         .federated_room_snapshot(localpart(&room_jid))
@@ -661,160 +679,6 @@ async fn federated_muc_iq_owned(
         )));
     }
 
-    if matches!(
-        &request.payload,
-        FederatedIqPayload::MamForm
-            | FederatedIqPayload::MamQuery(_)
-            | FederatedIqPayload::MamMetadata
-            | FederatedIqPayload::MamError(_)
-    ) {
-        if !state.xmpp_extension_enabled(northstar_xep_0313::XEP_ID) {
-            return Ok(federated_error(
-                &request.stanza,
-                from,
-                "cancel",
-                "feature-not-implemented",
-            ));
-        }
-        let joined = state
-            .muc_occupants_for(&room_jid)
-            .iter()
-            .any(|(_, occupant)| same_remote_actor(&occupant.full_jid, &actor_full_jid));
-        return match &request.payload {
-            FederatedIqPayload::MamForm => match state
-                .authorize_federated_room(&room.localpart, &actor_bare_jid, joined)
-                .await?
-            {
-                northstar_archive_core::MamRoomAccessOutcome::Allowed(_) => {
-                    Ok(Some(federated_iq_result(
-                        &request.stanza,
-                        &room_jid,
-                        &actor_full_jid,
-                        mam_extended_form(),
-                    )))
-                }
-                northstar_archive_core::MamRoomAccessOutcome::Missing => Ok(federated_error(
-                    &request.stanza,
-                    from,
-                    "cancel",
-                    "item-not-found",
-                )),
-                northstar_archive_core::MamRoomAccessOutcome::Forbidden => {
-                    Ok(federated_error(&request.stanza, from, "auth", "forbidden"))
-                }
-            },
-            FederatedIqPayload::MamMetadata => {
-                let Some(command) = FederatedMamMetadataCommand::from_authenticated_actor(
-                    room.localpart.clone(),
-                    authenticated_domain,
-                    &actor_full_jid,
-                    joined,
-                ) else {
-                    return Ok(federated_error(
-                        &request.stanza,
-                        from,
-                        "auth",
-                        "not-authorized",
-                    ));
-                };
-                let (access, first, last) =
-                    match state.execute_federated_mam_metadata(command).await? {
-                        MamMetadataResult::Boundaries {
-                            room: Some(access),
-                            start,
-                            end,
-                        } => (access, start, end),
-                        MamMetadataResult::Boundaries { room: None, .. } => {
-                            return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
-                        }
-                        MamMetadataResult::ItemNotFound => {
-                            return Ok(federated_error(
-                                &request.stanza,
-                                from,
-                                "cancel",
-                                "item-not-found",
-                            ));
-                        }
-                        MamMetadataResult::Forbidden => {
-                            return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
-                        }
-                    };
-                debug_assert_eq!(access.localpart(), room.localpart);
-                let mut metadata = XmlElement::namespaced("metadata", "urn:xmpp:mam:2");
-                if let Some(value) = first {
-                    metadata.push_child(
-                        XmlElement::new("start").attr("id", value.id).attr(
-                            "timestamp",
-                            value
-                                .created_at
-                                .to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true),
-                        ),
-                    );
-                }
-                if let Some(value) = last {
-                    metadata.push_child(
-                        XmlElement::new("end").attr("id", value.id).attr(
-                            "timestamp",
-                            value
-                                .created_at
-                                .to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true),
-                        ),
-                    );
-                }
-                Ok(Some(federated_iq_result(
-                    &request.stanza,
-                    &room_jid,
-                    &actor_full_jid,
-                    &metadata.finish(),
-                )))
-            }
-            FederatedIqPayload::MamError(condition) => {
-                match state
-                    .authorize_federated_room(&room.localpart, &actor_bare_jid, joined)
-                    .await?
-                {
-                    northstar_archive_core::MamRoomAccessOutcome::Allowed(_) => {}
-                    northstar_archive_core::MamRoomAccessOutcome::Missing => {
-                        return Ok(federated_error(
-                            &request.stanza,
-                            from,
-                            "cancel",
-                            "item-not-found",
-                        ));
-                    }
-                    northstar_archive_core::MamRoomAccessOutcome::Forbidden => {
-                        return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
-                    }
-                }
-                let error_type = if *condition == "resource-constraint" {
-                    "wait"
-                } else if matches!(*condition, "bad-request" | "jid-malformed") {
-                    "modify"
-                } else {
-                    "cancel"
-                };
-                Ok(federated_error(
-                    &request.stanza,
-                    from,
-                    error_type,
-                    condition,
-                ))
-            }
-            FederatedIqPayload::MamQuery(query) => {
-                federated_muc_mam(
-                    state,
-                    authenticated_domain,
-                    &request.stanza,
-                    (&room.localpart, &actor_bare_jid, joined),
-                    (&room_jid, &actor_full_jid),
-                    query.clone(),
-                )
-                .await
-            }
-            _ => unreachable!(),
-        };
-    }
-
     let own = state
         .muc_occupants_for(&room_jid)
         .into_iter()
@@ -1029,15 +893,186 @@ async fn federated_muc_iq_owned(
     }
 }
 
+fn federated_mam_occupancy_proof<L, S>(
+    occupants: &[(String, MucOccupant<L, S>)],
+    actor_full_jid: &str,
+) -> Option<MamOccupancyProof> {
+    occupants
+        .iter()
+        .find(|(_, occupant)| same_remote_actor(&occupant.full_jid, actor_full_jid))
+        .map(|(_, occupant)| MamOccupancyProof {
+            occupant_incarnation: occupant.cluster_epoch,
+            connection_uuid: occupant.connection_id,
+        })
+}
+
+async fn federated_muc_mam_iq(
+    state: &impl MucHost,
+    authenticated_domain: &str,
+    request: &FederatedIqRequest,
+    room_jid: &str,
+    actor_full_jid: &str,
+) -> Result<Option<String>> {
+    let from = request.stanza.from.as_str();
+    let room_localpart = localpart(room_jid);
+    if !state.xmpp_extension_enabled(northstar_xep_0313::XEP_ID) {
+        let visible = state
+            .federated_mam_room_visible(room_localpart, actor_full_jid)
+            .await?;
+        let condition = if visible {
+            "feature-not-implemented"
+        } else {
+            "item-not-found"
+        };
+        return Ok(federated_error(&request.stanza, from, "cancel", condition));
+    }
+    let occupancy =
+        federated_mam_occupancy_proof(&state.muc_occupants_for(room_jid), actor_full_jid);
+    let authority = MamRoomReadAuthority {
+        full_jid: actor_full_jid.to_owned(),
+        occupancy,
+    };
+    match &request.payload {
+        FederatedIqPayload::MamForm => match state
+            .authorize_federated_room(room_localpart, &authority)
+            .await?
+        {
+            MamRoomAccessOutcome::Allowed(_) => Ok(Some(federated_iq_result(
+                &request.stanza,
+                room_jid,
+                actor_full_jid,
+                mam_extended_form(),
+            ))),
+            MamRoomAccessOutcome::Missing => Ok(federated_error(
+                &request.stanza,
+                from,
+                "cancel",
+                "item-not-found",
+            )),
+            MamRoomAccessOutcome::Forbidden | MamRoomAccessOutcome::StaleAccount => {
+                Ok(federated_error(&request.stanza, from, "auth", "forbidden"))
+            }
+        },
+        FederatedIqPayload::MamMetadata => {
+            let Some(command) = FederatedMamMetadataCommand::from_authenticated_actor(
+                room_localpart.to_owned(),
+                authenticated_domain,
+                actor_full_jid,
+                occupancy,
+            ) else {
+                return Ok(federated_error(
+                    &request.stanza,
+                    from,
+                    "auth",
+                    "not-authorized",
+                ));
+            };
+            let (access, first, last) = match state.execute_federated_mam_metadata(command).await? {
+                MamMetadataResult::Boundaries {
+                    room: Some(access),
+                    start,
+                    end,
+                } => (access, start, end),
+                MamMetadataResult::Boundaries { room: None, .. } => {
+                    return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
+                }
+                MamMetadataResult::ItemNotFound => {
+                    return Ok(federated_error(
+                        &request.stanza,
+                        from,
+                        "cancel",
+                        "item-not-found",
+                    ));
+                }
+                MamMetadataResult::Forbidden | MamMetadataResult::StaleAccount => {
+                    return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
+                }
+            };
+            debug_assert_eq!(access.localpart(), room_localpart);
+            let mut metadata = XmlElement::namespaced("metadata", "urn:xmpp:mam:2");
+            if let Some(value) = first {
+                metadata.push_child(
+                    XmlElement::new("start").attr("id", value.id).attr(
+                        "timestamp",
+                        value
+                            .created_at
+                            .to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true),
+                    ),
+                );
+            }
+            if let Some(value) = last {
+                metadata.push_child(
+                    XmlElement::new("end").attr("id", value.id).attr(
+                        "timestamp",
+                        value
+                            .created_at
+                            .to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true),
+                    ),
+                );
+            }
+            Ok(Some(federated_iq_result(
+                &request.stanza,
+                room_jid,
+                actor_full_jid,
+                &metadata.finish(),
+            )))
+        }
+        FederatedIqPayload::MamError(condition) => {
+            match state
+                .authorize_federated_room(room_localpart, &authority)
+                .await?
+            {
+                MamRoomAccessOutcome::Allowed(_) => {}
+                MamRoomAccessOutcome::Missing => {
+                    return Ok(federated_error(
+                        &request.stanza,
+                        from,
+                        "cancel",
+                        "item-not-found",
+                    ));
+                }
+                MamRoomAccessOutcome::Forbidden | MamRoomAccessOutcome::StaleAccount => {
+                    return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
+                }
+            }
+            let error_type = if *condition == "resource-constraint" {
+                "wait"
+            } else if matches!(*condition, "bad-request" | "jid-malformed") {
+                "modify"
+            } else {
+                "cancel"
+            };
+            Ok(federated_error(
+                &request.stanza,
+                from,
+                error_type,
+                condition,
+            ))
+        }
+        FederatedIqPayload::MamQuery(query) => {
+            federated_muc_mam(
+                state,
+                authenticated_domain,
+                &request.stanza,
+                (room_localpart, &authority),
+                (room_jid, actor_full_jid),
+                query.clone(),
+            )
+            .await
+        }
+        _ => unreachable!(),
+    }
+}
+
 async fn federated_muc_mam(
     state: &impl MucHost,
     authenticated_domain: &str,
     stanza: &FederatedStanza,
-    authorization: (&str, &str, bool),
+    authorization: (&str, &MamRoomReadAuthority),
     delivery: (&str, &str),
     query: FederatedMamQuery,
 ) -> Result<Option<String>> {
-    let (room_localpart, actor_bare_jid, joined) = authorization;
+    let (room_localpart, authority) = authorization;
     let (room_jid, recipient) = delivery;
     let flip_page = query.flip_page;
     let query_id = query.query_id.clone();
@@ -1046,8 +1081,7 @@ async fn federated_muc_mam(
             northstar_archive_core::FederatedMamStreamRequest::new(
                 authenticated_domain,
                 room_localpart,
-                actor_bare_jid,
-                joined,
+                authority,
                 &query.query,
             ),
             |page| {
@@ -1123,5 +1157,60 @@ async fn federated_muc_mam(
         northstar_archive_core::FederatedMamAdmissionOutcome::OutboxRejected => Ok(
             federated_error(stanza, &stanza.from, "wait", "remote-server-timeout"),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    fn occupant(
+        full_jid: &str,
+        incarnation: u128,
+        connection: u128,
+    ) -> (String, MucOccupant<(), ()>) {
+        let nick = format!("nick-{incarnation}");
+        let connection_id = Uuid::from_u128(connection);
+        (
+            nick.clone(),
+            MucOccupant {
+                full_jid: full_jid.to_owned(),
+                room_jid: "room@conference.local.test".to_owned(),
+                nick,
+                endpoint: MucOccupantEndpoint::Federated {
+                    authenticated_domain: "remote.test".to_owned(),
+                    connection_id,
+                },
+                affiliation: "member".to_owned(),
+                role: "participant".to_owned(),
+                room_non_anonymous: false,
+                occupant_id: String::new(),
+                cluster_epoch: Uuid::from_u128(incarnation),
+                connection_id,
+                sm_session_id: None,
+                payload: String::new(),
+            },
+        )
+    }
+
+    #[test]
+    fn federated_mam_proof_comes_from_the_matching_full_actor() {
+        let occupants = [
+            occupant("bob@remote.test/Phone", 1, 11),
+            occupant("alice@remote.test/Tablet", 2, 22),
+            occupant("Alice@REMOTE.test/Phone", 3, 33),
+        ];
+        assert_eq!(
+            federated_mam_occupancy_proof(&occupants, "alice@remote.test/Phone"),
+            Some(MamOccupancyProof {
+                occupant_incarnation: Uuid::from_u128(3),
+                connection_uuid: Uuid::from_u128(33),
+            })
+        );
+        assert_eq!(
+            federated_mam_occupancy_proof(&occupants, "alice@remote.test/phone"),
+            None
+        );
     }
 }

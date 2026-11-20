@@ -1,6 +1,7 @@
 //! MUC MAM room archive reads under the room authorization, local and federated.
 
 use anyhow::Result;
+use northstar_archive_core::{MamLocalAuthority, MamRoomReadAuthority};
 use northstar_archive_postgres::*;
 use northstar_room_postgres::mam_authorization::{
     authorize_federated_mam_room_in_transaction, authorize_mam_room_in_transaction,
@@ -9,21 +10,61 @@ use northstar_room_postgres::mam_authorization::{
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-pub async fn mam_room_archive_boundaries_authorized(
-    pool: &PgPool,
-    localpart: &str,
-    viewer_id: Uuid,
-    currently_joined: bool,
-) -> Result<MamRoomReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>> {
+async fn begin_local_mam_snapshot(pool: &PgPool) -> Result<Transaction<'_, Postgres>> {
     let mut transaction = pool.begin().await?;
+    // Read-write for the room's one-time legacy occupant-ID secret repair.
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
         .execute(&mut *transaction)
         .await?;
-    let access = match authorize_mam_room_in_transaction(
+    Ok(transaction)
+}
+
+async fn authorize_local_room_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    localpart: &str,
+    account: &MamLocalAuthority,
+    authority: &MamRoomReadAuthority,
+    has_peer_filter: bool,
+) -> Result<MamRoomReadOutcome<()>> {
+    if !mam_account_is_current(transaction, account).await? {
+        return Ok(MamRoomReadOutcome::StaleAccount);
+    }
+    authorize_mam_room_in_transaction(
+        transaction,
+        localpart,
+        account.id,
+        authority,
+        has_peer_filter,
+    )
+    .await
+}
+
+pub async fn authorize_mam_room(
+    pool: &PgPool,
+    localpart: &str,
+    account: &MamLocalAuthority,
+    authority: &MamRoomReadAuthority,
+) -> Result<MamRoomReadOutcome<()>> {
+    let mut transaction = begin_local_mam_snapshot(pool).await?;
+    let outcome =
+        authorize_local_room_in_transaction(&mut transaction, localpart, account, authority, false)
+            .await?;
+    transaction.commit().await?;
+    Ok(outcome)
+}
+
+pub async fn mam_room_archive_boundaries_authorized(
+    pool: &PgPool,
+    localpart: &str,
+    account: &MamLocalAuthority,
+    authority: &MamRoomReadAuthority,
+) -> Result<MamRoomReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>> {
+    let mut transaction = begin_local_mam_snapshot(pool).await?;
+    let access = match authorize_local_room_in_transaction(
         &mut transaction,
         localpart,
-        viewer_id,
-        currently_joined,
+        account,
+        authority,
         false,
     )
     .await?
@@ -37,11 +78,12 @@ pub async fn mam_room_archive_boundaries_authorized(
             transaction.commit().await?;
             return Ok(MamRoomReadOutcome::Forbidden);
         }
+        MamRoomReadOutcome::StaleAccount => return Ok(MamRoomReadOutcome::StaleAccount),
     };
     let value = archive_boundaries_for_in_transaction(
         &mut transaction,
         MamArchiveSource::Muc(access.room_id),
-        Some(viewer_id),
+        Some(account.id),
     )
     .await?;
     transaction.commit().await?;
@@ -51,19 +93,16 @@ pub async fn mam_room_archive_boundaries_authorized(
 pub async fn mam_room_archive_page_authorized(
     pool: &PgPool,
     localpart: &str,
-    viewer_id: Uuid,
-    currently_joined: bool,
+    account: &MamLocalAuthority,
+    authority: &MamRoomReadAuthority,
     query: &MamArchiveQuery,
 ) -> Result<MamRoomReadOutcome<Option<ArchivePage>>> {
-    let mut transaction = pool.begin().await?;
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-        .execute(&mut *transaction)
-        .await?;
-    let access = match authorize_mam_room_in_transaction(
+    let mut transaction = begin_local_mam_snapshot(pool).await?;
+    let access = match authorize_local_room_in_transaction(
         &mut transaction,
         localpart,
-        viewer_id,
-        currently_joined,
+        account,
+        authority,
         query.with_jid.is_some(),
     )
     .await?
@@ -77,11 +116,12 @@ pub async fn mam_room_archive_page_authorized(
             transaction.commit().await?;
             return Ok(MamRoomReadOutcome::Forbidden);
         }
+        MamRoomReadOutcome::StaleAccount => return Ok(MamRoomReadOutcome::StaleAccount),
     };
     let value = mam_archive_page_for_in_transaction(
         &mut transaction,
         MamArchiveSource::Muc(access.room_id),
-        Some(viewer_id),
+        Some(account.id),
         query,
     )
     .await?;
@@ -92,14 +132,8 @@ pub async fn mam_room_archive_page_authorized(
 pub async fn mam_federated_room_archive_boundaries_authorized(
     pool: &PgPool,
     localpart: &str,
-    viewer_bare_jid: &str,
-    currently_joined: bool,
+    authority: &MamRoomReadAuthority,
 ) -> Result<MamRoomReadOutcome<(Option<ArchiveBoundary>, Option<ArchiveBoundary>)>> {
-    let viewer_bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(viewer_bare_jid)?;
-    anyhow::ensure!(
-        viewer_bare_jid.localpart().is_some(),
-        "federated MAM viewer must be a user bare JID"
-    );
     let Some(mut guard) = FederatedMamRoomGuard::acquire(pool, localpart).await? else {
         return Ok(MamRoomReadOutcome::Missing);
     };
@@ -109,8 +143,7 @@ pub async fn mam_federated_room_archive_boundaries_authorized(
         &mut transaction,
         room_id,
         localpart,
-        &viewer_bare_jid.to_string(),
-        currently_joined,
+        authority,
         false,
     )
     .await?
@@ -126,6 +159,7 @@ pub async fn mam_federated_room_archive_boundaries_authorized(
         }
         MamRoomReadOutcome::Missing => MamRoomReadOutcome::Missing,
         MamRoomReadOutcome::Forbidden => MamRoomReadOutcome::Forbidden,
+        MamRoomReadOutcome::StaleAccount => MamRoomReadOutcome::StaleAccount,
     };
     transaction.commit().await?;
     guard.release().await;
@@ -136,8 +170,7 @@ pub async fn mam_federated_room_archive_boundaries_authorized(
 pub async fn mam_federated_room_archive_page_authorized(
     pool: &PgPool,
     localpart: &str,
-    viewer_bare_jid: &str,
-    currently_joined: bool,
+    authority: &MamRoomReadAuthority,
     query: &MamArchiveQuery,
 ) -> Result<MamRoomReadOutcome<Option<ArchivePage>>> {
     let Some(mut guard) = FederatedMamRoomGuard::acquire(pool, localpart).await? else {
@@ -149,8 +182,7 @@ pub async fn mam_federated_room_archive_page_authorized(
         &mut transaction,
         room_id,
         localpart,
-        viewer_bare_jid,
-        currently_joined,
+        authority,
         query,
     )
     .await?;
@@ -168,21 +200,14 @@ pub async fn mam_federated_room_archive_page_authorized_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     expected_room_id: Uuid,
     localpart: &str,
-    viewer_bare_jid: &str,
-    currently_joined: bool,
+    authority: &MamRoomReadAuthority,
     query: &MamArchiveQuery,
 ) -> Result<MamRoomReadOutcome<Option<ArchivePage>>> {
-    let viewer_bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(viewer_bare_jid)?;
-    anyhow::ensure!(
-        viewer_bare_jid.localpart().is_some(),
-        "federated MAM viewer must be a user bare JID"
-    );
     let access = match authorize_federated_mam_room_in_transaction(
         transaction,
         expected_room_id,
         localpart,
-        &viewer_bare_jid.to_string(),
-        currently_joined,
+        authority,
         query.with_jid.is_some(),
     )
     .await?
@@ -190,6 +215,7 @@ pub async fn mam_federated_room_archive_page_authorized_in_transaction(
         MamRoomReadOutcome::Allowed { access, .. } => access,
         MamRoomReadOutcome::Missing => return Ok(MamRoomReadOutcome::Missing),
         MamRoomReadOutcome::Forbidden => return Ok(MamRoomReadOutcome::Forbidden),
+        MamRoomReadOutcome::StaleAccount => return Ok(MamRoomReadOutcome::StaleAccount),
     };
     let value = mam_archive_page_for_in_transaction(
         transaction,

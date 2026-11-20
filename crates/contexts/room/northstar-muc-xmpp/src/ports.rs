@@ -8,7 +8,7 @@ use anyhow::Result;
 use dashmap::DashMap;
 use northstar_archive_core::{
     FederatedMamAdmissionOutcome, FederatedMamMetadataCommand, FederatedMamStreamPage,
-    FederatedMamStreamRequest, MamMetadataResult, MamRoomAccessOutcome,
+    FederatedMamStreamRequest, MamMetadataResult, MamRoomAccessOutcome, MamRoomReadAuthority,
 };
 use northstar_delivery_core::{node_delivery::NodeDeliveryReceipt, DurableDelivery};
 use northstar_federation_core::S2sOutboxPolicy;
@@ -119,11 +119,16 @@ pub trait MucHost: Send + Sync + 'static {
         bounce_to: Option<String>,
     ) -> impl Future<Output = bool> + Send;
 
+    fn federated_mam_room_visible(
+        &self,
+        localpart: &str,
+        viewer_full_jid: &str,
+    ) -> impl Future<Output = Result<bool>> + Send;
+
     fn authorize_federated_room(
         &self,
         localpart: &str,
-        viewer_bare_jid: &str,
-        currently_joined: bool,
+        authority: &MamRoomReadAuthority,
     ) -> impl Future<Output = Result<MamRoomAccessOutcome>> + Send;
     fn execute_federated_mam_metadata(
         &self,

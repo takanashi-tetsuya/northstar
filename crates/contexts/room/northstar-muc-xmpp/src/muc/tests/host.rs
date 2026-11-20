@@ -1,7 +1,7 @@
 use super::*;
 use northstar_archive_core::{
     FederatedMamAdmissionOutcome, FederatedMamMetadataCommand, FederatedMamStreamPage,
-    FederatedMamStreamRequest, MamMetadataResult, MamRoomAccessOutcome,
+    FederatedMamStreamRequest, MamMetadataResult, MamRoomAccessOutcome, MamRoomReadAuthority,
 };
 use northstar_delivery_core::{node_delivery::NodeDeliveryReceipt, DurableDelivery};
 use northstar_message_core::{DirectPostCommitMode, OfflineDeliveryLimits};
@@ -216,7 +216,8 @@ impl MucHost for Host {
         fn rearm_unrouted_live_direct(&self, recipient_id: Uuid, message_id: Uuid, claim_id: &mut Option<Uuid>);
         fn send_received_carbons(&self, recipient: &str, delivered: Option<&str>, forwarded: &str);
         fn send_federated(&self, target_domain: &str, stanza: String, bounce_to: Option<String>) -> bool;
-        fn authorize_federated_room(&self, localpart: &str, viewer_bare_jid: &str, currently_joined: bool) -> Result<MamRoomAccessOutcome>;
+        fn federated_mam_room_visible(&self, localpart: &str, viewer_full_jid: &str) -> Result<bool>;
+        fn authorize_federated_room(&self, localpart: &str, authority: &MamRoomReadAuthority) -> Result<MamRoomAccessOutcome>;
         fn execute_federated_mam_metadata(&self, command: FederatedMamMetadataCommand) -> Result<MamMetadataResult>;
         fn cache_committed_muc_join(&self, occupant: &SerializableMucOccupant, capacity: usize) -> Result<MucJoinCacheAttempt>;
         fn cached_muc_cluster_occupants(&self, room: &str) -> Result<HashMap<String, String>>;

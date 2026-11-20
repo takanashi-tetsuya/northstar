@@ -397,7 +397,27 @@ pub async fn cluster_muc_occupancy_target(
     occupant_incarnation: Uuid,
     connection_uuid: Uuid,
 ) -> Result<Option<ClusterMucOccupancyTarget>> {
-    let row = sqlx::query(
+    let mut connection = pool.acquire().await?;
+    let row = exact_cluster_muc_occupancy(
+        &mut connection,
+        room_id,
+        occupant_incarnation,
+        connection_uuid,
+    )
+    .await?;
+    Ok(row.map(|row| {
+        let occupancy = occupancy_from_row(&row);
+        ClusterMucOccupancyTarget::from(&occupancy)
+    }))
+}
+
+pub(crate) async fn exact_cluster_muc_occupancy(
+    connection: &mut sqlx::PgConnection,
+    room_id: Uuid,
+    occupant_incarnation: Uuid,
+    connection_uuid: Uuid,
+) -> Result<Option<sqlx::postgres::PgRow>> {
+    Ok(sqlx::query(
         "SELECT * FROM cluster_muc_occupancies
           WHERE room_id=$1 AND occupant_incarnation=$2 AND connection_uuid=$3
             AND state IN ('active','suspended') AND lease_until>clock_timestamp()",
@@ -405,12 +425,8 @@ pub async fn cluster_muc_occupancy_target(
     .bind(room_id)
     .bind(occupant_incarnation)
     .bind(connection_uuid)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.map(|row| {
-        let occupancy = occupancy_from_row(&row);
-        ClusterMucOccupancyTarget::from(&occupancy)
-    }))
+    .fetch_optional(connection)
+    .await?)
 }
 
 pub async fn cluster_muc_occupancy_target_by_nick(

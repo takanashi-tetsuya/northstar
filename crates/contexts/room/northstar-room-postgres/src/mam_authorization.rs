@@ -1,15 +1,81 @@
 //! MUC MAM room authorization: the room snapshot, the federated room lock and
-//! the occupant-id secret repair. Reads of `message_archive` under this
+//! the occupant-id secret repair. Archive page and boundary reads under this
 //! authorization belong to the archive context.
 
+use crate::cluster_muc::exact_cluster_muc_occupancy;
 use anyhow::Result;
 use northstar_archive_core::{
     decide_mam_room_read, MamDbRoomReadOutcome as MamRoomReadOutcome, MamRoomArchiveAccess,
-    MamRoomReadDecision,
+    MamRoomReadAuthority, MamRoomReadDecision,
 };
 use rand::RngCore;
-use sqlx::{pool::PoolConnection, Acquire, PgPool, Postgres, Row, Transaction};
+use sqlx::{pool::PoolConnection, postgres::PgRow, Acquire, PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
+
+const MAM_CONFIGURATION_VISIBLE: &str = "(r.configuration_state <> 'locked'
+    OR (r.configuration_owner_jid=$2 AND r.configuration_expires_at>clock_timestamp()))";
+
+async fn mam_occupancy_matches(
+    transaction: &mut Transaction<'_, Postgres>,
+    room: &PgRow,
+    authority: &MamRoomReadAuthority,
+    federated: bool,
+) -> Result<bool> {
+    let Some(proof) = authority.occupancy else {
+        return Ok(false);
+    };
+    let Some(occupancy) = exact_cluster_muc_occupancy(
+        transaction,
+        room.try_get("id")?,
+        proof.occupant_incarnation,
+        proof.connection_uuid,
+    )
+    .await?
+    else {
+        return Ok(false);
+    };
+    if occupancy.try_get::<Uuid, _>("room_epoch")? != room.try_get::<Uuid, _>("room_epoch")? {
+        return Ok(false);
+    }
+    let full_jid: &str = occupancy.try_get("full_jid")?;
+    Ok(if federated {
+        authority.matches_remote_actor(full_jid)
+    } else {
+        full_jid == authority.full_jid
+    })
+}
+
+/// Check room visibility and preserve the one-time repair for the disabled
+/// MAM extension's existing room lookup.
+pub async fn federated_mam_room_visible(
+    pool: &PgPool,
+    localpart: &str,
+    viewer_full_jid: &str,
+) -> Result<bool> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        .execute(&mut *transaction)
+        .await?;
+    let statement = format!(
+        "SELECT r.id,r.occupant_id_secret FROM muc_rooms r
+          WHERE r.localpart=$1 AND r.destroyed_at IS NULL AND {MAM_CONFIGURATION_VISIBLE}"
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+        .bind(localpart)
+        .bind(viewer_full_jid)
+        .fetch_optional(&mut *transaction)
+        .await?;
+    if let Some(row) = &row {
+        mam_room_occupant_id_secret_in_transaction(
+            &mut transaction,
+            row.try_get("id")?,
+            row.try_get("occupant_id_secret")?,
+        )
+        .await?;
+    }
+    transaction.commit().await?;
+    Ok(row.is_some())
+}
 
 pub async fn mam_room_occupant_id_secret_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
@@ -42,25 +108,28 @@ pub async fn authorize_mam_room_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     localpart: &str,
     viewer_id: Uuid,
-    currently_joined: bool,
+    authority: &MamRoomReadAuthority,
     has_peer_filter: bool,
 ) -> Result<MamRoomReadOutcome<()>> {
-    let row = sqlx::query(
-        "SELECT r.id,r.localpart,r.members_only,r.non_anonymous,r.password_hash,
+    let statement = format!(
+        "SELECT r.id,r.room_epoch,r.localpart,r.members_only,r.non_anonymous,r.password_hash,
                 r.occupant_id_secret,a.affiliation
            FROM muc_rooms r
            LEFT JOIN muc_affiliations a
-             ON a.room_id=r.id AND a.user_id=$2
-          WHERE r.localpart=$1 AND r.destroyed_at IS NULL",
-    )
-    .bind(localpart)
-    .bind(viewer_id)
-    .fetch_optional(&mut **transaction)
-    .await?;
+             ON a.room_id=r.id AND a.user_id=$3
+          WHERE r.localpart=$1 AND r.destroyed_at IS NULL AND {MAM_CONFIGURATION_VISIBLE}"
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+        .bind(localpart)
+        .bind(&authority.full_jid)
+        .bind(viewer_id)
+        .fetch_optional(&mut **transaction)
+        .await?;
     let Some(row) = row else {
         return Ok(MamRoomReadOutcome::Missing);
     };
     let affiliation: Option<String> = row.try_get("affiliation")?;
+    let currently_joined = mam_occupancy_matches(transaction, &row, authority, false).await?;
     let reveal_real_jid = match decide_mam_room_read(
         row.try_get("members_only")?,
         row.try_get("non_anonymous")?,
@@ -172,25 +241,32 @@ pub async fn authorize_federated_mam_room_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     expected_room_id: Uuid,
     localpart: &str,
-    viewer_bare_jid: &str,
-    currently_joined: bool,
+    authority: &MamRoomReadAuthority,
     has_peer_filter: bool,
 ) -> Result<MamRoomReadOutcome<()>> {
     // The room row is the durable identity fence for this authorization.  A
     // shared lock prevents destroy/recreate and room-policy changes from
     // committing between the policy decision and the caller's durable
     // projection (for example, an S2S outbox stream).
-    let row = sqlx::query(
-        "SELECT id,localpart,members_only,non_anonymous,password_hash,
-                occupant_id_secret
-           FROM muc_rooms
-          WHERE localpart=$1 AND id=$2 AND destroyed_at IS NULL
-          FOR SHARE",
-    )
-    .bind(localpart)
-    .bind(expected_room_id)
-    .fetch_optional(&mut **transaction)
-    .await?;
+    let viewer = northstar_xmpp_types::CanonicalJid::parse(&authority.full_jid)?;
+    anyhow::ensure!(
+        viewer.localpart().is_some() && viewer.resourcepart().is_some(),
+        "federated MAM viewer must be a user full JID"
+    );
+    let statement = format!(
+        "SELECT r.id,r.room_epoch,r.localpart,r.members_only,r.non_anonymous,r.password_hash,
+                r.occupant_id_secret
+           FROM muc_rooms r
+          WHERE r.localpart=$1 AND r.id=$3 AND r.destroyed_at IS NULL
+            AND {MAM_CONFIGURATION_VISIBLE}
+          FOR SHARE"
+    );
+    let row = sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+        .bind(localpart)
+        .bind(&authority.full_jid)
+        .bind(expected_room_id)
+        .fetch_optional(&mut **transaction)
+        .await?;
     let Some(row) = row else {
         return Ok(MamRoomReadOutcome::Missing);
     };
@@ -203,8 +279,18 @@ pub async fn authorize_federated_mam_room_in_transaction(
           WHERE room_id=$1 AND jid=$2 FOR SHARE",
     )
     .bind(room_id)
-    .bind(viewer_bare_jid)
+    .bind(viewer.bare())
     .fetch_optional(&mut **transaction)
+    .await?;
+    let currently_joined = mam_occupancy_matches(transaction, &row, authority, true).await?;
+    // The old federated room lookup repaired visible legacy rooms even if
+    // their archive policy denied the request. Keep that repair behind the
+    // configuration visibility check in this snapshot.
+    let occupant_id_secret = mam_room_occupant_id_secret_in_transaction(
+        transaction,
+        room_id,
+        row.try_get("occupant_id_secret")?,
+    )
     .await?;
     let reveal_real_jid = match decide_mam_room_read(
         row.try_get("members_only")?,
@@ -217,12 +303,6 @@ pub async fn authorize_federated_mam_room_in_transaction(
         MamRoomReadDecision::Forbidden => return Ok(MamRoomReadOutcome::Forbidden),
         MamRoomReadDecision::Allowed { reveal_real_jid } => reveal_real_jid,
     };
-    let occupant_id_secret = mam_room_occupant_id_secret_in_transaction(
-        transaction,
-        room_id,
-        row.try_get("occupant_id_secret")?,
-    )
-    .await?;
     Ok(MamRoomReadOutcome::Allowed {
         access: MamRoomArchiveAccess {
             room_id,
@@ -234,42 +314,11 @@ pub async fn authorize_federated_mam_room_in_transaction(
     })
 }
 
-pub async fn authorize_mam_room(
-    pool: &PgPool,
-    localpart: &str,
-    viewer_id: Uuid,
-    currently_joined: bool,
-) -> Result<MamRoomReadOutcome<()>> {
-    let mut transaction = pool.begin().await?;
-    // This is intentionally read-write only for the one-time legacy
-    // occupant-id-secret repair above. All policy and returned identity are
-    // still derived from one repeatable-read snapshot.
-    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-        .execute(&mut *transaction)
-        .await?;
-    let outcome = authorize_mam_room_in_transaction(
-        &mut transaction,
-        localpart,
-        viewer_id,
-        currently_joined,
-        false,
-    )
-    .await?;
-    transaction.commit().await?;
-    Ok(outcome)
-}
-
 pub async fn authorize_federated_mam_room(
     pool: &PgPool,
     localpart: &str,
-    viewer_bare_jid: &str,
-    currently_joined: bool,
+    authority: &MamRoomReadAuthority,
 ) -> Result<MamRoomReadOutcome<()>> {
-    let viewer_bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(viewer_bare_jid)?;
-    anyhow::ensure!(
-        viewer_bare_jid.localpart().is_some(),
-        "federated MAM viewer must be a user bare JID"
-    );
     let Some(mut guard) = FederatedMamRoomGuard::acquire(pool, localpart).await? else {
         return Ok(MamRoomReadOutcome::Missing);
     };
@@ -279,8 +328,7 @@ pub async fn authorize_federated_mam_room(
         &mut transaction,
         room_id,
         localpart,
-        &viewer_bare_jid.to_string(),
-        currently_joined,
+        authority,
         false,
     )
     .await?;

@@ -1372,18 +1372,29 @@ if (!/\.execute_federated_mam_metadata\s*\(/.test(federatedMucSource)
   throw new Error('federated_muc.rs no longer routes MAM authority through mam_service()');
 }
 const federatedIqHandler = rustItemBody(federatedMucSource, 'async fn federated_muc_iq_owned(');
-const federatedMetadataCall = federatedIqHandler.indexOf('.execute_federated_mam_metadata(command)');
+const federatedMamHandler = rustItemBody(federatedMucSource, 'async fn federated_muc_mam_iq(');
 const federatedActorCheck = federatedIqHandler.indexOf('authenticated_remote_actor(authenticated_domain, from)');
+const federatedFullActor = federatedIqHandler.indexOf('let actor_full_jid = northstar_xmpp_types::jid::canonicalize(from)');
 const federatedBareActor = federatedIqHandler.indexOf('let actor_bare_jid = northstar_xmpp_types::jid::canonical_bare_key(&actor_full_jid)?;');
-const federatedMetadataCommand = federatedIqHandler.indexOf('FederatedMamMetadataCommand::from_authenticated_actor(');
-if (federatedMetadataCall < 0
-  || federatedActorCheck < 0
-  || federatedBareActor <= federatedActorCheck
-  || federatedMetadataCommand <= federatedBareActor
+const federatedMamDispatch = federatedIqHandler.indexOf('federated_muc_mam_iq(');
+const federatedRoomLookup = federatedIqHandler.indexOf('.federated_room_snapshot(');
+const federatedMetadataCommand = federatedMamHandler.indexOf('FederatedMamMetadataCommand::from_authenticated_actor(');
+const federatedMetadataCall = federatedMamHandler.indexOf('.execute_federated_mam_metadata(command)');
+if (federatedActorCheck < 0
+  || federatedFullActor <= federatedActorCheck
+  || federatedBareActor <= federatedFullActor
+  || federatedMamDispatch <= federatedBareActor
+  || federatedRoomLookup <= federatedMamDispatch
+  || !/return federated_muc_mam_iq\(\s*state,\s*authenticated_domain,\s*&request,\s*&room_jid,\s*&actor_full_jid,\s*\)/.test(federatedIqHandler)
+  || federatedMetadataCommand < 0
   || federatedMetadataCall <= federatedMetadataCommand
-  || !/room\.localpart\.clone\(\),\s*authenticated_domain,\s*&actor_full_jid,\s*joined,/.test(
-    federatedIqHandler.slice(federatedMetadataCommand, federatedMetadataCall))
-  || federatedIqHandler.includes('.authorized_federated_room_boundaries(')) {
+  || !/let room_localpart = localpart\(room_jid\);/.test(federatedMamHandler)
+  || !/let occupancy =\s*federated_mam_occupancy_proof\(&state\.muc_occupants_for\(room_jid\),\s*actor_full_jid\);/.test(
+    federatedMamHandler.slice(0, federatedMetadataCommand))
+  || !/room_localpart\.to_owned\(\),\s*authenticated_domain,\s*actor_full_jid,\s*occupancy,/.test(
+    federatedMamHandler.slice(federatedMetadataCommand, federatedMetadataCall))
+  || federatedMamHandler.includes('.federated_room_snapshot(')
+  || federatedMucSource.includes('.authorized_federated_room_boundaries(')) {
   throw new Error('federated MAM metadata must use an authenticated actor and typed archive command');
 }
 const mamServiceSource = read('crates/contexts/archive/northstar-archive-application/src/service.rs');

@@ -5,7 +5,8 @@
 use crate::ArchiveSessionHost;
 use anyhow::Result;
 use northstar_archive_application::{
-    ArchiveRow, MamPreferencesWriter, MamQueryRepository, MamRoomAccess, MamService,
+    ArchiveRow, MamLocalAuthority, MamOccupancyProof, MamPreferencesWriter, MamQueryRepository,
+    MamRoomAccess, MamService,
 };
 use northstar_room_core::stanza::{mam_muc_stanza, muc_occupant_id, set_muc_occupant_id};
 use northstar_stream::protocol::{ProtocolSession, SessionHost};
@@ -14,10 +15,14 @@ use roxmltree::Node;
 
 // From src/xmpp/protocol/mam.rs.
 impl<H: SessionHost + ArchiveSessionHost> crate::MamSession for ProtocolSession<H> {
-    fn mam_account(&self) -> Option<(uuid::Uuid, &str)> {
+    fn mam_account(&self) -> Option<MamLocalAuthority> {
         self.authenticated
             .as_ref()
-            .map(|user| (user.id, user.username.as_str()))
+            .map(|account| MamLocalAuthority {
+                id: account.id,
+                username: account.username.clone(),
+                auth_generation: account.auth_generation,
+            })
     }
 
     fn mam_full_jid(&self) -> Option<&str> {
@@ -32,8 +37,12 @@ impl<H: SessionHost + ArchiveSessionHost> crate::MamSession for ProtocolSession<
         self.host().archive_muc_domain()
     }
 
-    fn mam_joined_room(&self, room_bare_jid: &str) -> bool {
-        self.joined_rooms.contains_key(room_bare_jid)
+    fn mam_occupancy_proof(&self, room_bare_jid: &str) -> Option<MamOccupancyProof> {
+        let membership = self.joined_rooms.get(room_bare_jid)?;
+        Some(MamOccupancyProof {
+            occupant_incarnation: membership.cluster_epoch,
+            connection_uuid: self.connection_id,
+        })
     }
 
     fn mam_service(

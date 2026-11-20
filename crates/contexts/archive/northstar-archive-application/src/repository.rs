@@ -2,9 +2,9 @@
 
 use crate::{
     FederatedMamAdmissionOutcome, FederatedMamMetadataCommand, FederatedMamStreamPage,
-    FederatedMamStreamRequest, MamMetadataCommand, MamMetadataResult, MamPreferences,
-    MamPreferencesGetCommand, MamPreferencesSetCommand, MamQueryCommand, MamQueryResult,
-    MamRoomAccessOutcome,
+    FederatedMamStreamRequest, MamAccountOutcome, MamLocalAuthority, MamMetadataCommand,
+    MamMetadataResult, MamPreferences, MamPreferencesGetCommand, MamPreferencesSetCommand,
+    MamQueryCommand, MamQueryResult, MamRoomAccessOutcome, MamRoomReadAuthority,
 };
 use std::future::Future;
 
@@ -32,21 +32,29 @@ pub trait MamQueryRepository: Send + Sync {
         &self,
         command: FederatedMamMetadataCommand,
     ) -> impl Future<Output = Result<MamMetadataResult, Self::Error>> + Send;
+    fn authorize_personal(
+        &self,
+        authority: &MamLocalAuthority,
+    ) -> impl Future<Output = Result<MamAccountOutcome<()>, Self::Error>> + Send;
     fn get_preferences(
         &self,
         command: MamPreferencesGetCommand,
-    ) -> impl Future<Output = Result<MamPreferences, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<MamAccountOutcome<MamPreferences>, Self::Error>> + Send;
     fn authorize_room(
         &self,
         localpart: &str,
-        viewer_id: uuid::Uuid,
-        currently_joined: bool,
+        account: &MamLocalAuthority,
+        authority: &MamRoomReadAuthority,
     ) -> impl Future<Output = Result<MamRoomAccessOutcome, Self::Error>> + Send;
+    fn federated_room_visible(
+        &self,
+        localpart: &str,
+        viewer_full_jid: &str,
+    ) -> impl Future<Output = Result<bool, Self::Error>> + Send;
     fn authorize_federated_room(
         &self,
         localpart: &str,
-        viewer_bare_jid: &str,
-        currently_joined: bool,
+        authority: &MamRoomReadAuthority,
     ) -> impl Future<Output = Result<MamRoomAccessOutcome, Self::Error>> + Send;
 }
 
@@ -55,7 +63,7 @@ pub trait MamPreferencesWriter: Send + Sync {
     fn set_preferences(
         &self,
         command: MamPreferencesSetCommand,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    ) -> impl Future<Output = Result<MamAccountOutcome<()>, Self::Error>> + Send;
 }
 
 pub trait FederatedMamStreamWriter: Send + Sync {

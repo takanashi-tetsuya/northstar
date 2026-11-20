@@ -1,14 +1,14 @@
 //! MAM validation and post-commit delivery through an archive repository.
 
 use anyhow::Result;
-use uuid::Uuid;
 
 use crate::{
     validate_mam_preferences, validate_mam_query_command, FederatedMamAdmissionOutcome,
     FederatedMamMetadataCommand, FederatedMamOutboxLimits, FederatedMamStreamPage,
-    FederatedMamStreamRequest, FederatedMamStreamWriter, MamMetadataCommand, MamMetadataResult,
-    MamPreferences, MamPreferencesGetCommand, MamPreferencesSetCommand, MamPreferencesWriter,
-    MamQueryCommand, MamQueryRepository, MamQueryResult, MamRoomAccessOutcome,
+    FederatedMamStreamRequest, FederatedMamStreamWriter, MamAccountOutcome, MamLocalAuthority,
+    MamMetadataCommand, MamMetadataResult, MamPreferences, MamPreferencesGetCommand,
+    MamPreferencesSetCommand, MamPreferencesWriter, MamQueryCommand, MamQueryRepository,
+    MamQueryResult, MamRoomAccessOutcome, MamRoomReadAuthority,
 };
 
 #[derive(Clone)]
@@ -57,29 +57,45 @@ impl<R: MamQueryRepository<Error = anyhow::Error>> MamService<R> {
     pub async fn execute_mam_preferences_get(
         &self,
         command: MamPreferencesGetCommand,
-    ) -> Result<MamPreferences> {
+    ) -> Result<MamAccountOutcome<MamPreferences>> {
         self.repository.get_preferences(command).await
+    }
+
+    pub async fn authorize_personal(
+        &self,
+        authority: &MamLocalAuthority,
+    ) -> Result<MamAccountOutcome<()>> {
+        self.repository.authorize_personal(authority).await
     }
 
     pub async fn authorize_room(
         &self,
         localpart: &str,
-        viewer_id: Uuid,
-        currently_joined: bool,
+        account: &MamLocalAuthority,
+        authority: &MamRoomReadAuthority,
     ) -> Result<MamRoomAccessOutcome> {
         self.repository
-            .authorize_room(localpart, viewer_id, currently_joined)
+            .authorize_room(localpart, account, authority)
+            .await
+    }
+
+    pub async fn federated_room_visible(
+        &self,
+        localpart: &str,
+        viewer_full_jid: &str,
+    ) -> Result<bool> {
+        self.repository
+            .federated_room_visible(localpart, viewer_full_jid)
             .await
     }
 
     pub async fn authorize_federated_room(
         &self,
         localpart: &str,
-        viewer_bare_jid: &str,
-        currently_joined: bool,
+        authority: &MamRoomReadAuthority,
     ) -> Result<MamRoomAccessOutcome> {
         self.repository
-            .authorize_federated_room(localpart, viewer_bare_jid, currently_joined)
+            .authorize_federated_room(localpart, authority)
             .await
     }
 }
@@ -88,7 +104,7 @@ impl<R: MamPreferencesWriter<Error = anyhow::Error>> MamService<R> {
     pub async fn execute_mam_preferences_set(
         &self,
         command: MamPreferencesSetCommand,
-    ) -> Result<()> {
+    ) -> Result<MamAccountOutcome<()>> {
         if let Err(error) = validate_mam_preferences(&command.preferences) {
             anyhow::bail!("invalid mam preferences: {error:?}");
         }

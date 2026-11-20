@@ -71,6 +71,18 @@ TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5
   archive::history_identity_pg_tests:: \
   -- --ignored --nocapture --test-threads=1 2>&1 | tee "$test_log"
 
+# The archive prefix below runs all of these snapshot checks:
+# muc_mam_requires_the_exact_live_occupancy_on_all_read_surfaces
+# muc_mam_leave_during_page_read_keeps_a_serial_result
+# muc_mam_hides_locked_rooms_without_initializing_their_secret
+# federated_mam_keeps_the_visible_legacy_repair_when_response_admission_fails
+# mam_stale_local_account_denies_reads_and_preference_writes
+# personal_mam_reads_work_on_read_only_connections
+TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$runner_schema" \
+  cargo test --locked --offline -p northstar-db-it \
+  archive::mam_read_authority_tests:: \
+  -- --ignored --nocapture --test-threads=1 2>&1 | tee -a "$test_log"
+
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$runner_schema" \
   cargo test --locked --offline -p northstar-db-it \
   message::message_repository::members_only_invite_is_one_replay_safe_transaction \

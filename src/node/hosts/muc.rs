@@ -4,7 +4,7 @@ use crate::node::*;
 use anyhow::Result;
 use northstar_archive_core::{
     FederatedMamAdmissionOutcome, FederatedMamMetadataCommand, FederatedMamStreamPage,
-    FederatedMamStreamRequest, MamMetadataResult, MamRoomAccessOutcome,
+    FederatedMamStreamRequest, MamMetadataResult, MamRoomAccessOutcome, MamRoomReadAuthority,
 };
 use northstar_delivery_core::node_delivery::NodeDeliveryReceipt;
 use northstar_federation_core::S2sOutboxPolicy;
@@ -87,15 +87,25 @@ impl MucHost for ServerNode {
             .await
     }
 
+    async fn federated_mam_room_visible(
+        &self,
+        localpart: &str,
+        viewer_full_jid: &str,
+    ) -> Result<bool> {
+        self.archive
+            .mam_service()
+            .federated_room_visible(localpart, viewer_full_jid)
+            .await
+    }
+
     async fn authorize_federated_room(
         &self,
         localpart: &str,
-        viewer_bare_jid: &str,
-        currently_joined: bool,
+        authority: &MamRoomReadAuthority,
     ) -> Result<MamRoomAccessOutcome> {
         self.archive
             .mam_service()
-            .authorize_federated_room(localpart, viewer_bare_jid, currently_joined)
+            .authorize_federated_room(localpart, authority)
             .await
     }
 

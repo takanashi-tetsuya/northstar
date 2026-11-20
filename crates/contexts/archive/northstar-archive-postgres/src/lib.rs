@@ -15,8 +15,10 @@ use sqlx::{PgPool, Postgres, QueryBuilder, Row, Transaction};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
+mod account_fence;
 mod mam_query;
 
+pub use self::account_fence::{authorize_mam_account, mam_account_is_current};
 pub use self::mam_query::*;
 
 pub use northstar_archive_core::{
@@ -59,14 +61,23 @@ pub async fn muc_archive_boundaries_visible(
     archive_boundaries_for(pool, MamArchiveSource::Muc(room_id), Some(viewer_id)).await
 }
 
-pub async fn mam_preferences(pool: &PgPool, user_id: Uuid) -> Result<MamPreferences> {
+pub async fn mam_preferences(
+    pool: &PgPool,
+    authority: &northstar_archive_core::MamLocalAuthority,
+) -> Result<northstar_archive_core::MamAccountOutcome<MamPreferences>> {
+    use northstar_archive_core::MamAccountOutcome;
+
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .execute(&mut *transaction)
         .await?;
-    let preferences = mam_preferences_in_transaction(&mut transaction, user_id).await?;
+    if !mam_account_is_current(&mut transaction, authority).await? {
+        transaction.rollback().await?;
+        return Ok(MamAccountOutcome::StaleAccount);
+    }
+    let preferences = mam_preferences_in_transaction(&mut transaction, authority.id).await?;
     transaction.commit().await?;
-    Ok(preferences)
+    Ok(MamAccountOutcome::Authorized(preferences))
 }
 
 pub async fn mam_preferences_in_transaction(
@@ -104,9 +115,11 @@ pub async fn mam_preferences_in_transaction(
 
 pub async fn set_mam_preferences(
     pool: &PgPool,
-    user_id: Uuid,
+    authority: &northstar_archive_core::MamLocalAuthority,
     preferences: &MamPreferences,
-) -> Result<()> {
+) -> Result<northstar_archive_core::MamAccountOutcome<()>> {
+    use northstar_archive_core::MamAccountOutcome;
+
     anyhow::ensure!(
         preferences
             .always
@@ -147,6 +160,12 @@ pub async fn set_mam_preferences(
         never.push(jid);
     }
     let mut transaction = pool.begin().await?;
+    // Keep account revocation behind the preference replacement once admitted.
+    if !account_fence::lock_mam_account(&mut transaction, authority).await? {
+        transaction.rollback().await?;
+        return Ok(MamAccountOutcome::StaleAccount);
+    }
+    let user_id = authority.id;
     sqlx::query(
         "INSERT INTO mam_preferences (user_id, default_policy) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET default_policy = EXCLUDED.default_policy, updated_at = NOW()",
     )
@@ -171,7 +190,7 @@ pub async fn set_mam_preferences(
         }
     }
     transaction.commit().await?;
-    Ok(())
+    Ok(MamAccountOutcome::Authorized(()))
 }
 
 pub async fn archive_allowed(pool: &PgPool, owner_id: Uuid, peer_jid: &str) -> Result<bool> {

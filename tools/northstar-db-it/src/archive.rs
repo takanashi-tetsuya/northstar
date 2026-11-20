@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 mod history_identity_pg_tests;
 mod mam_guard_conformance;
+mod mam_read_authority_tests;
 mod offline_queue_tests;
 
 /// Deliver queued offline messages without deleting a stanza until it has

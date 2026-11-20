@@ -8,23 +8,23 @@ pub mod repository;
 pub use repository::*;
 pub mod service;
 pub use service::MamService;
+#[cfg(test)]
 use uuid::Uuid;
 
 /// Query scope representing the archive target (Personal, local MUC Room, or Federated Room).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MamQueryScope {
     Personal {
-        owner_id: Uuid,
+        authority: MamLocalAuthority,
     },
     Room {
         localpart: String,
-        viewer_id: Uuid,
-        currently_joined: bool,
+        account: MamLocalAuthority,
+        authority: MamRoomReadAuthority,
     },
     FederatedRoom {
         localpart: String,
-        viewer_bare_jid: String,
-        currently_joined: bool,
+        authority: MamRoomReadAuthority,
     },
 }
 
@@ -42,15 +42,15 @@ pub struct MamMetadataCommand {
 }
 
 /// Typed command for reading MAM preferences.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MamPreferencesGetCommand {
-    pub owner_id: Uuid,
+    pub authority: MamLocalAuthority,
 }
 
 /// Typed command for updating MAM preferences.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MamPreferencesSetCommand {
-    pub owner_id: Uuid,
+    pub authority: MamLocalAuthority,
     pub preferences: MamPreferences,
 }
 
@@ -64,6 +64,7 @@ pub enum MamQueryResult {
     ItemNotFound,
     Forbidden,
     ValidationFailed(MamQueryValidationError),
+    StaleAccount,
 }
 
 impl MamQueryResult {
@@ -81,6 +82,7 @@ impl MamQueryResult {
                 Self::ItemNotFound
             }
             MamRoomReadOutcome::Forbidden => Self::Forbidden,
+            MamRoomReadOutcome::StaleAccount => Self::StaleAccount,
         }
     }
 }
@@ -154,12 +156,12 @@ mod tests {
             "room".to_owned(),
             "REMOTE.TEST",
             "alice@remote.test/phone",
-            false,
+            None,
         )
         .expect("authenticated actor");
         assert_eq!(command.localpart(), "room");
-        assert_eq!(command.viewer_bare_jid(), "alice@remote.test");
-        assert!(!command.currently_joined());
+        assert_eq!(command.authority().full_jid, "alice@remote.test/phone");
+        assert_eq!(command.authority().occupancy, None);
         for actor in [
             "alice@evil.test/phone",
             "alice@remote.test",
@@ -170,7 +172,7 @@ mod tests {
                 "room".to_owned(),
                 "remote.test",
                 actor,
-                false,
+                None,
             )
             .is_none());
         }
@@ -178,7 +180,7 @@ mod tests {
             "room".to_owned(),
             "alice@remote.test",
             "alice@remote.test/phone",
-            false,
+            None,
         )
         .is_none());
     }
@@ -245,6 +247,14 @@ mod tests {
     }
 
     #[test]
+    fn room_query_preserves_the_stale_account_decision() {
+        assert_eq!(
+            MamQueryResult::from_room_read(MamRoomReadOutcome::StaleAccount),
+            MamQueryResult::StaleAccount
+        );
+    }
+
+    #[test]
     fn command_validation_rules() {
         let valid_query = MamArchiveQuery {
             with_jid: Some("alice@example.test".to_string()),
@@ -258,7 +268,11 @@ mod tests {
         };
         let cmd = MamQueryCommand {
             scope: MamQueryScope::Personal {
-                owner_id: Uuid::new_v4(),
+                authority: MamLocalAuthority {
+                    id: Uuid::new_v4(),
+                    username: "alice".to_owned(),
+                    auth_generation: 1,
+                },
             },
             query: valid_query.clone(),
         };

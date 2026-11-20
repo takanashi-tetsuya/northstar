@@ -11,9 +11,10 @@ mod session_host;
 #[cfg(test)]
 use northstar_archive_application::MamRsmPage;
 use northstar_archive_application::{
-    ArchiveBoundary, ArchiveRow, MamMetadataCommand, MamMetadataResult, MamPreferences,
-    MamPreferencesGetCommand, MamPreferencesSetCommand, MamPreferencesWriter, MamQueryCommand,
-    MamQueryRepository, MamQueryResult, MamQueryScope, MamRoomAccess, MamRoomAccessOutcome,
+    ArchiveBoundary, ArchiveRow, MamAccountOutcome, MamLocalAuthority, MamMetadataCommand,
+    MamMetadataResult, MamOccupancyProof, MamPreferences, MamPreferencesGetCommand,
+    MamPreferencesSetCommand, MamPreferencesWriter, MamQueryCommand, MamQueryRepository,
+    MamQueryResult, MamQueryScope, MamRoomAccess, MamRoomAccessOutcome, MamRoomReadAuthority,
     MamService,
 };
 #[cfg(test)]
@@ -43,16 +44,16 @@ pub enum MamReply {
 
 /// What a client session provides to the XEP-0313 handlers.
 pub trait MamSession: Sync {
-    /// The authenticated account's user id and username, or `None` before authentication.
-    fn mam_account(&self) -> Option<(uuid::Uuid, &str)>;
+    /// The account authority installed on the authenticated stream.
+    fn mam_account(&self) -> Option<MamLocalAuthority>;
     /// The session's bound full JID, or `None` before resource binding.
     fn mam_full_jid(&self) -> Option<&str>;
     /// The server's local domain.
     fn mam_local_domain(&self) -> &str;
     /// The domain of the local MUC service.
     fn mam_muc_domain(&self) -> String;
-    /// Whether the session currently occupies the room with this bare JID.
-    fn mam_joined_room(&self, room_bare_jid: &str) -> bool;
+    /// The session's occupancy identity for this room, to verify in the snapshot.
+    fn mam_occupancy_proof(&self, room_bare_jid: &str) -> Option<MamOccupancyProof>;
     /// The archive application service, over the repository the composition root binds.
     fn mam_service(
         &self,
@@ -137,6 +138,20 @@ fn mam_room_target<S: MamSession>(
     }))
 }
 
+fn stale_account_reply(id: &str) -> MamReply {
+    MamReply::Send(iq_error(id, "not-authorized"))
+}
+
+fn mam_room_authority<S: MamSession>(
+    session: &S,
+    target: &MamRoomTarget,
+) -> Option<MamRoomReadAuthority> {
+    Some(MamRoomReadAuthority {
+        full_jid: session.mam_full_jid()?.to_owned(),
+        occupancy: session.mam_occupancy_proof(&target.bare_jid),
+    })
+}
+
 async fn mam_room_access<S: MamSession>(
     session: &S,
     id: &str,
@@ -147,21 +162,20 @@ async fn mam_room_access<S: MamSession>(
         Ok(None) => return Ok(Ok(None)),
         Err(action) => return Ok(Err(action)),
     };
-    let Some((user_id, _)) = session.mam_account() else {
-        return Ok(Err(MamReply::Send(iq_error(id, "not-authorized"))));
+    let (Some(account), Some(authority)) =
+        (session.mam_account(), mam_room_authority(session, &target))
+    else {
+        return Ok(Err(stale_account_reply(id)));
     };
     let outcome = session
         .mam_service()
-        .authorize_room(
-            &target.localpart,
-            user_id,
-            session.mam_joined_room(&target.bare_jid),
-        )
+        .authorize_room(&target.localpart, &account, &authority)
         .await?;
     match outcome {
         MamRoomAccessOutcome::Allowed(access) => Ok(Ok(Some(access))),
         MamRoomAccessOutcome::Missing => Ok(Err(MamReply::Send(iq_error(id, "item-not-found")))),
         MamRoomAccessOutcome::Forbidden => Ok(Err(MamReply::Send(iq_error(id, "forbidden")))),
+        MamRoomAccessOutcome::StaleAccount => Ok(Err(stale_account_reply(id))),
     }
 }
 
@@ -172,7 +186,7 @@ pub async fn mam_preferences_get<S: MamSession>(
     to: Option<&str>,
     prefs: roxmltree::Node<'_, '_>,
 ) -> anyhow::Result<MamReply> {
-    let Some((user_id, _)) = session.mam_account() else {
+    let Some(account) = session.mam_account() else {
         return Ok(MamReply::Send(iq_error(id, "not-authorized")));
     };
     if !owns_archive_target(session, to) {
@@ -181,10 +195,13 @@ pub async fn mam_preferences_get<S: MamSession>(
     if !empty_mam_command(prefs, "prefs") {
         return Ok(MamReply::Send(iq_error(id, "bad-request")));
     }
-    let preferences = session
+    let MamAccountOutcome::Authorized(preferences) = session
         .mam_service()
-        .execute_mam_preferences_get(MamPreferencesGetCommand { owner_id: user_id })
-        .await?;
+        .execute_mam_preferences_get(MamPreferencesGetCommand { authority: account })
+        .await?
+    else {
+        return Ok(stale_account_reply(id));
+    };
     let payload = mam_preferences_xml(&preferences);
     Ok(MamReply::Send(
         personal_archive_reply_from(to)
@@ -200,7 +217,7 @@ pub async fn mam_preferences_set<S: MamSession>(
     to: Option<&str>,
     prefs: roxmltree::Node<'_, '_>,
 ) -> anyhow::Result<MamReply> {
-    let Some((user_id, _)) = session.mam_account() else {
+    let Some(account) = session.mam_account() else {
         return Ok(MamReply::Send(iq_error(id, "not-authorized")));
     };
     if !owns_archive_target(session, to) {
@@ -210,13 +227,16 @@ pub async fn mam_preferences_set<S: MamSession>(
         Ok(preferences) => preferences,
         Err(condition) => return Ok(MamReply::Send(iq_error(id, condition))),
     };
-    session
+    if let MamAccountOutcome::StaleAccount = session
         .mam_service()
         .execute_mam_preferences_set(MamPreferencesSetCommand {
-            owner_id: user_id,
+            authority: account,
             preferences: preferences.clone(),
         })
-        .await?;
+        .await?
+    {
+        return Ok(stale_account_reply(id));
+    }
     let payload = mam_preferences_xml(&preferences);
     Ok(MamReply::Send(
         personal_archive_reply_from(to)
@@ -241,6 +261,16 @@ pub async fn mam_query_form<S: MamSession>(
     }
     if !empty_mam_command(query, "query") {
         return Ok(MamReply::Send(iq_error(id, "bad-request")));
+    }
+    if room.is_none() {
+        let Some(account) = session.mam_account() else {
+            return Ok(stale_account_reply(id));
+        };
+        if let MamAccountOutcome::StaleAccount =
+            session.mam_service().authorize_personal(&account).await?
+        {
+            return Ok(stale_account_reply(id));
+        }
     }
     Ok(MamReply::Send(if let Some(access) = room {
         let room_jid = format!("{}@{}", access.localpart(), session.mam_muc_domain());
@@ -269,17 +299,20 @@ pub async fn mam_metadata<S: MamSession>(
     if !empty_mam_command(metadata, "metadata") {
         return Ok(MamReply::Send(iq_error(id, "bad-request")));
     }
-    let Some((user_id, _)) = session.mam_account() else {
+    let Some(account) = session.mam_account() else {
         return Ok(MamReply::Send(iq_error(id, "not-authorized")));
     };
     let scope = if let Some(target) = target {
+        let Some(authority) = mam_room_authority(session, &target) else {
+            return Ok(stale_account_reply(id));
+        };
         MamQueryScope::Room {
             localpart: target.localpart,
-            viewer_id: user_id,
-            currently_joined: session.mam_joined_room(&target.bare_jid),
+            account,
+            authority,
         }
     } else {
-        MamQueryScope::Personal { owner_id: user_id }
+        MamQueryScope::Personal { authority: account }
     };
     let (room, boundaries) = match session
         .mam_service()
@@ -290,6 +323,7 @@ pub async fn mam_metadata<S: MamSession>(
         MamMetadataResult::ItemNotFound => {
             return Ok(MamReply::Send(iq_error(id, "item-not-found")));
         }
+        MamMetadataResult::StaleAccount => return Ok(stale_account_reply(id)),
         MamMetadataResult::Forbidden => {
             return Ok(MamReply::Send(iq_error(id, "forbidden")));
         }
@@ -332,7 +366,7 @@ pub async fn mam_query<S: MamSession>(
     query: roxmltree::Node<'_, '_>,
     to: Option<&str>,
 ) -> anyhow::Result<MamReply> {
-    let Some((user_id, username)) = session.mam_account() else {
+    let Some(account) = session.mam_account() else {
         return Ok(MamReply::Send(iq_error(id, "not-authorized")));
     };
     let parsed = match parse_mam_query(query) {
@@ -346,14 +380,18 @@ pub async fn mam_query<S: MamSession>(
     if target.is_none() && !owns_archive_target(session, to) {
         return Ok(MamReply::Send(iq_error(id, "forbidden")));
     }
+    let personal_archive_by = format!("{}@{}", account.username, session.mam_local_domain());
     let scope = if let Some(target) = target {
+        let Some(authority) = mam_room_authority(session, &target) else {
+            return Ok(stale_account_reply(id));
+        };
         MamQueryScope::Room {
             localpart: target.localpart,
-            viewer_id: user_id,
-            currently_joined: session.mam_joined_room(&target.bare_jid),
+            account,
+            authority,
         }
     } else {
-        MamQueryScope::Personal { owner_id: user_id }
+        MamQueryScope::Personal { authority: account }
     };
     let (room, page) = match session
         .mam_service()
@@ -367,6 +405,7 @@ pub async fn mam_query<S: MamSession>(
         MamQueryResult::ItemNotFound | MamQueryResult::ValidationFailed(_) => {
             return Ok(MamReply::Send(iq_error(id, "item-not-found")));
         }
+        MamQueryResult::StaleAccount => return Ok(stale_account_reply(id)),
         MamQueryResult::Forbidden => {
             return Ok(MamReply::Send(iq_error(id, "forbidden")));
         }
@@ -376,7 +415,6 @@ pub async fn mam_query<S: MamSession>(
         .as_ref()
         .map(|access| format!("{}@{}", access.localpart(), session.mam_muc_domain()))
         .or_else(|| personal_archive_reply_from(to));
-    let personal_archive_by = format!("{}@{}", username, session.mam_local_domain());
     let mut replies = Vec::with_capacity(page.rows.len() + 1);
     let rows: Box<dyn Iterator<Item = &ArchiveRow>> = if parsed.flip_page {
         Box::new(page.rows.iter().rev())
@@ -471,6 +509,21 @@ mod tests {
     fn parse(xml: &str) -> std::result::Result<ParsedMamQuery, &'static str> {
         let document = Document::parse(xml).unwrap();
         parse_mam_query(document.root_element())
+    }
+
+    #[test]
+    fn mam_stale_account_uses_the_private_xml_stale_authority_error() {
+        let MamReply::Send(xml) = stale_account_reply("mam") else {
+            panic!("stale account must return one IQ error");
+        };
+        assert_eq!(xml, iq_error("mam", "not-authorized"));
+        let document = Document::parse(&xml).unwrap();
+        let error = document.root_element().first_element_child().unwrap();
+        assert_eq!(error.attribute("type"), Some("auth"));
+        assert_eq!(
+            error.first_element_child().unwrap().tag_name().name(),
+            "not-authorized"
+        );
     }
 
     #[test]

@@ -1,5 +1,7 @@
 use anyhow::Result;
-use sqlx::{PgPool, Row};
+#[cfg(any(test, feature = "test-support"))]
+use sqlx::PgPool;
+use sqlx::Row;
 use uuid::Uuid;
 
 /// Builds the durable XEP-0084 notification projection from the exact

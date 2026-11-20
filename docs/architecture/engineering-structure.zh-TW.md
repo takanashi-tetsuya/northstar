@@ -146,6 +146,7 @@ WP-495 後，operation runtime 的現行位置為
 | S42 門禁再審計 | WP-624–634 | 唯讀審計架構與執行門禁（WP-624），以及其他 17 支讀 Rust 內容的門禁、結構門禁的範圍與兩份過時文件（WP-625）；擁有者 crate 補上 13 個測試：Drop、Clone、簽章與欄位型別探針（WP-626），會話路由移除、MIX 重試喚醒、ReplayService 傳輸方法與三個 context 的欄位清單（WP-627）；兩個內嵌測試模組移為子檔（WP-628）；架構門禁（WP-629）、執行門禁（WP-630）與其他 9 支門禁（WP-631）刪除空轉、重複、已有測試涵蓋與已改寫為測試的檢查；結構門禁擴及 `crates/` 與 `tools/`（WP-632）；改寫 `MODULARIZATION_PROGRESS_REPORT.md` 與 `LIBRARY_SPLIT_LEDGER.md`（WP-633）；記錄階段（WP-634）。盤點見 5.38 | 讀 Rust 的門禁淨減 471 行，自測減少 79 個案例；workspace 測試由 3,461 個增為 3,474 個，原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S43 執行計劃與超標檔 | WP-635–642 | 唯讀審計重構前的執行計劃（WP-635）；依職責拆分 Caps 執行期（WP-636）、叢集單元測試（WP-637）、Stage 4 saved replay 模組（WP-638）與 compact 編解碼的支援程式碼（WP-639），全部只移動；清空結構門禁的超標基線（WP-640）；把執行計劃改寫為現況指南（WP-641）；記錄階段（WP-642）。盤點見 5.39 | 4 個超標檔都降到預算內，基線沒有例外；執行計劃由 1,027 行減為 203 行；workspace 測試仍是 3,474 個，76 個叢集測試依路徑改名；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S44 C1 語義退出（第一批） | WP-643–652 | 唯讀審計 C1 PubSub/PEP（WP-643）與 C2 Archive/MAM（WP-644）；`northstar-stream` 的 `misc.rs` 依職責只移動地拆分（WP-645）；自動建立節點的發布改為一個交易（WP-646）；服務節點的項目與訂閱選項讀取（WP-647）、探索與自身清單（WP-648）、PEP 讀取與探索（WP-649）、MIX 的 profile 轉送（WP-650）與 Private XML 讀取（WP-651）各由一個唯讀快照回答，PEP 建立與 Private XML 一般寫入檢查帳號 generation；記錄階段（WP-652）。盤點見 5.40 | C1 的 16 項發現關閉 8 項；新增 21 個單元測試與 33 個 ignored 資料庫測試，資料庫測試登記在 CI 執行的 DB 腳本，合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
+| S45 C2 語義退出 | WP-653–661 | MUC MAM 在同一快照證明確切的持久 occupancy、房間鎖定狀態與帳號權威（WP-653）；MIX MAM 的本地與聯邦查詢各由一個權威快照回答，聯邦查詢在 mutation replay 之前分派（WP-654）；個人歷史在寫入交易內取樣封存偏好（WP-655）；MIX 發布者身分在儲存交易內核對（WP-656）；MUC 討論是否封存由鎖定的 room 列決定（WP-657）；MAM 關閉時隱藏附屬介面（WP-658）；以資料庫測試固定刪除與 legal hold 下的分頁與撤回行為（WP-659）；vCard store 的測試專用 import 加上 cfg（WP-660）；記錄階段（WP-661）。盤點見 5.41 | C2 的 15 項發現關閉 10 項，C2-12 的目前行為由測試固定，需要產品決策的 4 項留在已知問題；新增 26 個單元測試與 22 個 ignored 資料庫測試，資料庫測試登記在 CI 執行的 DB 腳本，合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -1817,6 +1818,54 @@ RSM 游標不變。
 S44 後最大的生產檔仍是 `northstar-cluster` 的 `listener.rs`（1,492 行），最大的測試檔仍是 `stage4_replay/tests.rs`
 （2,742 行）。workspace 測試由 3,474 個增為 3,528 個（ignored 由 296 個增為 329 個），原有名稱不變。Cargo.lock 仍是 485 個
 套件，沒有新的 migration。
+
+### 5.41 S45 盤點：C2 語義退出（`761bb5e509ad584fca4fba7281724a3b3f677c0e`）
+
+S44 的 C2 審計（WP-644）提出 15 項發現。S45 修正其中不需產品決策的 10 項，以資料庫測試固定 C2-09 與 C2-12 描述的目前
+行為，並補上 S44 留下的一個 cfg 缺漏（WP-660）。需要產品決策的 4 項（C2-08、C2-09、C2-10、C2-13）仍記錄在
+[已知問題](../KNOWN_ISSUES.md)。
+
+| WP | 內容 |
+| --- | --- |
+| WP-653 | MUC MAM 的 joined 判斷改為確切的持久 occupancy（room、incarnation、connection、active／suspended、資料庫時鐘上的租約），SQL 與叢集查詢共用；本地與聯邦的頁面、表單與 metadata 在封存讀取的同一快照檢查房間設定、從屬與 occupancy，鎖定的房間在到期前只對設定擁有者可見。個人頁面與 metadata 在一個唯讀快照內先檢查帳號 id、username、auth generation 與啟用狀態，偏好 SET 先以 `FOR SHARE` 鎖定帳號列（C2-01–03） |
+| WP-654 | `MixMamReadRepository` 擁有 MIX MAM 的兩條路徑。本地讀取是一個唯讀快照：帳號、頻道授權、可見性、ID 解析、計數、分頁與索引；頻道不存在回 item-not-found，被拒的請求者回 forbidden，格式錯誤時亦同。聯邦查詢在 mutation replay 之前分派，以 READ COMMITTED 執行，第一個語句以 `FOR SHARE` 鎖定頻道列，回覆批次在既有 outbox advisory 鎖下整批入列；配額拒絕整批回滾。要求的 ID 先在可見範圍解析，再套用 with／start／end（C2-04–06） |
+| WP-655 | 訊息邊界只依提示與加密規則建立型別化的封存候選；歷史交易在既有帳號 fence 之後以一個語句讀取所有候選擁有者的偏好與名冊事實，只寫入准許的投影，`mam_backed` 與 `archive_written` 由實際寫入的列推導。本地、出入站 S2S、volatile 投遞與 members-only 直接邀請都走這條路徑（C2-07） |
+| WP-656 | 渲染命令攜帶 `MixPublisherIdentity`（封存 JID 可見性、暱稱、參與者 ID）；儲存交易讀取鎖定的頻道列與發布者的成員資格、暱稱和投遞偏好，撤回時鎖定目標並檢查作者或管理者權限，不符時在任何寫入之前以 `IdentityPolicyChanged` 回滾；adapter 重讀並渲染一次，再次不符回既有的 cancel／conflict（C2-11） |
+| WP-657 | 邊界只傳由 stanza 推導的封存資格與封存 payload；討論 admission 從已鎖定的 room 列讀取 `logging_enabled`，回傳 `MucDiscussionAdmission::Stored { id, archived }`，反射的 stanza-id 依實際結果決定。獨立的主旨變更同樣從鎖定的列讀取；叢集主旨保留 config-version fence 與 digest 輸入，升級前記錄的重放身分不變（C2-14） |
+| WP-658 | 節點建構從解析後的功能圖讀取有效的 XEP-0313 設定並放入 `PublicDiscoveryPolicy::mam_enabled`，stream 透過 `SessionAccountHost::mam_enabled` 讀取同一值。MAM 關閉（明確關閉或經 XEP-0059 連帶關閉）時不註冊 `/api/v1/history`，Bind2 不查封存邊界、不輸出 MAM metadata、不啟用 catch-up；封存保留仍依程序角色執行（C2-15） |
+| WP-659 | 只加資料庫測試，不改產品碼：MIX 與個人 MAM 在錨點前後刪除列時的前後分頁、存活與已刪除的游標、OFFSET 跳過、計數與索引；同時間戳的計數修剪依儲存 UUID 保留；legal hold 期間撤回個人與 MUC 訊息以 SQLSTATE 55000 失敗，MAM、HTTP 歷史與治理匯出保留原文，解除後重試成功並出現 tombstone（C2-09、C2-12） |
+| WP-660 | `northstar-pubsub-postgres` 的 `vcard.rs` 只在 test-support 使用 `PgPool`；import 加上相同的 cfg，不啟用 test-support 的建置與 clippy 不再出現 unused import |
+| WP-661 | 記錄階段 |
+
+讀寫規則：
+
+- 本地 MAM 讀取使用一個 `REPEATABLE READ READ ONLY` 交易，第一個語句檢查帳號 id、username、auth generation 與啟用狀態，再做
+  房間或頻道授權與封存讀取；帳號失效回 auth／not-authorized。
+- 聯邦 MIX MAM 使用 READ COMMITTED，第一個語句以 `FOR SHARE` 鎖定頻道列。所有改變授權或封存的 MIX 寫入者先以 `FOR UPDATE`
+  鎖定同一列，因此較早提交的寫入可見，回覆批次入列前沒有寫入者能提交。不取 relation 鎖。
+- 決定封存內容的政策事實（發布者身分、封存偏好、MUC logging）在寫入交易內由鎖定的列判斷，不使用交易前讀到的值。
+- 持久 occupancy 的判斷只有一份 SQL（`northstar-room-postgres` 的 `cluster_muc/query.rs`），MAM 與叢集查詢共用。
+
+穩定狀態下的 XML、回覆、錯誤條件、RSM 游標與鎖順序不變。
+
+與審計的差異：C2-09 與 C2-12 沒有改程式，由 WP-659 的測試固定目前行為；C2-12 屬於良性競態，維持現狀。WP-660 不在審計範圍，是
+S44 WP-650 留下的建置警告。
+
+尚未處理：需要產品決策的 C2-08（MIX 個人副本的撤回）、C2-09（legal hold 與撤回的顯示）、C2-10（outbox 配額 fence）與 C2-13
+（聯邦 MUC 的 MAM 投影格式），見已知問題的 `ARCH-MIX-TOMBSTONE`、`ARCH-LEGAL-HOLD-DISPLAY`、`ARCH-OUTBOX-QUOTA`、
+`ARCH-MUC-MAM-PROJECTION`；C1 其餘 8 項（C1-05、C1-07–09、C1-12、C1-14–16）；其他上下文的語義退出審查。
+
+新決定：
+
+- MAM 關閉時不提供任何附屬介面：REST 歷史路由不註冊，Bind2 不輸出 MAM metadata、不啟用 catch-up（WP-658）。
+- 鎖定的房間在到期前只對設定擁有者回應 MAM，其他人得到 item-not-found；隱藏房間的 NULL occupant-id 不外洩（WP-653）。
+- 聯邦 MIX MAM 回覆超過 outbox 配額時整批回滾，不送 fallback IQ 也不喚醒 worker（WP-654）。
+- 渲染所依據的政策在儲存時已改變：回滾、重讀並重試一次，再次不符回既有錯誤（WP-656）。
+
+S45 後最大的生產檔仍是 `northstar-cluster` 的 `listener.rs`（1,492 行），最大的測試檔仍是 `stage4_replay/tests.rs`
+（2,742 行）。workspace 測試由 3,528 個增為 3,576 個（ignored 由 329 個增為 351 個），原有名稱不變。Cargo.lock 仍是 485 個
+套件，沒有新的 migration。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點），S31 的 WP-483 起 agy 額度用盡，再改由 Codex CLI 執行（第 10 點）。
@@ -2097,6 +2146,16 @@ S44 後最大的生產檔仍是 `northstar-cluster` 的 `listener.rs`（1,492 �
      持有 cargo 鎖，開始前 touch 本階段所有 WP 改過的檔案（S44）。
    - PubSub outbox 的事件依收件人分流（`{scope}|jid:{recipient}`），序號只在同一收件人內遞增；比較兩個事件序號的測試要把
      兩個事件送給同一個收件人（S44）。
+   - `northstar-xml-builder` 的 `XmlElement` 以單引號序列化屬性；比對序列化結果的測試用 `by='...'`，或解析後再比較（S45）。
+   - repository conformance 的資料庫測試要有 NOLOGIN 一般角色擁有的 `northstar_conformance_it_<hex>` schema，並設定
+     `TEST_DATABASE_ROLE`（同 `scripts/repository-conformance-db-wsl.sh`）；只用 schema 前綴會在前綴斷言或 PoolTimedOut 失敗（S45）。
+   - 登記在 room DB 實驗腳本（muc、mix、auth）的新測試，要同時更新 `scripts/room-db-experiments.py` 的 `EXPECTED_TESTS` 與
+     `scripts/test-room-db-experiments.py` 的總數和缺漏數；兩個 WP 各自加測試時，合併後重新計算（S45）。
+   - 只在 test 或 test-support 使用的 import 要加上相同的 cfg；只有對不啟用 test-support 的 crate 集合跑 clippy 時才會報
+     unused import（WP-660）。
+   - 同一階段平行的 WP 各自在 `northstar-db-it` 加測試時，測試是對階段基準的 API 寫的；另一個 WP 改了簽名（WP-653 的
+     `MamLocalAuthority`／`MamRoomReadAuthority`、WP-654 移除 `authorized_mix_mam_page`），各 WP 單獨驗證都通過，整合後
+     6 處無法編譯。整條鏈接好後先建置 `northstar-db-it` 的測試，修正併入新增該測試的 WP（S45）。
 10. Codex（S31 的 WP-483 起，2026-11-16）：agy 額度用盡期間，程式修改改由 Codex CLI（`gpt-6.1-sol`，2026-11-19 起
     `gpt-6.2-sol`）執行，呼叫方式與
     限制同第 8 點，`model_reasoning_effort` 依任務難度選擇；第 1、3、4、7 點與第 9 點的機械搬移做法照舊。agy 恢復後回到
@@ -2669,3 +2728,12 @@ Stage 證據仍綁定其原提交。
 | WP-650 | 完成：MIX 的 profile 轉送由一個唯讀快照讀取授權與 profile（C1-13） | 見 `git log --grep '\[WP-650\]'` |
 | WP-651 | 完成：Private XML 讀取由一個唯讀快照回答，一般寫入檢查帳號 generation（C1-11、C1-10） | 見 `git log --grep '\[WP-651\]'` |
 | WP-652 | 完成：記錄 S44 的階段與盤點（5.40）、目標架構 4.7 與第 5 節、執行計劃的 C1／C2 列與已知問題的 4 個新項目。WP-646–651 接成一條鏈驗證：fmt、clippy、workspace 測試、受影響 crate 的單獨建置、測試名稱比對、全部門禁與 Python 腳本測試、離線 CI，以及本機 PostgreSQL 上的 PubSub、MIX、room 與 workflows 資料庫測試 | 見 `git log --grep '\[WP-652\]'` |
+| WP-653 | 完成：MUC MAM 在同一快照證明持久 occupancy、房間鎖定狀態與帳號權威，個人 MAM 檢查帳號（C2-01–03） | 見 `git log --grep '\[WP-653\]'` |
+| WP-654 | 完成：MIX MAM 的本地與聯邦查詢各由一個權威快照回答，聯邦查詢在 mutation replay 之前分派（C2-04–06） | 見 `git log --grep '\[WP-654\]'` |
+| WP-655 | 完成：個人歷史在寫入交易內取樣封存偏好與名冊事實（C2-07） | 見 `git log --grep '\[WP-655\]'` |
+| WP-656 | 完成：MIX 發布者身分在儲存交易內核對，不符時回滾並重試一次（C2-11） | 見 `git log --grep '\[WP-656\]'` |
+| WP-657 | 完成：MUC 討論是否封存由鎖定的 room 列決定（C2-14） | 見 `git log --grep '\[WP-657\]'` |
+| WP-658 | 完成：MAM 關閉時不註冊 REST 歷史路由，Bind2 不輸出 MAM metadata、不啟用 catch-up（C2-15） | 見 `git log --grep '\[WP-658\]'` |
+| WP-659 | 完成：以資料庫測試固定刪除與 legal hold 下的 MAM 分頁與撤回行為（C2-09、C2-12） | 見 `git log --grep '\[WP-659\]'` |
+| WP-660 | 完成：vCard store 的測試專用 `PgPool` import 加上 cfg | 見 `git log --grep '\[WP-660\]'` |
+| WP-661 | 完成：記錄 S45 的階段與盤點（5.41）、目標架構第 4、5 節、執行計劃的 C2 列與已知問題的 legal hold 項目。WP-653–660 接成一條鏈驗證：fmt、clippy、workspace 測試、受影響 crate 的單獨建置、測試名稱比對、全部門禁與 Python 腳本測試、離線 CI，以及本機 PostgreSQL 上的 MAM、MIX、MUC、retention、data lifecycle 與 conformance 資料庫測試 | 見 `git log --grep '\[WP-661\]'` |

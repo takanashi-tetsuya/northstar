@@ -80,8 +80,6 @@ impl PubSubItemQueryRepository for PublishRepository {
         fn leaf_disco_snapshot(_node: &str, _requester: &str) -> Option<PubSubLeafDiscoSnapshot>;
         fn collection_disco_snapshot(_node: &str, _requester: &str) -> Option<PubSubCollectionDiscoSnapshot>;
         fn get_items(_node_id: Uuid, _item_ids: &[String], _limit: i64) -> Vec<PubSubItem>;
-        fn collection_visible_items(_collection_id: Uuid, _requester: &str, _global_limit: i64, _xml_limit: i64)
-            -> Vec<CollectionVisibleItem>;
     }
 }
 

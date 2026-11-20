@@ -19,6 +19,8 @@ use northstar_pubsub_core::{
 };
 pub mod repository;
 pub use repository::*;
+pub mod item_snapshot;
+pub use item_snapshot::*;
 pub mod private_storage;
 pub mod profile;
 pub mod service;

@@ -27,6 +27,8 @@ mod collection_graph;
 mod digest_lease;
 #[path = "integration/discovery_snapshot_tests.rs"]
 mod discovery_snapshot;
+#[path = "integration/item_snapshot_tests.rs"]
+mod item_snapshot;
 #[path = "integration/mutation_transaction_tests.rs"]
 mod mutation_transaction;
 #[path = "integration/read_only_disco_tests.rs"]

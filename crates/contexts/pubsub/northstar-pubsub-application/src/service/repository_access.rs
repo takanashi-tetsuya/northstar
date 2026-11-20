@@ -428,18 +428,6 @@ impl<R: PubSubItemQueryRepository> PubSubService<R> {
         self.repository.get_items(node_id, item_ids, limit).await
     }
 
-    pub async fn collection_visible_items(
-        &self,
-        collection_id: Uuid,
-        requester: &str,
-        global_item_limit: i64,
-        xml_byte_limit: i64,
-    ) -> Result<Vec<CollectionVisibleItem>> {
-        self.repository
-            .collection_visible_items(collection_id, requester, global_item_limit, xml_byte_limit)
-            .await
-    }
-
     pub async fn can_publish(&self, node: &PubSubNode, requester: &str) -> Result<bool> {
         self.repository.can_publish(node, requester).await
     }

@@ -193,10 +193,6 @@ pub(super) fn subscription_options_form(
     form.finish()
 }
 
-pub(super) fn supports_include_body(node: &PubSubNode) -> bool {
-    node.payload_type.as_deref() == Some("http://www.w3.org/2005/Atom")
-}
-
 pub(super) fn parse_node_config(
     container: Node<'_, '_>,
     config: PubSubNodeConfig,

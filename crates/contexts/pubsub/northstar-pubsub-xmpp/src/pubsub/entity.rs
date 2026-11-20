@@ -1,6 +1,14 @@
 //! Handle entity namespace read and mutation operations.
 
 use super::*;
+use northstar_pubsub_application::{
+    PubSubCollectionItemSelection, PubSubItemQuery, PubSubItemRead, PubSubLeafItemSelection,
+    PubSubOptionsNode, PubSubOptionsQuery, PubSubOptionsRead,
+};
+use northstar_pubsub_core::CollectionVisibleItem;
+use northstar_xep_0060::supports_include_body;
+
+const MAX_COLLECTION_READ_ITEMS: i64 = 100;
 
 pub(super) async fn handle_entity_get<H: PubSubHost>(
     host: &H,
@@ -47,7 +55,7 @@ pub(super) async fn handle_entity_get<H: PubSubHost>(
             let form = subscription_options_form(
                 &options,
                 "result",
-                node.as_ref().is_some_and(supports_include_body),
+                supports_include_body(node.as_ref().and_then(|node| node.payload_type.as_deref())),
                 node.as_ref().map_or("leaf", |node| node.node_type.as_str()),
             );
             let mut default = XmlElement::new("default")
@@ -81,55 +89,15 @@ pub(super) async fn handle_entity_get<H: PubSubHost>(
             if normalized_bare(&requested_jid)? != requester {
                 return Ok(PubSubReply::Error("forbidden"));
             }
-            let Some(node) = host
+            let read = host
                 .pubsub_application_service()
-                .get_node(node_name)
-                .await?
-            else {
-                return missing_node_reply(host, node_name).await;
-            };
-            let Some(subscription) = host
-                .pubsub_application_service()
-                .get_subscription(node.id, &requested_jid)
-                .await?
-            else {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "unexpected-request",
-                    "not-subscribed",
-                )));
-            };
-            if subscription.is_expired_at(northstar_time::Utc::now()) {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "unexpected-request",
-                    "not-subscribed",
-                )));
-            }
-            if operation
-                .attribute("subid")
-                .is_some_and(|subid| subid != subscription.subid)
-            {
-                return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                    "not-acceptable",
-                    "invalid-subid",
-                )));
-            }
-            let options = subscription_options(&subscription);
-            let form = subscription_options_form(
-                &options,
-                "form",
-                supports_include_body(&node),
-                &node.node_type,
-            );
-            let mut options = XmlElement::new("options")
-                .attr("node", node_name)
-                .attr("jid", &requested_jid)
-                .attr("subid", &subscription.subid);
-            options.push_validated_fragment(&form)?;
-            Ok(PubSubReply::Result(
-                XmlElement::namespaced("pubsub", NS_PUBSUB)
-                    .child(options)
-                    .finish(),
-            ))
+                .subscription_options_read(&PubSubOptionsQuery {
+                    node: node_name,
+                    subscriber_jid: &requested_jid,
+                    echoed_subid: operation.attribute("subid"),
+                })
+                .await?;
+            subscription_options_reply(read, node_name, &requested_jid)
         }
         "items" => {
             if !has_only_attributes(operation, &["node", "max_items", "subid"]) {
@@ -184,170 +152,16 @@ pub(super) async fn handle_entity_get<H: PubSubHost>(
                         .finish(),
                 ));
             }
-            let Some(node) = host
-                .pubsub_application_service()
-                .get_node(node_name)
-                .await?
-            else {
-                return missing_node_reply(host, node_name).await;
-            };
-            let affiliation = host
-                .pubsub_application_service()
-                .get_node_affiliation(node.id, &requester)
-                .await?;
-            let subscriptions = host
-                .pubsub_application_service()
-                .subscriptions_for_jid(&requester_full, Some(node_name))
-                .await?;
-            let now = northstar_time::Utc::now();
-            let subscriptions = subscriptions
-                .into_iter()
-                .filter(|subscription| subscription.is_active_at(now))
-                .collect::<Vec<_>>();
-            if let Err(reply) = item_retrieval_access(
-                &node.access_model,
-                affiliation.as_deref(),
-                &subscriptions,
-                operation.attribute("subid"),
-            ) {
-                return Ok(reply);
-            }
-            if node.node_type == "collection" {
-                if rsm.is_some() {
-                    return Ok(PubSubReply::ExtendedError(PubSubError::unsupported("rsm")));
-                }
-                if operation.children().any(|child| child.is_element()) {
-                    return Ok(PubSubReply::Error("bad-request"));
-                }
-                let limit = match operation.attribute("max_items") {
-                    Some(value) => value
-                        .parse::<i64>()
-                        .ok()
-                        .filter(|value| *value > 0)
-                        .map(|value| value.min(100))
-                        .ok_or_else(|| anyhow::anyhow!("invalid collection max_items")),
-                    None => Ok(100),
-                };
-                let limit = match limit {
-                    Ok(limit) => limit,
-                    Err(_) => return Ok(PubSubReply::Error("bad-request")),
-                };
-                let visible_items = host
-                    .pubsub_application_service()
-                    .collection_visible_items(
-                        node.id,
-                        &requester,
-                        limit,
-                        MAX_PUBLISH_XML_BYTES as i64,
-                    )
-                    .await?;
-                let mut pubsub = XmlElement::namespaced("pubsub", NS_PUBSUB);
-                let mut remaining = limit as usize;
-                let mut response_bytes = 0usize;
-                let mut current_items: Option<(String, XmlElement)> = None;
-                for item in visible_items {
-                    if remaining == 0 || response_bytes >= MAX_PUBLISH_XML_BYTES {
-                        break;
-                    }
-                    if response_bytes.saturating_add(item.xml_payload.len()) > MAX_PUBLISH_XML_BYTES
-                    {
-                        break;
-                    }
-                    if current_items
-                        .as_ref()
-                        .is_some_and(|(current_node, _)| current_node != &item.node)
-                    {
-                        if let Some((_, completed)) = current_items.take() {
-                            pubsub.push_child(completed);
-                        }
-                    }
-                    let (_, items) = current_items.get_or_insert_with(|| {
-                        (
-                            item.node.clone(),
-                            XmlElement::new("items").attr("node", &item.node),
-                        )
-                    });
-                    response_bytes += item.xml_payload.len();
-                    remaining -= 1;
-                    items.push_validated_fragment(&item.xml_payload)?;
-                }
-                if let Some((_, completed)) = current_items {
-                    pubsub.push_child(completed);
-                }
-                return Ok(PubSubReply::Result(pubsub.finish()));
-            }
-            if !node.persist_items {
-                return Ok(PubSubReply::ExtendedError(PubSubError::unsupported(
-                    "persistent-items",
-                )));
-            }
-            if rsm.is_some() && operation.attribute("max_items").is_some() {
-                return Ok(PubSubReply::Error("bad-request"));
-            }
-            let limit = match operation.attribute("max_items") {
-                Some(value) => match value.parse::<i64>() {
-                    Ok(value) if value > 0 => value.min(node.max_items as i64),
-                    _ => return Ok(PubSubReply::Error("bad-request")),
-                },
-                None => node.max_items as i64,
-            };
-            let mut requested_ids = Vec::new();
-            let mut unique_requested_ids = BTreeSet::new();
-            for item in operation.children().filter(|node| node.is_element()) {
-                if item.tag_name().name() != "item"
-                    || item.tag_name().namespace() != Some(NS_PUBSUB)
-                    || item.attributes().any(|attribute| {
-                        attribute.namespace().is_some() || attribute.name() != "id"
-                    })
-                    || item.children().any(|child| {
-                        child.is_element()
-                            || child.text().is_some_and(|text| !text.trim().is_empty())
-                    })
-                {
-                    return Ok(PubSubReply::Error("bad-request"));
-                }
-                let Some(item_id) = item.attribute("id").filter(|value| valid_item_id(value))
-                else {
-                    return Ok(PubSubReply::Error("bad-request"));
-                };
-                if !unique_requested_ids.insert(item_id) {
-                    return Ok(PubSubReply::Error("bad-request"));
-                }
-                requested_ids.push(item_id.to_owned());
-            }
-            if rsm.is_some() && !requested_ids.is_empty() {
-                return Ok(PubSubReply::Error("bad-request"));
-            }
-            let all_stored = host
-                .pubsub_application_service()
-                .get_items(
-                    node.id,
-                    &requested_ids,
-                    if rsm.is_some() {
-                        node.max_items as i64
-                    } else {
-                        limit
-                    },
-                )
-                .await?;
-            let (stored, rsm_xml) = if let Some(rsm) = rsm {
-                match pubsub_rsm_page(all_stored, &rsm, limit as usize) {
-                    Ok(page) => page,
-                    Err(reply) => return Ok(reply),
-                }
-            } else {
-                (all_stored, String::new())
-            };
-            if !requested_ids.is_empty() && stored.len() != requested_ids.len() {
-                return Ok(PubSubReply::Error("item-not-found"));
-            }
-            let mut items = XmlElement::new("items").attr("node", node_name);
-            for item in stored {
-                items.push_validated_fragment(&item.xml_payload)?;
-            }
-            let mut pubsub = XmlElement::namespaced("pubsub", NS_PUBSUB).child(items);
-            pubsub.push_validated_fragment(&rsm_xml)?;
-            Ok(PubSubReply::Result(pubsub.finish()))
+            let requested_ids = requested_item_ids(operation);
+            let query = item_query(
+                operation,
+                node_name,
+                &requester,
+                rsm.is_some(),
+                requested_ids.as_deref(),
+            );
+            let read = host.pubsub_application_service().read_items(&query).await?;
+            item_read_reply(read, &query, rsm.as_ref())
         }
         "subscriptions" => {
             if !has_only_attributes(operation, &["node"]) || !has_no_element_content(operation) {
@@ -387,6 +201,211 @@ pub(super) async fn handle_entity_get<H: PubSubHost>(
     }
 }
 
+fn requested_item_ids(operation: Node<'_, '_>) -> Option<Vec<String>> {
+    let mut requested_ids = Vec::new();
+    let mut unique_requested_ids = BTreeSet::new();
+    for item in operation.children().filter(|node| node.is_element()) {
+        if item.tag_name().name() != "item"
+            || item.tag_name().namespace() != Some(NS_PUBSUB)
+            || item
+                .attributes()
+                .any(|attribute| attribute.namespace().is_some() || attribute.name() != "id")
+            || item.children().any(|child| {
+                child.is_element() || child.text().is_some_and(|text| !text.trim().is_empty())
+            })
+        {
+            return None;
+        }
+        let item_id = item.attribute("id").filter(|value| valid_item_id(value))?;
+        if !unique_requested_ids.insert(item_id) {
+            return None;
+        }
+        requested_ids.push(item_id.to_owned());
+    }
+    Some(requested_ids)
+}
+
+fn item_query<'a>(
+    operation: Node<'a, '_>,
+    node: &'a str,
+    requester: &'a str,
+    rsm_requested: bool,
+    requested_ids: Option<&'a [String]>,
+) -> PubSubItemQuery<'a> {
+    let max_items = operation
+        .attribute("max_items")
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .ok()
+                .filter(|limit| *limit > 0)
+                .ok_or(())
+        })
+        .transpose();
+    // Carry the validation for both node kinds. The snapshot checks admission
+    // and persistence before reporting the relevant selection error.
+    let leaf = match (max_items, requested_ids) {
+        (Ok(max_items), Some(item_ids))
+            if !rsm_requested || (max_items.is_none() && item_ids.is_empty()) =>
+        {
+            Some(PubSubLeafItemSelection {
+                item_ids,
+                max_items,
+            })
+        }
+        _ => None,
+    };
+    let collection = if rsm_requested {
+        PubSubCollectionItemSelection::RsmUnsupported
+    } else if operation.children().any(|child| child.is_element()) {
+        PubSubCollectionItemSelection::BadRequest
+    } else {
+        match max_items {
+            Ok(max_items) => PubSubCollectionItemSelection::Items {
+                max_items: max_items
+                    .unwrap_or(MAX_COLLECTION_READ_ITEMS)
+                    .min(MAX_COLLECTION_READ_ITEMS),
+                max_xml_bytes: MAX_PUBLISH_XML_BYTES as i64,
+            },
+            Err(()) => PubSubCollectionItemSelection::BadRequest,
+        }
+    };
+    PubSubItemQuery {
+        node,
+        requester,
+        echoed_subid: operation.attribute("subid"),
+        leaf,
+        collection,
+    }
+}
+
+pub(super) fn item_read_reply(
+    read: PubSubItemRead,
+    query: &PubSubItemQuery<'_>,
+    rsm: Option<&PubSubRsmRequest>,
+) -> Result<PubSubReply> {
+    match read {
+        PubSubItemRead::Missing { redirect } => Ok(missing_node_reply_from_redirect(redirect)),
+        PubSubItemRead::Denied(denial) => Ok(PubSubReply::ExtendedError(denial)),
+        PubSubItemRead::NonPersistent => Ok(PubSubReply::ExtendedError(PubSubError::unsupported(
+            "persistent-items",
+        ))),
+        PubSubItemRead::BadRequest => Ok(PubSubReply::Error("bad-request")),
+        PubSubItemRead::CollectionRsmUnsupported => {
+            Ok(PubSubReply::ExtendedError(PubSubError::unsupported("rsm")))
+        }
+        PubSubItemRead::Leaf { max_items, items } => {
+            let Some(selection) = query.leaf else {
+                return Ok(PubSubReply::Error("bad-request"));
+            };
+            let (stored, rsm_xml) = if let Some(rsm) = rsm {
+                match pubsub_rsm_page(items, rsm, max_items as usize) {
+                    Ok(page) => page,
+                    Err(reply) => return Ok(reply),
+                }
+            } else {
+                (items, String::new())
+            };
+            if !selection.item_ids.is_empty() && stored.len() != selection.item_ids.len() {
+                return Ok(PubSubReply::Error("item-not-found"));
+            }
+            let mut items = XmlElement::new("items").attr("node", query.node);
+            for item in stored {
+                items.push_validated_fragment(&item.xml_payload)?;
+            }
+            let mut pubsub = XmlElement::namespaced("pubsub", NS_PUBSUB).child(items);
+            pubsub.push_validated_fragment(&rsm_xml)?;
+            Ok(PubSubReply::Result(pubsub.finish()))
+        }
+        PubSubItemRead::Collection { items } => {
+            let PubSubCollectionItemSelection::Items {
+                max_items,
+                max_xml_bytes,
+            } = query.collection
+            else {
+                return Ok(PubSubReply::Error("bad-request"));
+            };
+            collection_items_reply(items, max_items as usize, max_xml_bytes as usize)
+        }
+    }
+}
+
+fn collection_items_reply(
+    visible_items: Vec<CollectionVisibleItem>,
+    max_items: usize,
+    max_xml_bytes: usize,
+) -> Result<PubSubReply> {
+    let mut pubsub = XmlElement::namespaced("pubsub", NS_PUBSUB);
+    let mut response_bytes = 0usize;
+    let mut current_items: Option<(String, XmlElement)> = None;
+    for CollectionVisibleItem { node, xml_payload } in visible_items.into_iter().take(max_items) {
+        if response_bytes >= max_xml_bytes
+            || response_bytes.saturating_add(xml_payload.len()) > max_xml_bytes
+        {
+            break;
+        }
+        if let Some((_, completed)) =
+            current_items.take_if(|(current, _)| current.as_str() != node.as_str())
+        {
+            pubsub.push_child(completed);
+        }
+        let (_, items) = current_items.get_or_insert_with(|| {
+            let items = XmlElement::new("items").attr("node", &node);
+            (node, items)
+        });
+        response_bytes += xml_payload.len();
+        items.push_validated_fragment(&xml_payload)?;
+    }
+    if let Some((_, completed)) = current_items {
+        pubsub.push_child(completed);
+    }
+    Ok(PubSubReply::Result(pubsub.finish()))
+}
+
+fn options_read_baseline(
+    read: PubSubOptionsRead,
+) -> std::result::Result<(PubSubOptionsNode, PubSubSubscription), PubSubReply> {
+    match read {
+        PubSubOptionsRead::Missing { redirect } => Err(missing_node_reply_from_redirect(redirect)),
+        PubSubOptionsRead::NotSubscribed => Err(PubSubReply::ExtendedError(PubSubError::new(
+            "unexpected-request",
+            "not-subscribed",
+        ))),
+        PubSubOptionsRead::InvalidSubid => Err(PubSubReply::ExtendedError(PubSubError::new(
+            "not-acceptable",
+            "invalid-subid",
+        ))),
+        PubSubOptionsRead::Ready { node, subscription } => Ok((*node, subscription)),
+    }
+}
+
+pub(super) fn subscription_options_reply(
+    read: PubSubOptionsRead,
+    node_name: &str,
+    subscriber_jid: &str,
+) -> Result<PubSubReply> {
+    let (node, subscription) = match options_read_baseline(read) {
+        Ok(baseline) => baseline,
+        Err(reply) => return Ok(reply),
+    };
+    let form = subscription_options_form(
+        &subscription_options(&subscription),
+        "form",
+        supports_include_body(node.payload_type.as_deref()),
+        &node.node_type,
+    );
+    let mut options = XmlElement::new("options")
+        .attr("node", node_name)
+        .attr("jid", subscriber_jid)
+        .attr("subid", &subscription.subid);
+    options.push_validated_fragment(&form)?;
+    Ok(PubSubReply::Result(
+        XmlElement::namespaced("pubsub", NS_PUBSUB)
+            .child(options)
+            .finish(),
+    ))
+}
+
 pub(super) async fn handle_entity_set<H: PubSubHost>(
     host: &H,
     requester: &str,
@@ -421,27 +440,17 @@ pub(super) async fn handle_entity_set<H: PubSubHost>(
             if normalized_bare(&requested_jid)? != requester {
                 return Ok(PubSubReply::Error("forbidden"));
             }
-            let (node, subscription) = match host
+            let read = host
                 .pubsub_application_service()
-                .subscription_options_read(node_name, &requested_jid, primary.attribute("subid"))
-                .await?
-            {
-                PubSubSubscriptionOptionsRead::MissingNode => {
-                    return missing_node_reply(host, node_name).await;
-                }
-                PubSubSubscriptionOptionsRead::NotSubscribed => {
-                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                        "unexpected-request",
-                        "not-subscribed",
-                    )));
-                }
-                PubSubSubscriptionOptionsRead::InvalidSubid => {
-                    return Ok(PubSubReply::ExtendedError(PubSubError::new(
-                        "not-acceptable",
-                        "invalid-subid",
-                    )));
-                }
-                PubSubSubscriptionOptionsRead::Ready { node, subscription } => (node, subscription),
+                .subscription_options_read(&PubSubOptionsQuery {
+                    node: node_name,
+                    subscriber_jid: &requested_jid,
+                    echoed_subid: primary.attribute("subid"),
+                })
+                .await?;
+            let (node, subscription) = match options_read_baseline(read) {
+                Ok(baseline) => baseline,
+                Err(reply) => return Ok(reply),
             };
             let form = single_element_child(primary)
                 .expect("subscription options structure was validated above");
@@ -456,7 +465,7 @@ pub(super) async fn handle_entity_set<H: PubSubHost>(
                 form,
                 subscription_options(&subscription),
                 &node.node_type,
-                supports_include_body(&node),
+                supports_include_body(node.payload_type.as_deref()),
             ) {
                 Ok(options) => options,
                 Err(error) => return Ok(error),
@@ -780,7 +789,7 @@ pub(super) async fn handle_entity_set<H: PubSubHost>(
                     form,
                     PubSubSubscriptionOptions::for_node_type(&node.node_type),
                     &node.node_type,
-                    supports_include_body(&node),
+                    supports_include_body(node.payload_type.as_deref()),
                 ) {
                     Ok(options) => options,
                     Err(error) => return Ok(error),

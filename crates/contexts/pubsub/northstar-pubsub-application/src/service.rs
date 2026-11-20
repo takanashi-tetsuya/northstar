@@ -4,10 +4,9 @@ use crate::profile::{
 };
 use crate::{
     authorization_precheck, existing_node_publish_admission_outcome, publish_validation_outcome,
-    subscription_options_precheck, validate_pep_commit_legacy_bookmarks_command,
-    validate_pep_configure_node_command, validate_pep_create_node_command,
-    validate_pep_delete_node_command, validate_pep_publish_command,
-    validate_pep_purge_node_command, validate_pep_retract_command,
+    validate_pep_commit_legacy_bookmarks_command, validate_pep_configure_node_command,
+    validate_pep_create_node_command, validate_pep_delete_node_command,
+    validate_pep_publish_command, validate_pep_purge_node_command, validate_pep_retract_command,
     validate_pep_set_affiliations_command, validate_pep_subscribe_command,
     validate_pep_unsubscribe_batch_command, validate_pep_unsubscribe_command,
     validate_pubsub_authorize_subscription_command, validate_pubsub_collection_edge_command,
@@ -32,21 +31,19 @@ use crate::{
     PubSubPurgeNodeResult, PubSubRetractCommand, PubSubRetractResult, PubSubRootDiscoQuery,
     PubSubRootDiscoResult, PubSubSetAffiliationsCommand, PubSubSetAffiliationsResult,
     PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsResult, PubSubSubscribeCommand,
-    PubSubSubscribeResult, PubSubSubscriptionOptionsPrecheck, PubSubUnsubscribeCommand,
-    PubSubUnsubscribeResult, PubSubUpdateSubscriptionOptionsCommand,
-    PubSubUpdateSubscriptionOptionsResult,
+    PubSubSubscribeResult, PubSubUnsubscribeCommand, PubSubUnsubscribeResult,
+    PubSubUpdateSubscriptionOptionsCommand, PubSubUpdateSubscriptionOptionsResult,
 };
 use anyhow::Result;
 use northstar_pubsub_core::{pubsub_subscribe_policy, PubSubSubscribePolicy};
 use northstar_pubsub_core::{
-    CollectionVisibleItem, CreateNodeOutcome, OwnerMutationOutcome, PepItem, PepNodeConfig,
-    PepOwnerMutationOutcome, PepPresenceSubscription, PepProfileWrite, PepSubscription,
-    PubSubAccount, PubSubAffiliation, PubSubConfigOutcome, PubSubItem, PubSubNode,
-    PubSubNodeConfig, PubSubNodeMetadata, PubSubPublishOutcome, PubSubRetractOutcome,
-    PubSubSubscribeOutcome, PubSubSubscription, PubSubSubscriptionOptions,
-    PubSubUnsubscribeOutcome, PublishItemsOutcome, RetractItemsOutcome, SetAffiliationsOutcome,
-    SetSubscriptionsOutcome, SubscribeOutcome, SubscriptionAuthorizationOutcome,
-    SubscriptionOptionsOutcome, UnsubscribeOutcome,
+    CreateNodeOutcome, OwnerMutationOutcome, PepItem, PepNodeConfig, PepOwnerMutationOutcome,
+    PepPresenceSubscription, PepProfileWrite, PepSubscription, PubSubAccount, PubSubAffiliation,
+    PubSubConfigOutcome, PubSubItem, PubSubNode, PubSubNodeConfig, PubSubNodeMetadata,
+    PubSubPublishOutcome, PubSubRetractOutcome, PubSubSubscribeOutcome, PubSubSubscription,
+    PubSubSubscriptionOptions, PubSubUnsubscribeOutcome, PublishItemsOutcome, RetractItemsOutcome,
+    SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscribeOutcome,
+    SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome, UnsubscribeOutcome,
 };
 
 use crate::{
@@ -69,6 +66,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 mod discovery_queries;
+mod item_queries;
 mod outbox;
 mod repository_access;
 
@@ -913,48 +911,6 @@ impl<R: PubSubNodeQueryRepository + PubSubNodeMutationRepository> PubSubService<
             }
         };
         Ok(PubSubCollectionEdgeResult::Mutation(outcome))
-    }
-}
-
-pub enum PubSubSubscriptionOptionsRead {
-    MissingNode,
-    NotSubscribed,
-    InvalidSubid,
-    Ready {
-        node: Box<PubSubNode>,
-        subscription: PubSubSubscription,
-    },
-}
-
-impl<R: PubSubNodeQueryRepository + PubSubSubscriptionQueryRepository> PubSubService<R> {
-    pub async fn subscription_options_read(
-        &self,
-        node_name: &str,
-        subscriber_jid: &str,
-        echoed_subid: Option<&str>,
-    ) -> Result<PubSubSubscriptionOptionsRead> {
-        let Some(node) = self.get_node(node_name).await? else {
-            return Ok(PubSubSubscriptionOptionsRead::MissingNode);
-        };
-        let Some(subscription) = self.get_subscription(node.id, subscriber_jid).await? else {
-            return Ok(PubSubSubscriptionOptionsRead::NotSubscribed);
-        };
-        match subscription_options_precheck(
-            subscription.is_expired_at(northstar_time::Utc::now()),
-            &subscription.subid,
-            echoed_subid,
-        ) {
-            PubSubSubscriptionOptionsPrecheck::Ready => Ok(PubSubSubscriptionOptionsRead::Ready {
-                node: Box::new(node),
-                subscription,
-            }),
-            PubSubSubscriptionOptionsPrecheck::NotSubscribed => {
-                Ok(PubSubSubscriptionOptionsRead::NotSubscribed)
-            }
-            PubSubSubscriptionOptionsPrecheck::InvalidSubid => {
-                Ok(PubSubSubscriptionOptionsRead::InvalidSubid)
-            }
-        }
     }
 }
 

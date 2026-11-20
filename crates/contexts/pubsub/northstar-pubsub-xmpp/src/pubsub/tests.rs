@@ -1,22 +1,25 @@
 use super::{
     collection_edge_reply, config_equivalent, data_form_fields, disco_item_xml, disco_rsm_page,
-    error_condition, item_retrieval_access, node_config_form, node_disco_items, node_info_reply,
-    normalized_bare, parse_node_config, parse_publish_options, parse_pubsub_rsm,
-    parse_subscription_options, publish_batch_size_allowed, pubsub_policy_suppression_is_terminal,
-    pubsub_rsm_page, reply_error, self_affiliations_reply, self_subscriptions_reply,
-    serialize_pubsub_item, subscription_options_form, subscription_payload, valid_item_id,
-    valid_node_id, DiscoItem, PubSubError, PubSubReply, MAX_PUBLISH_ITEMS, NODE_CONFIG_FORM,
-    PUBLISH_OPTIONS_FORM, SERVICE_FEATURES, SUBSCRIBE_OPTIONS_FORM,
+    entity::{item_read_reply, subscription_options_reply},
+    error_condition, node_config_form, node_disco_items, node_info_reply, normalized_bare,
+    parse_node_config, parse_publish_options, parse_pubsub_rsm, parse_subscription_options,
+    publish_batch_size_allowed, pubsub_policy_suppression_is_terminal, pubsub_rsm_page,
+    reply_error, self_affiliations_reply, self_subscriptions_reply, serialize_pubsub_item,
+    subscription_options_form, subscription_payload, valid_item_id, valid_node_id, DiscoItem,
+    PubSubError, PubSubReply, MAX_PUBLISH_ITEMS, NODE_CONFIG_FORM, PUBLISH_OPTIONS_FORM,
+    SERVICE_FEATURES, SUBSCRIBE_OPTIONS_FORM,
 };
 use northstar_pubsub_application::{
     PubSubCollectionDiscoChild, PubSubCollectionDiscoSnapshot, PubSubCollectionEdgeResult,
-    PubSubLeafDiscoSnapshot, PubSubNodeInfo, PubSubNodeItems, PubSubSelfList,
+    PubSubCollectionItemSelection, PubSubItemQuery, PubSubItemRead, PubSubLeafDiscoSnapshot,
+    PubSubLeafItemSelection, PubSubNodeInfo, PubSubNodeItems, PubSubOptionsNode, PubSubOptionsRead,
+    PubSubSelfList,
 };
 use northstar_pubsub_core::{
-    CollectionUpdateOutcome, PubSubAffiliation, PubSubItem, PubSubNodeConfig, PubSubSubscription,
-    PubSubSubscriptionOptions,
+    CollectionUpdateOutcome, CollectionVisibleItem, PubSubAffiliation, PubSubItem,
+    PubSubNodeConfig, PubSubSubscription, PubSubSubscriptionOptions,
 };
-use northstar_time::Utc;
+use northstar_time::{DateTime, Utc};
 use roxmltree::Document;
 
 #[test]
@@ -302,6 +305,18 @@ fn subscription(subid: &str) -> PubSubSubscription {
 
 #[test]
 fn item_retrieval_enforces_subids_and_access_specific_errors() {
+    let item_retrieval_access =
+        |model, affiliation, subscriptions: &[PubSubSubscription], subid| {
+            northstar_pubsub_core::item_retrieval_access(
+                model,
+                affiliation,
+                subscriptions,
+                subid,
+                DateTime::UNIX_EPOCH,
+                northstar_xep_0060::item_retrieval_access,
+            )
+            .map_err(PubSubReply::ExtendedError)
+        };
     let subscriptions = [subscription("one"), subscription("two")];
     let missing_subid = item_retrieval_access("authorize", None, &subscriptions, None).unwrap_err();
     assert_eq!(error_condition(&missing_subid), Some("bad-request"));
@@ -336,6 +351,211 @@ fn item_retrieval_enforces_subids_and_access_specific_errors() {
     assert_eq!(
         error_condition(&item_retrieval_access("open", Some("outcast"), &[], None).unwrap_err()),
         Some("forbidden")
+    );
+
+    let candidates = [
+        PubSubSubscription {
+            expire: Some(DateTime::UNIX_EPOCH),
+            ..subscription("expired")
+        },
+        PubSubSubscription {
+            state: "pending".to_owned(),
+            ..subscription("pending")
+        },
+        subscription("active"),
+    ];
+    assert!(item_retrieval_access("authorize", None, &candidates, None).is_ok());
+    let expired =
+        item_retrieval_access("authorize", None, &candidates, Some("expired")).unwrap_err();
+    assert_eq!(
+        reply_error(&expired).pubsub_condition,
+        Some("invalid-subid")
+    );
+}
+
+fn snapshot_item_query(item_ids: &[String]) -> PubSubItemQuery<'_> {
+    PubSubItemQuery {
+        node: "n",
+        requester: "alice@example.test",
+        echoed_subid: None,
+        leaf: Some(PubSubLeafItemSelection {
+            item_ids,
+            max_items: None,
+        }),
+        collection: PubSubCollectionItemSelection::Items {
+            max_items: 100,
+            max_xml_bytes: super::MAX_PUBLISH_XML_BYTES as i64,
+        },
+    }
+}
+
+#[test]
+fn item_snapshot_errors_preserve_conditions_and_extensions() {
+    let query = snapshot_item_query(&[]);
+    for denial in [
+        PubSubError::forbidden(),
+        PubSubError::bad_request(),
+        PubSubError::new("not-acceptable", "unsupported-access-model"),
+        PubSubError::new("bad-request", "subid-required"),
+        PubSubError::new("not-acceptable", "invalid-subid"),
+        PubSubError::new("not-allowed", "closed-node"),
+        PubSubError::new("not-authorized", "not-subscribed"),
+    ] {
+        let reply = item_read_reply(PubSubItemRead::Denied(denial.clone()), &query, None).unwrap();
+        assert!(matches!(reply, PubSubReply::ExtendedError(error) if error == denial));
+    }
+
+    let uri = "xmpp:pubsub.example.test?;node=new";
+    for (read, expected) in [
+        (
+            PubSubItemRead::Missing { redirect: None },
+            PubSubError::item_not_found(),
+        ),
+        (
+            PubSubItemRead::Missing {
+                redirect: Some(uri.to_owned()),
+            },
+            PubSubError::moved(uri),
+        ),
+        (
+            PubSubItemRead::NonPersistent,
+            PubSubError::unsupported("persistent-items"),
+        ),
+        (PubSubItemRead::BadRequest, PubSubError::bad_request()),
+        (
+            PubSubItemRead::CollectionRsmUnsupported,
+            PubSubError::unsupported("rsm"),
+        ),
+    ] {
+        let reply = item_read_reply(read, &query, None).unwrap();
+        assert_eq!(reply_error(&reply).as_ref(), &expected);
+    }
+}
+
+#[test]
+fn item_snapshot_replies_preserve_leaf_rsm_and_collection_grouping() {
+    let query = snapshot_item_query(&[]);
+    let leaf_items = || {
+        ["newer", "older"]
+            .into_iter()
+            .map(|id| PubSubItem {
+                item_id: id.to_owned(),
+                xml_payload: format!("<item id='{id}'/>"),
+                created_at: DateTime::UNIX_EPOCH,
+            })
+            .collect()
+    };
+    let rsm =
+        Document::parse("<set xmlns='http://jabber.org/protocol/rsm'><after>newer</after></set>")
+            .unwrap();
+    let rsm = parse_pubsub_rsm(rsm.root_element()).unwrap();
+    let reply = item_read_reply(
+        PubSubItemRead::Leaf {
+            max_items: 2,
+            items: leaf_items(),
+        },
+        &query,
+        Some(&rsm),
+    )
+    .unwrap();
+    assert!(matches!(reply, PubSubReply::Result(xml) if xml == concat!(
+        "<pubsub xmlns='http://jabber.org/protocol/pubsub'><items node='n'><item id='older'/></items>",
+        "<set xmlns='http://jabber.org/protocol/rsm'><first index='1'>older</first>",
+        "<last>older</last><count>2</count></set></pubsub>"
+    )));
+
+    let requested_ids = ["newer".to_owned(), "older".to_owned(), "missing".to_owned()];
+    let query_with_missing_id = snapshot_item_query(&requested_ids);
+    let reply = item_read_reply(
+        PubSubItemRead::Leaf {
+            max_items: 2,
+            items: leaf_items(),
+        },
+        &query_with_missing_id,
+        None,
+    )
+    .unwrap();
+    assert!(matches!(reply, PubSubReply::Error("item-not-found")));
+
+    let read = PubSubItemRead::Collection {
+        items: [("a", "newer"), ("a", "older"), ("b", "newer")]
+            .into_iter()
+            .map(|(node, id)| CollectionVisibleItem {
+                node: node.to_owned(),
+                xml_payload: format!("<item id='{id}'/>"),
+            })
+            .collect(),
+    };
+    let reply = item_read_reply(read, &query, None).unwrap();
+    assert!(matches!(reply, PubSubReply::Result(xml) if xml == concat!(
+        "<pubsub xmlns='http://jabber.org/protocol/pubsub'><items node='a'>",
+        "<item id='newer'/><item id='older'/></items><items node='b'><item id='newer'/></items></pubsub>"
+    )));
+}
+
+#[test]
+fn subscription_options_snapshot_replies_preserve_errors_and_form_fields() {
+    let uri = "xmpp:pubsub.example.test?;node=new";
+    for (read, expected) in [
+        (
+            PubSubOptionsRead::Missing { redirect: None },
+            PubSubError::item_not_found(),
+        ),
+        (
+            PubSubOptionsRead::Missing {
+                redirect: Some(uri.to_owned()),
+            },
+            PubSubError::moved(uri),
+        ),
+        (
+            PubSubOptionsRead::NotSubscribed,
+            PubSubError::new("unexpected-request", "not-subscribed"),
+        ),
+        (
+            PubSubOptionsRead::InvalidSubid,
+            PubSubError::new("not-acceptable", "invalid-subid"),
+        ),
+    ] {
+        let reply = subscription_options_reply(read, "n", "alice@example.test/phone").unwrap();
+        assert_eq!(reply_error(&reply).as_ref(), &expected);
+    }
+
+    let mut subscription = subscription("sub&1");
+    subscription.include_body = true;
+    let read = PubSubOptionsRead::Ready {
+        node: Box::new(PubSubOptionsNode {
+            id: uuid::Uuid::nil(),
+            node_type: "collection".to_owned(),
+            payload_type: Some("http://www.w3.org/2005/Atom".to_owned()),
+        }),
+        subscription,
+    };
+    let reply = subscription_options_reply(read, "n", "alice@example.test/phone").unwrap();
+    let PubSubReply::Result(xml) = reply else {
+        panic!("expected options form: {reply:?}");
+    };
+    let document = Document::parse(&xml).unwrap();
+    let options = document.root_element().first_element_child().unwrap();
+    assert_eq!(options.attribute("node"), Some("n"));
+    assert_eq!(options.attribute("jid"), Some("alice@example.test/phone"));
+    assert_eq!(options.attribute("subid"), Some("sub&1"));
+    let form = options.first_element_child().unwrap();
+    assert_eq!(form.attribute("type"), Some("form"));
+    assert_eq!(
+        form.children()
+            .filter_map(|field| field.attribute("var"))
+            .collect::<Vec<_>>(),
+        [
+            "FORM_TYPE",
+            "pubsub#deliver",
+            "pubsub#digest",
+            "pubsub#digest_frequency",
+            "pubsub#expire",
+            "pubsub#include_body",
+            "pubsub#show-values",
+            "pubsub#subscription_type",
+            "pubsub#subscription_depth",
+        ],
     );
 }
 

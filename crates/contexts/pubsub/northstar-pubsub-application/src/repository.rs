@@ -127,13 +127,6 @@ pub trait PubSubItemQueryRepository: Send + Sync {
         item_ids: &[String],
         limit: i64,
     ) -> impl std::future::Future<Output = Result<Vec<PubSubItem>>> + Send;
-    fn collection_visible_items(
-        &self,
-        collection_id: Uuid,
-        requester: &str,
-        global_item_limit: i64,
-        xml_byte_limit: i64,
-    ) -> impl std::future::Future<Output = Result<Vec<CollectionVisibleItem>>> + Send;
     fn can_publish(
         &self,
         node: &PubSubNode,

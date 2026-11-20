@@ -3,7 +3,7 @@
 use super::{
     affiliation::affiliations_for_jid_on,
     disco::{collection_disco_snapshot_on, leaf_disco_snapshot_on},
-    node::{get_node_on, node_metadata_on, node_redirect_on},
+    node::{get_node_with_executor, node_metadata_on, node_redirect_with_executor},
     subscription::{node_authorization_facts_on, subscriptions_for_jid_on},
     PgPool, Postgres, Transaction,
 };
@@ -24,7 +24,7 @@ async fn begin_discovery_read(pool: &PgPool) -> Result<Transaction<'_, Postgres>
 
 pub async fn node_info(pool: &PgPool, query: &PubSubNodeInfoQuery<'_>) -> Result<PubSubNodeInfo> {
     let mut transaction = begin_discovery_read(pool).await?;
-    let result = if let Some(node) = get_node_on(&mut *transaction, query.node).await? {
+    let result = if let Some(node) = get_node_with_executor(&mut *transaction, query.node).await? {
         let (affiliation, subscribed) =
             node_authorization_facts_on(&mut *transaction, node.id, query.requester).await?;
         if can_retrieve(&node.access_model, affiliation.as_deref(), subscribed)? {
@@ -38,7 +38,7 @@ pub async fn node_info(pool: &PgPool, query: &PubSubNodeInfoQuery<'_>) -> Result
         }
     } else {
         PubSubNodeInfo::Missing {
-            redirect: node_redirect_on(&mut *transaction, query.node).await?,
+            redirect: node_redirect_with_executor(&mut *transaction, query.node, None).await?,
         }
     };
     transaction.commit().await?;
@@ -50,11 +50,11 @@ pub async fn node_items(
     query: &PubSubNodeItemsQuery<'_>,
 ) -> Result<PubSubNodeItems> {
     let mut transaction = begin_discovery_read(pool).await?;
-    let result = if let Some(node) = get_node_on(&mut *transaction, query.node).await? {
+    let result = if let Some(node) = get_node_with_executor(&mut *transaction, query.node).await? {
         read_node_items(&mut transaction, &node, query.requester).await?
     } else {
         PubSubNodeItems::Missing {
-            redirect: node_redirect_on(&mut *transaction, query.node).await?,
+            redirect: node_redirect_with_executor(&mut *transaction, query.node, None).await?,
         }
     };
     transaction.commit().await?;
@@ -110,14 +110,14 @@ pub async fn self_subscriptions(
         ));
     };
     let mut transaction = begin_discovery_read(pool).await?;
-    let result = if let Some(node) = get_node_on(&mut *transaction, name).await? {
+    let result = if let Some(node) = get_node_with_executor(&mut *transaction, name).await? {
         // The name is unique in this snapshot. The list SQL joins rows on n.id.
         let rows =
             subscriptions_for_jid_on(&mut *transaction, query.requester, Some(&node.node)).await?;
         PubSubSelfList::List(rows.into_iter().map(Into::into).collect())
     } else {
         PubSubSelfList::Missing {
-            redirect: node_redirect_on(&mut *transaction, name).await?,
+            redirect: node_redirect_with_executor(&mut *transaction, name, None).await?,
         }
     };
     transaction.commit().await?;
@@ -135,13 +135,13 @@ pub async fn self_affiliations(
         ));
     };
     let mut transaction = begin_discovery_read(pool).await?;
-    let result = if let Some(node) = get_node_on(&mut *transaction, name).await? {
+    let result = if let Some(node) = get_node_with_executor(&mut *transaction, name).await? {
         let rows =
             affiliations_for_jid_on(&mut *transaction, query.requester, Some(&node.node)).await?;
         PubSubSelfList::List(rows.into_iter().map(Into::into).collect())
     } else {
         PubSubSelfList::Missing {
-            redirect: node_redirect_on(&mut *transaction, name).await?,
+            redirect: node_redirect_with_executor(&mut *transaction, name, None).await?,
         }
     };
     transaction.commit().await?;

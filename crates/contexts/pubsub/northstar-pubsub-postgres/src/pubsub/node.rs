@@ -311,10 +311,10 @@ pub(super) async fn create_node_in_transaction(
 }
 
 pub async fn get_node(pool: &PgPool, node: &str) -> Result<Option<PubSubNode>> {
-    get_node_on(pool, node).await
+    get_node_with_executor(pool, node).await
 }
 
-pub(super) async fn get_node_on<'e>(
+pub(super) async fn get_node_with_executor<'e>(
     executor: impl sqlx::Executor<'e, Database = Postgres>,
     node: &str,
 ) -> Result<Option<PubSubNode>> {
@@ -1106,17 +1106,20 @@ pub async fn delete_node_as_owner_with_redirect_and_outbox(
 }
 
 pub async fn node_redirect(pool: &PgPool, node: &str) -> Result<Option<String>> {
-    node_redirect_on(pool, node).await
+    node_redirect_with_executor(pool, node, None).await
 }
 
-pub(super) async fn node_redirect_on<'e>(
+pub(super) async fn node_redirect_with_executor<'e>(
     executor: impl sqlx::Executor<'e, Database = Postgres>,
     node: &str,
+    read_at: Option<DateTime<Utc>>,
 ) -> Result<Option<String>> {
     sqlx::query_scalar(
-        "SELECT uri FROM pubsub_node_redirects WHERE node = $1 AND expires_at > NOW()",
+        "SELECT uri FROM pubsub_node_redirects
+          WHERE node = $1 AND expires_at > COALESCE($2::TIMESTAMPTZ, NOW())",
     )
     .bind(node)
+    .bind(read_at)
     .fetch_optional(executor)
     .await
     .map_err(Into::into)

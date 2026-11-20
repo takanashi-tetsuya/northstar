@@ -15,6 +15,7 @@ mod digest;
 mod disco;
 mod discovery_snapshot;
 mod item;
+mod item_snapshot;
 mod node;
 mod subscription;
 
@@ -25,6 +26,7 @@ pub use self::digest::*;
 pub use self::disco::*;
 pub use self::discovery_snapshot::*;
 pub use self::item::*;
+pub use self::item_snapshot::*;
 pub use self::node::*;
 pub use self::subscription::*;
 

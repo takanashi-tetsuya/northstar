@@ -8,13 +8,22 @@ pub async fn get_node_affiliation(
     jid: &str,
 ) -> Result<Option<String>> {
     let jid = northstar_xmpp_types::jid::canonical_bare_key(jid)?;
-    let row =
-        sqlx::query("SELECT affiliation FROM pubsub_affiliations WHERE node_id = $1 AND jid = $2")
-            .bind(node_id)
-            .bind(jid)
-            .fetch_optional(pool)
-            .await?;
-    Ok(row.map(|row| row.get("affiliation")))
+    affiliation_for_bare_jid(pool, node_id, &jid).await
+}
+
+pub(super) async fn affiliation_for_bare_jid<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    node_id: Uuid,
+    bare_jid: &str,
+) -> Result<Option<String>> {
+    sqlx::query_scalar(
+        "SELECT affiliation FROM pubsub_affiliations WHERE node_id = $1 AND jid = $2",
+    )
+    .bind(node_id)
+    .bind(bare_jid)
+    .fetch_optional(executor)
+    .await
+    .map_err(Into::into)
 }
 
 pub async fn affiliations_for_jid(

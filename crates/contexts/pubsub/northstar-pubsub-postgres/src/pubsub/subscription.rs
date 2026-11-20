@@ -66,9 +66,19 @@ pub(super) async fn subscriptions_for_jid_on<'e>(
 ) -> Result<Vec<PubSubSubscription>> {
     let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
     let bare = northstar_xmpp_types::jid::canonical_bare_key(&jid)?;
-    let rows = sqlx::query("SELECT n.node, s.jid, s.state, s.subid, s.deliver, s.digest, s.digest_frequency, s.expire, s.include_body, s.show_values, s.subscription_type, s.subscription_depth FROM pubsub_subscriptions s JOIN pubsub_nodes n ON n.id = s.node_id WHERE split_part(s.jid, '/', 1) = $1 AND ($2::TEXT IS NULL OR n.node = $2) AND (s.expire IS NULL OR s.expire > NOW()) ORDER BY n.node, s.jid")
+    subscriptions_for_bare_jid(executor, &bare, node, None).await
+}
+
+pub(super) async fn subscriptions_for_bare_jid<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    bare: &str,
+    node: Option<&str>,
+    read_at: Option<DateTime<Utc>>,
+) -> Result<Vec<PubSubSubscription>> {
+    let rows = sqlx::query("SELECT n.node, s.jid, s.state, s.subid, s.deliver, s.digest, s.digest_frequency, s.expire, s.include_body, s.show_values, s.subscription_type, s.subscription_depth FROM pubsub_subscriptions s JOIN pubsub_nodes n ON n.id = s.node_id WHERE split_part(s.jid, '/', 1) = $1 AND ($2::TEXT IS NULL OR n.node = $2) AND (s.expire IS NULL OR s.expire > COALESCE($3::TIMESTAMPTZ, NOW())) ORDER BY n.node, s.jid")
         .bind(bare)
         .bind(node)
+        .bind(read_at)
         .fetch_all(executor)
         .await?;
     Ok(rows.iter().map(row_to_subscription).collect())
@@ -587,11 +597,19 @@ pub async fn get_subscription(
     node_id: Uuid,
     jid: &str,
 ) -> Result<Option<PubSubSubscription>> {
+    get_subscription_with_executor(pool, node_id, jid).await
+}
+
+pub(super) async fn get_subscription_with_executor<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    node_id: Uuid,
+    jid: &str,
+) -> Result<Option<PubSubSubscription>> {
     let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
     let row = sqlx::query("SELECT n.node, s.jid, s.state, s.subid, s.deliver, s.digest, s.digest_frequency, s.expire, s.include_body, s.show_values, s.subscription_type, s.subscription_depth FROM pubsub_subscriptions s JOIN pubsub_nodes n ON n.id = s.node_id WHERE s.node_id = $1 AND s.jid = $2")
         .bind(node_id)
         .bind(jid)
-        .fetch_optional(pool)
+        .fetch_optional(executor)
         .await?;
     Ok(row.as_ref().map(row_to_subscription))
 }

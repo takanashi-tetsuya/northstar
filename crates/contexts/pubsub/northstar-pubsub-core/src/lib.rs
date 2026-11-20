@@ -12,7 +12,10 @@ pub use northstar_xmpp_types::CanonicalJid;
 use serde::Serialize;
 use uuid::Uuid;
 
+mod item_access;
 pub mod telemetry;
+
+pub use item_access::item_retrieval_access;
 
 #[derive(Clone, Debug)]
 pub struct PubSubAccount {

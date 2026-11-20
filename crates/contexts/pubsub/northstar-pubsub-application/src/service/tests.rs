@@ -31,16 +31,6 @@ impl PubSubItemQueryRepository for QueryOnlyItems {
         Ok(Vec::new())
     }
 
-    async fn collection_visible_items(
-        &self,
-        _collection_id: Uuid,
-        _requester: &str,
-        _global_item_limit: i64,
-        _xml_byte_limit: i64,
-    ) -> Result<Vec<CollectionVisibleItem>> {
-        Ok(Vec::new())
-    }
-
     async fn can_publish(&self, _node: &PubSubNode, _requester: &str) -> Result<bool> {
         Ok(false)
     }

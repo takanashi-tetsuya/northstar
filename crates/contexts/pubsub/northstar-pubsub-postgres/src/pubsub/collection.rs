@@ -30,6 +30,25 @@ pub async fn collection_visible_items(
     xml_byte_limit: i64,
 ) -> Result<Vec<CollectionVisibleItem>> {
     let requester = northstar_xmpp_types::jid::canonical_bare_key(requester)?;
+    collection_visible_items_with_executor(
+        pool,
+        collection_id,
+        &requester,
+        global_item_limit,
+        xml_byte_limit,
+        None,
+    )
+    .await
+}
+
+pub(super) async fn collection_visible_items_with_executor<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    collection_id: Uuid,
+    requester: &str,
+    global_item_limit: i64,
+    xml_byte_limit: i64,
+    read_at: Option<DateTime<Utc>>,
+) -> Result<Vec<CollectionVisibleItem>> {
     let rows = sqlx::query(
         "WITH RECURSIVE authorized_root(id) AS (
              SELECT root.id
@@ -55,7 +74,7 @@ pub async fn collection_visible_items(
                          WHERE subscription.node_id=root.id
                            AND split_part(subscription.jid, '/', 1)=$2
                            AND subscription.state='subscribed'
-                           AND (subscription.expire IS NULL OR subscription.expire>statement_timestamp())
+                           AND (subscription.expire IS NULL OR subscription.expire>COALESCE($5::TIMESTAMPTZ, statement_timestamp()))
                     )
                 )
          ), descendant_paths(id, depth) AS (
@@ -95,7 +114,7 @@ pub async fn collection_visible_items(
                          WHERE subscription.node_id=node.id
                            AND split_part(subscription.jid, '/', 1)=$2
                            AND subscription.state='subscribed'
-                           AND (subscription.expire IS NULL OR subscription.expire>statement_timestamp())
+                           AND (subscription.expire IS NULL OR subscription.expire>COALESCE($5::TIMESTAMPTZ, statement_timestamp()))
                     )
                 )
               ORDER BY node.node
@@ -132,7 +151,8 @@ pub async fn collection_visible_items(
     .bind(requester)
     .bind(global_item_limit.clamp(1, 100))
     .bind(xml_byte_limit.clamp(1, COLLECTION_ITEMS_XML_BYTES_MAX))
-    .fetch_all(pool)
+    .bind(read_at)
+    .fetch_all(executor)
     .await?;
     Ok(rows
         .iter()

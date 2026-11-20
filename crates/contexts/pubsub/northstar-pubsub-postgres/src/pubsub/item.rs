@@ -221,18 +221,27 @@ pub async fn get_items(
     item_ids: &[String],
     limit: i64,
 ) -> Result<Vec<PubSubItem>> {
+    get_items_with_executor(pool, node_id, item_ids, limit).await
+}
+
+pub(super) async fn get_items_with_executor<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    node_id: Uuid,
+    item_ids: &[String],
+    limit: i64,
+) -> Result<Vec<PubSubItem>> {
     let rows = if item_ids.is_empty() {
         sqlx::query("SELECT item_id, publisher_jid, xml_payload, created_at FROM pubsub_items WHERE node_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2")
             .bind(node_id)
             .bind(limit.clamp(1, 1_000))
-            .fetch_all(pool)
+            .fetch_all(executor)
             .await?
     } else {
         sqlx::query("SELECT item_id, publisher_jid, xml_payload, created_at FROM pubsub_items WHERE node_id = $1 AND item_id = ANY($2) ORDER BY created_at DESC, id DESC LIMIT $3")
             .bind(node_id)
             .bind(item_ids)
             .bind(limit.clamp(1, 1_000))
-            .fetch_all(pool)
+            .fetch_all(executor)
             .await?
     };
 

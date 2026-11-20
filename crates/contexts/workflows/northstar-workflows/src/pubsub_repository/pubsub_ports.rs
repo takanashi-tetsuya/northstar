@@ -219,29 +219,6 @@ impl PubSubItemQueryRepository for PostgresPubSubRepository {
         .await;
         outcome.map_err(map_database_busy)
     }
-    async fn collection_visible_items(
-        &self,
-        collection_id: Uuid,
-        requester: &str,
-        global_item_limit: i64,
-        xml_byte_limit: i64,
-    ) -> Result<Vec<CollectionVisibleItem>> {
-        let outcome: Result<_> = async {
-            Ok(northstar_pubsub_postgres::collection_visible_items(
-                &self.pool,
-                collection_id,
-                requester,
-                global_item_limit,
-                xml_byte_limit,
-            )
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect())
-        }
-        .await;
-        outcome.map_err(map_database_busy)
-    }
     async fn can_publish(&self, node: &PubSubNode, requester: &str) -> Result<bool> {
         let outcome: Result<_> = async {
             let (affiliation, subscribed) =

@@ -2,13 +2,12 @@
 
 use anyhow::Result;
 use northstar_pubsub_application::{
-    service::PubSubSubscriptionOptionsRead, PubSubAuthorizeSubscriptionCommand,
-    PubSubCollectionEdgeCommand, PubSubCollectionEdgeOperation, PubSubCollectionEdgeResult,
-    PubSubConfigureNodeCommand, PubSubCreateNodeCommand, PubSubDeleteNodeCommand,
-    PubSubListPageQuery, PubSubNodeInfo, PubSubNodeInfoQuery, PubSubNodeItems,
-    PubSubNodeItemsQuery, PubSubOwnerRead, PubSubOwnerReadKind, PubSubPublishCommand,
-    PubSubPurgeNodeCommand, PubSubRetractCommand, PubSubRootDiscoQuery, PubSubSelfList,
-    PubSubSelfListQuery, PubSubService, PubSubSetAffiliationsCommand,
+    PubSubAuthorizeSubscriptionCommand, PubSubCollectionEdgeCommand, PubSubCollectionEdgeOperation,
+    PubSubCollectionEdgeResult, PubSubConfigureNodeCommand, PubSubCreateNodeCommand,
+    PubSubDeleteNodeCommand, PubSubListPageQuery, PubSubNodeInfo, PubSubNodeInfoQuery,
+    PubSubNodeItems, PubSubNodeItemsQuery, PubSubOwnerRead, PubSubOwnerReadKind,
+    PubSubPublishCommand, PubSubPurgeNodeCommand, PubSubRetractCommand, PubSubRootDiscoQuery,
+    PubSubSelfList, PubSubSelfListQuery, PubSubService, PubSubSetAffiliationsCommand,
     PubSubSetSubscriptionsCommand, PubSubSubscribeCommand, PubSubUnsubscribeCommand,
     PubSubUpdateSubscriptionOptionsCommand,
 };
@@ -39,7 +38,7 @@ use self::entity::{handle_entity_get, handle_entity_set};
 use self::forms::{
     data_form_fields, first_field, has_duplicate_fields, node_config_form, parse_node_config,
     parse_publish_options, parse_subscription_options, subscription_options,
-    subscription_options_form, supports_include_body,
+    subscription_options_form,
 };
 #[cfg(test)]
 use self::owner::{collection_edge_reply, requested_default_node_type};
@@ -551,30 +550,6 @@ pub async fn handle_authorization_response<H: PubSubHost>(
         })
         .await?;
     Ok(())
-}
-
-/// Apply the XEP-0060 item-retrieval access and SubID rules after the caller
-/// has loaded all active subscriptions that address the requesting resource
-/// (its exact full JID plus its bare JID).
-fn item_retrieval_access(
-    access_model: &str,
-    affiliation: Option<&str>,
-    subscriptions: &[PubSubSubscription],
-    supplied_subid: Option<&str>,
-) -> std::result::Result<(), PubSubReply> {
-    let access_model = access_model
-        .parse::<northstar_xep_0060::AccessModel>()
-        .map_err(PubSubReply::ExtendedError)?;
-    let affiliation = affiliation
-        .map(str::parse::<northstar_xep_0060::Affiliation>)
-        .transpose()
-        .map_err(PubSubReply::ExtendedError)?;
-    let subids = subscriptions
-        .iter()
-        .map(|subscription| subscription.subid.as_str())
-        .collect::<Vec<_>>();
-    northstar_xep_0060::item_retrieval_access(access_model, affiliation, &subids, supplied_subid)
-        .map_err(PubSubReply::ExtendedError)
 }
 
 fn publish_batch_size_allowed(item_count: usize) -> bool {

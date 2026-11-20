@@ -235,6 +235,20 @@ run_exact_ignored \
 run_exact_ignored \
   pubsub::integration::discovery_snapshot::discovery_snapshot_queries_work_on_read_only_connections
 run_exact_ignored \
+  pubsub::integration::item_snapshot::leaf_items_keep_snapshot_after_subscription_or_affiliation_revocation
+run_exact_ignored \
+  pubsub::integration::item_snapshot::collection_items_keep_the_selected_subid_snapshot
+run_exact_ignored \
+  pubsub::integration::item_snapshot::leaf_items_resolve_one_node_incarnation
+run_exact_ignored \
+  pubsub::integration::item_snapshot::collection_caps_and_leaf_rsm_preserve_item_order
+run_exact_ignored \
+  pubsub::integration::item_snapshot::options_get_keeps_form_and_subscription_from_one_snapshot
+run_exact_ignored \
+  pubsub::integration::item_snapshot::options_get_and_cancel_resolve_a_live_redirect
+run_exact_ignored \
+  pubsub::integration::item_snapshot::item_and_options_snapshots_succeed_on_read_only_connections
+run_exact_ignored \
   pubsub::integration::access_policy::node_metadata_keeps_affiliation_order_and_live_subscription_scope
 run_exact_ignored \
   pubsub::integration::access_policy::restricted_open_publish_is_denied_by_locked_publish_and_retract

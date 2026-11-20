@@ -17,25 +17,26 @@ use northstar_pubsub_application::{
 };
 use northstar_pubsub_core::PubSubRootDiscoPage;
 use northstar_pubsub_core::{
-    ClaimedPubSubOutboxDelivery, CollectionUpdateOutcome, CollectionVisibleItem, CreateNodeOutcome,
-    DuePubSubDigest, OwnerMutationOutcome, PepAudienceSnapshot, PepBookmarkMutationOutcome,
-    PepCreateOutcome, PepDirectOutboxFactory, PepDirectStateSnapshot, PepDirectStateTransition,
-    PepItem, PepNodeConfig, PepOutboxAuthorizationMode, PepOutboxAuthorizationOutcome,
-    PepOutboxDropReason, PepOutboxEventKind, PepOutboxFactory, PepOwnerMutationOutcome,
-    PepPresenceSubscription, PepPublishOutcome, PepSubscribeOutboxFactory, PepSubscribeOutcome,
-    PepSubscribeSnapshot, PepSubscription, PepSubscriptionActor, PepUnsubscribeOutcome,
-    PubSubAccount, PubSubAffiliation, PubSubConfigOutcome, PubSubItem, PubSubNode,
-    PubSubNodeConfig, PubSubNodeMetadata, PubSubOutboxDeliveryKind, PubSubOutboxFailureDisposition,
-    PubSubOutboxInsert, PubSubOutboxSnapshot, PubSubOutboxSource, PubSubSubscription,
-    PubSubSubscriptionOptions, PublishItemsOutcome, RetractItemsOutcome, SetAffiliationsOutcome,
-    SetSubscriptionsOutcome, SubscribeOutcome, SubscriptionAuthorizationOutcome,
-    SubscriptionOptionsOutcome, UnsubscribeOutcome,
+    ClaimedPubSubOutboxDelivery, CollectionUpdateOutcome, CreateNodeOutcome, DuePubSubDigest,
+    OwnerMutationOutcome, PepAudienceSnapshot, PepBookmarkMutationOutcome, PepCreateOutcome,
+    PepDirectOutboxFactory, PepDirectStateSnapshot, PepDirectStateTransition, PepItem,
+    PepNodeConfig, PepOutboxAuthorizationMode, PepOutboxAuthorizationOutcome, PepOutboxDropReason,
+    PepOutboxEventKind, PepOutboxFactory, PepOwnerMutationOutcome, PepPresenceSubscription,
+    PepPublishOutcome, PepSubscribeOutboxFactory, PepSubscribeOutcome, PepSubscribeSnapshot,
+    PepSubscription, PepSubscriptionActor, PepUnsubscribeOutcome, PubSubAccount, PubSubAffiliation,
+    PubSubConfigOutcome, PubSubItem, PubSubNode, PubSubNodeConfig, PubSubNodeMetadata,
+    PubSubOutboxDeliveryKind, PubSubOutboxFailureDisposition, PubSubOutboxInsert,
+    PubSubOutboxSnapshot, PubSubOutboxSource, PubSubSubscription, PubSubSubscriptionOptions,
+    PublishItemsOutcome, RetractItemsOutcome, SetAffiliationsOutcome, SetSubscriptionsOutcome,
+    SubscribeOutcome, SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome,
+    UnsubscribeOutcome,
 };
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
 
 mod discovery_snapshot_port;
+mod item_snapshot_port;
 mod pep_ports;
 mod pubsub_outbox;
 mod pubsub_ports;

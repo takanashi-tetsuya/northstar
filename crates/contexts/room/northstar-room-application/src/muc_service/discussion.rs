@@ -89,9 +89,10 @@ pub mod fixture {
         ) -> RepositoryFuture<'a, Self::Error> {
             Box::pin(async move {
                 self.calls.fetch_add(1, Ordering::Relaxed);
-                Ok(self
-                    .outcome
-                    .unwrap_or(MucDiscussionAdmission::Stored(command.id)))
+                Ok(self.outcome.unwrap_or(MucDiscussionAdmission::Stored {
+                    id: command.id,
+                    archived: command.archive_eligible,
+                }))
             })
         }
 
@@ -104,9 +105,11 @@ pub mod fixture {
                 if matches!(self.cut, Cut::BeforeCommit) {
                     std::future::pending::<()>().await;
                 }
-                let outcome = self
-                    .outcome
-                    .unwrap_or(MucDiscussionAdmission::Stored(request.command().id));
+                let command = request.command();
+                let outcome = self.outcome.unwrap_or(MucDiscussionAdmission::Stored {
+                    id: command.id,
+                    archived: command.archive_eligible,
+                });
                 commit_observed(
                     async {
                         if matches!(self.cut, Cut::DuringCommit) {
@@ -149,7 +152,8 @@ pub mod fixture {
             nick: "Alice".to_owned(),
             stanza: "<message/>".to_owned(),
             encrypted: false,
-            archive,
+            archive_eligible: archive,
+            unarchived_stanza_bytes: None,
             retention_days: 0,
             authority: MucActorAuthority {
                 clustered: false,

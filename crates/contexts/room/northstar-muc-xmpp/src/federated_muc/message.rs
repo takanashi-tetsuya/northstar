@@ -1,6 +1,10 @@
 //! Federated MUC message handling for remote room actors.
 
 use super::*;
+use archive_eligibility::{archive_payload, cluster_subject_archive, federated_archive_eligible};
+use northstar_room_core::stanza::apply_muc_discussion_reflection;
+
+pub(crate) mod archive_eligibility;
 
 /// Handle messages from a remote room actor. Authorization is bound to the
 /// occupant endpoint, not merely to a claimed room nickname.
@@ -1177,7 +1181,7 @@ async fn federated_muc_message_owned(
         return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
     }
     let stable_id = uuid::Uuid::new_v4();
-    let reflected = set_muc_occupant_id(
+    let mut reflected = set_muc_occupant_id(
         &add_stanza_id(
             &set_to(
                 &set_from(&request.stanza.raw, &format!("{room_jid}/{}", own.nick)),
@@ -1188,15 +1192,9 @@ async fn federated_muc_message_owned(
         ),
         &own.occupant_id,
     );
-    let encrypted = request.encrypted;
-    let archive_enabled = room.logging_enabled
-        && request.permanent_storage
-        && (encrypted || !state.archive_requires_encryption());
-    let archive = if archive_enabled && encrypted {
-        encrypted_archive_stanza(&reflected)
-    } else {
-        reflected.clone()
-    };
+    let eligible =
+        federated_archive_eligible(&request, &to_jid, state.archive_requires_encryption());
+    let archive = archive_payload(&reflected, eligible, request.encrypted);
     let actor_scope = northstar_xmpp_types::jid::canonical_bare_key(&actor_full_jid)?;
     let actor_authority = MucActorAuthority {
         clustered: state.federated_muc_pg_authority_enabled(),
@@ -1315,11 +1313,14 @@ async fn federated_muc_message_owned(
             {
                 return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
             }
-            let operation_id =
-                northstar_room_application::muc_service::operation_id(&serde_json::json!({
+            let (subject_stanza, subject_archive) =
+                cluster_subject_archive(&reflected, &archive, eligible, room.logging_enabled);
+            let operation_id = northstar_room_application::muc_service::operation_id(
+                &serde_json::json!({
                     "kind":"subject","stream":connection_id,"stanza_id":request.stanza.id,
-                    "room":room_jid,"actor":actor_target,"subject":subject,"archive":archive_enabled
-                }))?;
+                    "room":room_jid,"actor":actor_target,"subject":subject,"archive":subject_archive.digest_archive
+                }),
+            )?;
             match service
                 .set_local_cluster_subject(
                     operation_id,
@@ -1333,10 +1334,10 @@ async fn federated_muc_message_owned(
                         sender_jid: &actor_full_jid,
                         nick: &own.nick,
                         subject,
-                        stanza: &archive,
-                        encrypted,
+                        stanza: subject_stanza,
+                        encrypted: request.encrypted,
                     },
-                    archive_enabled,
+                    subject_archive,
                 )
                 .await?
             {
@@ -1360,10 +1361,10 @@ async fn federated_muc_message_owned(
                     sender_jid: &actor_full_jid,
                     nick: &own.nick,
                     subject,
-                    stanza: &archive,
-                    encrypted,
+                    stanza: &reflected,
+                    encrypted: request.encrypted,
                 },
-                archive_enabled,
+                eligible.then_some(archive.as_str()),
                 actor_authority,
             )
             .await?
@@ -1386,15 +1387,21 @@ async fn federated_muc_message_owned(
                 origin_id: origin_id.map(str::to_owned),
                 sender_jid: actor_full_jid.clone(),
                 nick: own.nick.clone(),
-                stanza: archive.clone(),
-                encrypted,
-                archive: archive_enabled,
+                stanza: archive,
+                encrypted: request.encrypted,
+                archive_eligible: eligible,
+                unarchived_stanza_bytes: (eligible && request.encrypted).then_some(reflected.len()),
                 retention_days: state.muc_mam_retention_days(),
                 authority: actor_authority,
             })
             .await?;
         match admission {
-            MucDiscussionAdmission::Stored(_) => {}
+            MucDiscussionAdmission::Stored { .. } => apply_muc_discussion_reflection(
+                &mut reflected,
+                &room_jid,
+                admission,
+                eligible && room.logging_enabled,
+            ),
             MucDiscussionAdmission::Replay(_) => return Ok(None),
             MucDiscussionAdmission::Unauthorized => {
                 return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
@@ -1404,17 +1411,17 @@ async fn federated_muc_message_owned(
             }
         }
     }
-    match state
+    if state
         .federated_muc_publish_room_message(&room_jid, &reflected, Some(&actor_full_jid))
         .await
+        .is_err()
     {
-        Ok(()) => {}
-        Err(_) => record_federated_muc_post_commit_failure(
+        record_federated_muc_post_commit_failure(
             state,
             &room_jid,
             "*",
             "cluster groupchat fan-out",
-        ),
+        );
     }
     let occupants = state
         .muc_occupants_for(&room_jid)

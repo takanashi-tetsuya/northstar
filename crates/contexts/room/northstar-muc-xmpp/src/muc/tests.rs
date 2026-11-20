@@ -3,6 +3,7 @@ use super::*;
 use dashmap::DashMap;
 use northstar_room_application::muc_service::{discussion::MucDiscussionSlot, MucService};
 use northstar_session_core::JoinedMucMembership;
+use northstar_xml_builder::message_policy::encrypted_archive_stanza;
 use std::future::Future;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -22,6 +23,7 @@ const CONNECTION_ID: Uuid = Uuid::from_u128(16);
 const MESSAGE_ID: Uuid = Uuid::from_u128(17);
 const ROOM_JID: &str = "room@conference.local.test";
 const SENDER: &str = "alice@local.test/phone";
+const REMOTE_SENDER: &str = "alice@remote.test/phone";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Event {
@@ -51,6 +53,7 @@ enum Event {
 #[derive(Clone, Copy)]
 enum Admission {
     Stored,
+    Unarchived,
     Replay,
     Unauthorized,
     Stale,
@@ -59,6 +62,7 @@ enum Admission {
 struct State {
     admission: Admission,
     events: Mutex<Vec<Event>>,
+    logging_enabled: AtomicBool,
     cluster_pending: AtomicBool,
     delivery_pending: AtomicBool,
     counters: [AtomicU64; 7],
@@ -71,9 +75,16 @@ impl State {
     fn events(&self) -> Vec<Event> {
         self.events.lock().unwrap().clone()
     }
-    fn outcome(&self, id: Uuid) -> MucDiscussionAdmission {
+    fn outcome(&self, command: &MucDiscussion) -> MucDiscussionAdmission {
         match self.admission {
-            Admission::Stored => MucDiscussionAdmission::Stored(id),
+            Admission::Stored => MucDiscussionAdmission::Stored {
+                id: command.id,
+                archived: command.archive_eligible,
+            },
+            Admission::Unarchived => MucDiscussionAdmission::Stored {
+                id: command.id,
+                archived: false,
+            },
             Admission::Replay => MucDiscussionAdmission::Replay(MESSAGE_ID),
             Admission::Unauthorized => MucDiscussionAdmission::Unauthorized,
             Admission::Stale => MucDiscussionAdmission::Stale,
@@ -95,6 +106,7 @@ impl Session {
         let state = Arc::new(State {
             admission,
             events: Mutex::new(Vec::new()),
+            logging_enabled: AtomicBool::new(true),
             cluster_pending: AtomicBool::new(false),
             delivery_pending: AtomicBool::new(false),
             counters: std::array::from_fn(|_| AtomicU64::new(0)),
@@ -110,6 +122,7 @@ impl Session {
                 state,
                 service,
                 clustered: false,
+                federated: false,
             },
             rooms,
             authenticated: true,
@@ -248,7 +261,8 @@ fn input(encrypted: bool, archive: bool) -> (MucDiscussion, String) {
             live.clone()
         },
         encrypted,
-        archive,
+        archive_eligible: archive,
+        unarchived_stanza_bytes: (encrypted && archive).then_some(live.len()),
         retention_days: 7,
         authority: MucActorAuthority {
             clustered: false,
@@ -503,6 +517,138 @@ fn discussion_envelope_preserves_live_and_archive_ownership() {
 }
 
 #[test]
+fn discussion_reflection_uses_committed_archive_outcome() {
+    for active_frame in [false, true] {
+        for (logging_was_enabled, no_store, admission, has_stanza_id) in [
+            (true, false, Admission::Unarchived, false),
+            (false, false, Admission::Stored, true),
+            (false, false, Admission::Unarchived, true),
+            (true, true, Admission::Unarchived, true),
+        ] {
+            let session = Session::new(admission, active_frame);
+            session
+                .host
+                .state
+                .logging_enabled
+                .store(logging_was_enabled, Ordering::Relaxed);
+            let hint = if no_store {
+                "<no-store xmlns='urn:xmpp:hints'/>"
+            } else {
+                ""
+            };
+            let raw = format!(
+                "<message xmlns='jabber:client' to='{ROOM_JID}' type='groupchat'><body>hello</body><origin-id xmlns='urn:xmpp:sid:0' id='original'/>{hint}</message>"
+            );
+            let document = roxmltree::Document::parse(&raw).unwrap();
+            let action = ready(groupchat::muc_message(
+                &session,
+                document.root_element(),
+                &raw,
+            ))
+            .unwrap();
+            assert!(matches!(action, MucAction::None));
+            let events = session.host.state.events();
+            let command = events
+                .iter()
+                .find_map(|event| match event {
+                    Event::Observed(command) | Event::Legacy(command) => Some(command),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(command.archive_eligible, !no_store);
+            let mut reflections = 0;
+            for event in &events {
+                let stanza = match event {
+                    Event::Cluster(_, stanza, _) | Event::Deliver(_, stanza) => stanza,
+                    _ => continue,
+                };
+                let document = roxmltree::Document::parse(stanza).unwrap();
+                let root = document.root_element();
+                assert_eq!(
+                    root.children()
+                        .any(|child| child.has_tag_name(("urn:xmpp:sid:0", "stanza-id"))),
+                    has_stanza_id,
+                );
+                assert!(root
+                    .children()
+                    .any(|child| child.has_tag_name(("urn:xmpp:sid:0", "origin-id"))));
+                assert!(root
+                    .children()
+                    .any(|child| child.has_tag_name(("jabber:client", "body"))));
+                reflections += 1;
+            }
+            assert!(reflections > 1);
+            if active_frame {
+                let observation = session.observation.lock().unwrap();
+                let discussion_owner::Knowledge::ReceiptKnown(fact) =
+                    observation.as_ref().unwrap().snapshot().knowledge
+                else {
+                    panic!("expected acknowledged discussion commit");
+                };
+                let class = if matches!(admission, Admission::Stored) {
+                    discussion_owner::AcceptanceClass::ArchiveAndIdentity
+                } else {
+                    discussion_owner::AcceptanceClass::IdentityOnly
+                };
+                assert_eq!(fact.fresh_class(), Some(class));
+            }
+        }
+    }
+}
+
+#[test]
+fn federated_discussion_reflection_uses_committed_archive_outcome() {
+    let raw = format!(
+        "<message xmlns='jabber:server' from='{REMOTE_SENDER}' to='{ROOM_JID}' type='groupchat'><body>hello</body></message>"
+    );
+    let document = roxmltree::Document::parse(&raw).unwrap();
+    for (admission, archived) in [(Admission::Unarchived, false), (Admission::Stored, true)] {
+        let mut session = Session::new(admission, false);
+        session.host.federated = true;
+        session
+            .host
+            .state
+            .logging_enabled
+            .store(!archived, Ordering::Relaxed);
+        let reply = ready(crate::federated_muc::federated_muc_message(
+            &session.host,
+            "remote.test",
+            CONNECTION_ID,
+            document.root_element(),
+            &raw,
+        ))
+        .unwrap();
+        assert!(reply.is_none());
+        let events = session.host.state.events();
+        let command = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Legacy(command) => Some(command),
+                _ => None,
+            })
+            .unwrap();
+        assert!(command.archive_eligible);
+        let id = command.id.to_string();
+        let mut reflections = 0;
+        for event in &events {
+            let stanza = match event {
+                Event::Cluster(_, stanza, _) | Event::Deliver(_, stanza) => stanza,
+                _ => continue,
+            };
+            let document = roxmltree::Document::parse(stanza).unwrap();
+            let has_room_id = document.root_element().children().any(|child| {
+                child.has_tag_name(("urn:xmpp:sid:0", "stanza-id"))
+                    && child.attribute("by") == Some(ROOM_JID)
+                    && child.attribute("id") == Some(id.as_str())
+            });
+            assert_eq!(has_room_id, archived);
+            reflections += 1;
+        }
+        assert!(reflections > 1);
+    }
+}
+
+#[test]
 fn message_stages_preserve_authority_through_fanout() {
     let raw = "<message xmlns='jabber:client' to='room@conference.local.test' type='groupchat' id='original'><body>hello</body><origin-id xmlns='urn:xmpp:sid:0' id='original-origin'/></message>";
     let document = roxmltree::Document::parse(raw).unwrap();
@@ -727,7 +873,7 @@ fn message_stages_preserve_authority_through_fanout() {
                     matches!(action, MucAction::Send(ref xml) if xml.contains("conflict")),
                     "{label}"
                 ),
-                Admission::Stored => unreachable!(),
+                Admission::Stored | Admission::Unarchived => unreachable!(),
             }
             assert_eq!(
                 events.len(),

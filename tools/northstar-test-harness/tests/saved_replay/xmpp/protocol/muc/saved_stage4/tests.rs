@@ -617,7 +617,7 @@ async fn failed_muc_command_projection_does_not_turn_actual_commit_into_backend_
     .await;
     drop(runner);
     assert!(
-        matches!(result, Ok(Poll::Ready(Ok(MucDiscussionAdmission::Stored(x)))) if x == fixed(63).0)
+        matches!(result, Ok(Poll::Ready(Ok(MucDiscussionAdmission::Stored { id, .. }))) if id == fixed(63).0)
     );
     assert!(matches!(
         observed.muc.snapshot().knowledge,

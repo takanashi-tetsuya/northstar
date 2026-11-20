@@ -34,12 +34,16 @@ pub fn canonical_history_sender(sender_jid: &str) -> Result<String> {
 }
 
 pub fn validate_history_payload(nick: &str, stanza: &str) -> Result<()> {
+    validate_history_payload_size(nick, stanza.len())
+}
+
+fn validate_history_payload_size(nick: &str, stanza_bytes: usize) -> Result<()> {
     anyhow::ensure!(
         !nick.is_empty() && nick.len() <= MAX_MUC_NICK_BYTES,
         "MUC history nickname must contain 1 to 128 bytes"
     );
     anyhow::ensure!(
-        !stanza.is_empty() && stanza.len() <= MAX_HISTORY_STANZA_BYTES,
+        (1..=MAX_HISTORY_STANZA_BYTES).contains(&stanza_bytes),
         "MUC history stanza must contain 1 to 1048576 bytes"
     );
     Ok(())
@@ -71,6 +75,8 @@ pub fn muc_origin_digest(actor_scope: &str, origin_id: &str) -> Vec<u8> {
 pub struct LockedMucActor {
     pub role: String,
     pub affiliation: String,
+    logging_enabled: bool,
+    allow_subject_change: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -148,7 +154,8 @@ pub async fn lock_muc_actor_authority(
     #[cfg(any(test, feature = "test-support"))]
     maybe_pause_muc_authorization_for_test("discussion_after_advisory").await;
     let room = sqlx::query(
-        "SELECT room_epoch,members_only,destroyed_at,configuration_state
+        "SELECT room_epoch,members_only,destroyed_at,configuration_state,
+                logging_enabled,allow_subject_change
            FROM muc_rooms WHERE id=$1 FOR UPDATE",
     )
     .bind(room_id)
@@ -307,6 +314,8 @@ pub async fn lock_muc_actor_authority(
     Ok(MucAuthorityCheck::Authorized(LockedMucActor {
         role: authority.expected_role.to_owned(),
         affiliation: current_affiliation,
+        logging_enabled: room.get("logging_enabled"),
+        allow_subject_change: room.get("allow_subject_change"),
     }))
 }
 
@@ -317,18 +326,7 @@ pub async fn commit_muc_discussion(
 ) -> Result<MucDiscussionAdmission> {
     if let Some(request) = request {
         use northstar_room_application::discussion::{commit_observed, CommitError};
-        let observed = match outcome {
-            MucDiscussionAdmission::Stored(id) => {
-                northstar_room_core::MucDiscussionAdmission::Stored(id)
-            }
-            MucDiscussionAdmission::Replay(id) => {
-                northstar_room_core::MucDiscussionAdmission::Replay(id)
-            }
-            MucDiscussionAdmission::Unauthorized | MucDiscussionAdmission::Stale => {
-                anyhow::bail!("MUC refusal cannot become a COMMIT receipt");
-            }
-        };
-        commit_observed(transaction.commit(), request, observed)
+        commit_observed(transaction.commit(), request, outcome)
             .await
             .map_err(|error| match error {
                 CommitError::Observation(error) => anyhow::Error::from(error),
@@ -347,7 +345,9 @@ pub async fn admit_muc_discussion_inner(
 ) -> Result<MucDiscussionAdmission> {
     let actor_scope = canonical_history_actor(message.actor_scope)?;
     let sender_jid = canonical_history_sender(message.sender_jid)?;
-    validate_history_payload(message.nick, message.stanza)?;
+    if message.unarchived_stanza_bytes.is_none() {
+        validate_history_payload(message.nick, message.stanza)?;
+    }
     let mut transaction = pool.begin().await?;
     #[cfg(any(test, feature = "test-support"))]
     maybe_pause_muc_authorization_for_test("discussion").await;
@@ -358,8 +358,12 @@ pub async fn admit_muc_discussion_inner(
         transaction.rollback().await?;
         return Ok(MucDiscussionAdmission::Unauthorized);
     }
-    match lock_muc_actor_authority(&mut transaction, message.room_id, &message.authority).await? {
-        MucAuthorityCheck::Authorized(actor) if actor.role != "visitor" => {}
+    let authority =
+        lock_muc_actor_authority(&mut transaction, message.room_id, &message.authority).await?;
+    let archived = match authority {
+        MucAuthorityCheck::Authorized(actor) if actor.role != "visitor" => {
+            message.archive_eligible && actor.logging_enabled
+        }
         MucAuthorityCheck::Authorized(_) | MucAuthorityCheck::Unauthorized => {
             transaction.rollback().await?;
             return Ok(MucDiscussionAdmission::Unauthorized);
@@ -368,10 +372,23 @@ pub async fn admit_muc_discussion_inner(
             transaction.rollback().await?;
             return Ok(MucDiscussionAdmission::Stale);
         }
+    };
+    if let Some(live_bytes) = message.unarchived_stanza_bytes {
+        let bytes = if archived {
+            message.stanza.len()
+        } else {
+            live_bytes
+        };
+        validate_history_payload_size(message.nick, bytes)?;
     }
 
+    let fresh = MucDiscussionAdmission::Stored {
+        id: message.id,
+        archived,
+    };
+
     let Some(origin_id) = message.origin_id else {
-        if message.archive {
+        if archived {
             sqlx::query(
                 "INSERT INTO muc_messages
                  (id, room_id, sender_jid, nick, stanza, encrypted, message_kind, actor_scope)
@@ -387,12 +404,7 @@ pub async fn admit_muc_discussion_inner(
             .execute(&mut *transaction)
             .await?;
         }
-        return commit_muc_discussion(
-            transaction,
-            request,
-            MucDiscussionAdmission::Stored(message.id),
-        )
-        .await;
+        return commit_muc_discussion(transaction, request, fresh).await;
     };
     validate_origin_id(origin_id)?;
     let digest = muc_origin_digest(&actor_scope, origin_id);
@@ -412,7 +424,7 @@ pub async fn admit_muc_discussion_inner(
     .rows_affected()
         == 1;
     if inserted {
-        if message.archive {
+        if archived {
             sqlx::query(
                 "INSERT INTO muc_messages
                  (id, room_id, sender_jid, nick, stanza, encrypted, message_kind,
@@ -450,12 +462,7 @@ pub async fn admit_muc_discussion_inner(
             .execute(&mut *transaction)
             .await?;
         }
-        return commit_muc_discussion(
-            transaction,
-            request,
-            MucDiscussionAdmission::Stored(message.id),
-        )
-        .await;
+        return commit_muc_discussion(transaction, request, fresh).await;
     }
 
     let existing = sqlx::query(
@@ -494,12 +501,16 @@ pub async fn admit_muc_discussion_inner(
 pub async fn set_local_muc_subject(
     pool: &PgPool,
     mutation: MucSubjectMutation<'_>,
-    archive: bool,
+    archive_stanza: Option<&str>,
     authority: MucActorAuthority<'_>,
 ) -> Result<MucSubjectOutcome> {
     let actor_scope = canonical_history_actor(mutation.actor_scope)?;
     let sender_jid = canonical_history_sender(mutation.sender_jid)?;
-    validate_history_payload(mutation.nick, mutation.stanza)?;
+    let live_bytes = mutation.stanza.len();
+    let candidate_bytes = archive_stanza.map_or(live_bytes, str::len);
+    if live_bytes == candidate_bytes {
+        validate_history_payload_size(mutation.nick, live_bytes)?;
+    }
     anyhow::ensure!(
         mutation.subject.len() <= MAX_HISTORY_STANZA_BYTES,
         "MUC subject exceeds 1048576 bytes"
@@ -527,12 +538,13 @@ pub async fn set_local_muc_subject(
                 return Ok(MucSubjectOutcome::Stale);
             }
         };
-    let allow_subject_change: bool =
-        sqlx::query_scalar("SELECT allow_subject_change FROM muc_rooms WHERE id=$1")
-            .bind(mutation.room_id)
-            .fetch_one(&mut *transaction)
-            .await?;
-    if locked.role != "moderator" && !(locked.role == "participant" && allow_subject_change) {
+    let archive_stanza = archive_stanza.filter(|_| locked.logging_enabled);
+    if live_bytes != candidate_bytes {
+        let bytes = archive_stanza.map_or(live_bytes, str::len);
+        validate_history_payload_size(mutation.nick, bytes)?;
+    }
+    if locked.role != "moderator" && !(locked.role == "participant" && locked.allow_subject_change)
+    {
         transaction.rollback().await?;
         return Ok(MucSubjectOutcome::Unauthorized);
     }
@@ -555,7 +567,7 @@ pub async fn set_local_muc_subject(
         transaction.rollback().await?;
         return Ok(MucSubjectOutcome::Stale);
     }
-    if archive {
+    if let Some(stanza) = archive_stanza {
         sqlx::query(
             "INSERT INTO muc_messages
              (id, room_id, sender_jid, nick, stanza, encrypted, message_kind, actor_scope)
@@ -565,7 +577,7 @@ pub async fn set_local_muc_subject(
         .bind(mutation.room_id)
         .bind(sender_jid)
         .bind(mutation.nick)
-        .bind(mutation.stanza)
+        .bind(stanza)
         .bind(mutation.encrypted)
         .bind(actor_scope)
         .execute(&mut *transaction)

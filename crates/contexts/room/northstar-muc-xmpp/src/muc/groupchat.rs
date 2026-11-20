@@ -1,6 +1,10 @@
 //! Room message entry point: groupchat, subject, retraction and discussion admission.
 
 use super::*;
+use crate::federated_muc::message::archive_eligibility::{
+    archive_eligible, archive_payload, cluster_subject_archive,
+};
+use northstar_room_core::stanza::apply_muc_discussion_reflection;
 
 pub async fn muc_message(
     session: &impl MucSession,
@@ -291,7 +295,7 @@ pub async fn muc_message(
     }
     let room_from = format!("{room_jid}/{}", own.nick);
     let stable_id = uuid::Uuid::new_v4();
-    let rewritten = set_muc_occupant_id(
+    let mut rewritten = set_muc_occupant_id(
         &add_stanza_id(
             &set_to(&set_from(raw, &room_from), &room_jid),
             &room_jid,
@@ -300,14 +304,13 @@ pub async fn muc_message(
         &own.occupant_id,
     );
     let encrypted = is_encrypted(root);
-    let archive_enabled = room.logging_enabled
-        && !has_no_store_hint(root)
-        && (encrypted || !session.host().archive_requires_encryption());
-    let archive = if archive_enabled && encrypted {
-        encrypted_archive_stanza(&rewritten)
-    } else {
-        rewritten.clone()
-    };
+    let eligible = archive_eligible(
+        &to_jid,
+        !has_no_store_hint(root),
+        encrypted,
+        session.host().archive_requires_encryption(),
+    );
+    let archive = archive_payload(&rewritten, eligible, encrypted);
     let actor_scope = canonical_bare_key(from)?;
     let actor_authority = MucActorAuthority {
         clustered: session.host().muc_pg_authority_enabled(),
@@ -457,10 +460,12 @@ pub async fn muc_message(
                     "forbidden",
                 )));
             }
+            let (subject_stanza, subject_archive) =
+                cluster_subject_archive(&rewritten, &archive, eligible, room.logging_enabled);
             let operation_id = northstar_room_application::muc_service::operation_id(
                 &serde_json::json!({
                     "kind":"subject","stream":session.connection_id(),"stanza_id":root.attribute("id"),
-                    "room":room_jid,"actor":actor_target,"subject":subject,"archive":archive_enabled
+                    "room":room_jid,"actor":actor_target,"subject":subject,"archive":subject_archive.digest_archive
                 }),
             )?;
             session.enter_frame_stage(MucFrameStage::Admission);
@@ -477,10 +482,10 @@ pub async fn muc_message(
                         sender_jid: from,
                         nick: &own.nick,
                         subject,
-                        stanza: &archive,
+                        stanza: subject_stanza,
                         encrypted,
                     },
-                    archive_enabled,
+                    subject_archive,
                 )
                 .await?
             {
@@ -518,10 +523,10 @@ pub async fn muc_message(
                     sender_jid: from,
                     nick: &own.nick,
                     subject,
-                    stanza: &archive,
+                    stanza: &rewritten,
                     encrypted,
                 },
-                archive: archive_enabled,
+                archive_stanza: eligible.then_some(archive.as_str()),
                 authority: actor_authority,
             })
             .await?
@@ -550,9 +555,10 @@ pub async fn muc_message(
             origin_id,
             sender_jid: from.to_owned(),
             nick: own.nick.clone(),
-            stanza: archive.clone(),
+            stanza: archive,
             encrypted,
-            archive: archive_enabled,
+            archive_eligible: eligible,
+            unarchived_stanza_bytes: (eligible && encrypted).then_some(rewritten.len()),
             retention_days: session.host().muc_mam_retention_days(),
             authority: actor_authority,
         };
@@ -588,7 +594,15 @@ pub async fn muc_message(
                 .await?
         };
         match admission {
-            MucDiscussionAdmission::Stored(_) => {}
+            MucDiscussionAdmission::Stored { .. } if discussion_fanout.is_none() => {
+                apply_muc_discussion_reflection(
+                    &mut rewritten,
+                    &room_jid,
+                    admission,
+                    eligible && room.logging_enabled,
+                );
+            }
+            MucDiscussionAdmission::Stored { .. } => {}
             MucDiscussionAdmission::Replay(_) => {
                 fanout_disposition = MucFanoutDisposition::Replay;
             }

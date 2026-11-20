@@ -40,6 +40,7 @@ EXPECTED_TESTS = {
         'room::muc::locked_room_configuration_is_atomic_restart_safe_and_bounded',
         'room::muc::durable_invitation_admission_is_atomic_under_injected_failures',
         'room::muc::history_identity_and_mutations_are_atomic_under_replay_and_failure',
+        'room::muc_logging_admission::local_and_federated_discussions_follow_locked_logging',
         'room::cluster_muc::postgres_outbox_maintenance_is_atomic_and_snapshot_is_complete',
         'room::cluster_muc::postgres_admin_batch_is_atomic_under_replay_and_failure',
         'room::cluster_muc::federated_rebind_is_atomic_and_fences_the_old_connection',

@@ -301,7 +301,7 @@ pub async fn set_cluster_muc_subject(
     expected_config_version: i64,
     actor: &ClusterMucOccupancyTarget,
     mutation: crate::muc::MucSubjectMutation<'_>,
-    archive: bool,
+    archive: northstar_room_core::ClusterMucSubjectArchive<'_>,
 ) -> Result<ClusterMucTransitionOutcome> {
     anyhow::ensure!(
         mutation.room_id == actor.room_id,
@@ -316,7 +316,7 @@ pub async fn set_cluster_muc_subject(
     let digest = request_digest(&json!({
         "actor":actor,"room_epoch":expected_room_epoch,
         "config_version":expected_config_version,"subject":mutation.subject,
-        "stanza":mutation.stanza,"archive":archive,
+        "stanza":mutation.stanza,"archive":archive.digest_archive,
     }))?;
     let mut tx = pool.begin().await?;
     if existing_operation(&mut tx, operation_id, "subject", &digest)
@@ -384,22 +384,36 @@ pub async fn set_cluster_muc_subject(
     .bind(expected_config_version)
     .execute(&mut *tx)
     .await?;
-    if archive {
+    let archived = if let Some(stanza) = archive.eligible_stanza.filter(|_| room.logging_enabled) {
+        anyhow::ensure!(
+            stanza.len() <= MAX_PAYLOAD_BYTES,
+            "MUC subject is oversized"
+        );
         sqlx::query(
             "INSERT INTO muc_messages(id,room_id,sender_jid,nick,stanza,encrypted,message_kind,actor_scope)
              VALUES($1,$2,$3,$4,$5,$6,'subject',$7)
              ON CONFLICT(id) DO NOTHING",
         )
-        .bind(mutation.stanza_id).bind(mutation.room_id).bind(&sender_jid)
-        .bind(mutation.nick).bind(mutation.stanza).bind(mutation.encrypted).bind(&actor_scope)
-        .execute(&mut *tx).await?;
-    }
+        .bind(mutation.stanza_id)
+        .bind(mutation.room_id)
+        .bind(&sender_jid)
+        .bind(mutation.nick)
+        .bind(stanza)
+        .bind(mutation.encrypted)
+        .bind(&actor_scope)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+            == 1
+    } else {
+        false
+    };
     let (_unused, event_sequence) = allocate_room_epochs(&mut tx, mutation.room_id, false).await?;
     let authorization = json!({
         "actor":actor,"role":actor_current.role,"room_epoch":room.room_epoch,
         "config_version":room.config_version,"allow_subject_change":room.allow_subject_change,
     });
-    let details = json!({"subject":mutation.subject,"stanza":mutation.stanza,"archived":archive});
+    let details = json!({"subject":mutation.subject,"stanza":mutation.stanza,"archived":archived});
     insert_operation_and_outbox(
         &mut tx,
         OperationRecord {

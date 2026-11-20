@@ -31,7 +31,8 @@ async fn discussion_receipts_preserve_all_stored_and_replay_commit_exits() {
         nick: "Receipt".into(),
         stanza: "<message id='original'><body>receipt</body></message>".into(),
         encrypted: true,
-        archive: true,
+        archive_eligible: true,
+        unarchived_stanza_bytes: None,
         retention_days: 30,
         authority: MucActorAuthority {
             clustered: false,
@@ -69,12 +70,15 @@ async fn discussion_receipts_preserve_all_stored_and_replay_commit_exits() {
         let expected = if index == 2 || index == 4 {
             MucDiscussionAdmission::Replay(expected_id)
         } else {
-            MucDiscussionAdmission::Stored(id)
+            MucDiscussionAdmission::Stored {
+                id,
+                archived: archive,
+            }
         };
         let prepared = application.prepare_discussion(MucDiscussion {
             id,
             origin_id: origin.map(str::to_owned),
-            archive,
+            archive_eligible: archive,
             ..command.clone()
         });
         let observation = Observation::new(prepared);
@@ -100,7 +104,7 @@ async fn discussion_receipts_preserve_all_stored_and_replay_commit_exits() {
         );
         assert_eq!(
             completion.into_fanout(&observation).unwrap().is_some(),
-            matches!(expected, MucDiscussionAdmission::Stored(_)),
+            matches!(expected, MucDiscussionAdmission::Stored { .. }),
             "{label}"
         );
         let mut observer = pool.acquire().await.unwrap();

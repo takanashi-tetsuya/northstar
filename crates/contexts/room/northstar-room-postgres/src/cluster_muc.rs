@@ -273,6 +273,7 @@ struct RoomAuthority {
     allow_registration: bool,
     allow_invites: bool,
     allow_subject_change: bool,
+    logging_enabled: bool,
     max_occupants: i32,
 }
 
@@ -358,7 +359,8 @@ async fn lock_room(
                 COALESCE(configuration_expires_at<=clock_timestamp(),FALSE)
                     AS configuration_expired,
                 destroyed_at IS NOT NULL AS destroyed,members_only,moderated,
-                non_anonymous,allow_registration,allow_invites,allow_subject_change,max_occupants
+                non_anonymous,allow_registration,allow_invites,allow_subject_change,
+                logging_enabled,max_occupants
            FROM muc_rooms WHERE id=$1 FOR UPDATE",
     )
     .bind(room_id)
@@ -377,6 +379,7 @@ async fn lock_room(
         allow_registration: row.get("allow_registration"),
         allow_invites: row.get("allow_invites"),
         allow_subject_change: row.get("allow_subject_change"),
+        logging_enabled: row.get("logging_enabled"),
         max_occupants: row.get("max_occupants"),
     }))
 }

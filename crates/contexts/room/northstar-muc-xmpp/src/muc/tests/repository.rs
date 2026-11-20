@@ -25,7 +25,7 @@ impl MucDiscussionRepository for Repository {
     ) -> RepositoryFuture<'a, Self::Error> {
         Box::pin(async move {
             self.0.record(Event::Legacy(command.clone()));
-            Ok(self.0.outcome(command.id))
+            Ok(self.0.outcome(command))
         })
     }
 
@@ -35,10 +35,10 @@ impl MucDiscussionRepository for Repository {
     ) -> RepositoryFuture<'a, Self::Error> {
         Box::pin(async move {
             self.0.record(Event::Observed(request.command().clone()));
-            let outcome = self.0.outcome(request.command().id);
+            let outcome = self.0.outcome(request.command());
             if matches!(
                 outcome,
-                MucDiscussionAdmission::Stored(_) | MucDiscussionAdmission::Replay(_)
+                MucDiscussionAdmission::Stored { .. } | MucDiscussionAdmission::Replay(_)
             ) {
                 discussion_owner::commit_observed(
                     std::future::ready(Ok::<_, anyhow::Error>(())),
@@ -60,11 +60,20 @@ impl MucRepository for Repository {
     async fn local_room_snapshot(&self, localpart: &str) -> Result<Option<MucRoom>> {
         assert_eq!(localpart, "room");
         self.0.record(Event::Room);
-        Ok(Some(room()))
+        Ok(Some(MucRoom {
+            logging_enabled: self.0.logging_enabled.load(Ordering::Relaxed),
+            ..room()
+        }))
     }
 
     async fn local_affiliation(&self, room_id: Uuid, user_id: Uuid) -> Result<Option<String>> {
         assert_eq!((room_id, user_id), (ROOM_ID, USER_ID));
+        self.0.record(Event::Affiliation);
+        Ok(Some("member".to_owned()))
+    }
+
+    async fn federated_affiliation(&self, room_id: Uuid, bare_jid: &str) -> Result<Option<String>> {
+        assert_eq!((room_id, bare_jid), (ROOM_ID, "alice@remote.test"));
         self.0.record(Event::Affiliation);
         Ok(Some("member".to_owned()))
     }
@@ -86,7 +95,7 @@ impl MucRepository for Repository {
     async fn set_local_subject(
         &self,
         mutation: MucSubjectMutation<'_>,
-        archive: bool,
+        archive_stanza: Option<&str>,
         authority: MucActorAuthority,
     ) -> Result<MucSubjectOutcome> {
         assert_eq!(
@@ -98,7 +107,7 @@ impl MucRepository for Repository {
             ),
             (ROOM_ID, SENDER, "Alice", "new topic")
         );
-        assert!(archive);
+        assert_eq!(archive_stanza, Some(mutation.stanza));
         assert_eq!(authority.expected_room_epoch, ROOM_EPOCH);
         assert_eq!(authority.connection_uuid, CONNECTION_ID);
         self.0.record(Event::Subject(mutation.stanza.to_owned()));
@@ -112,7 +121,7 @@ impl MucRepository for Repository {
         expected_config_version: i64,
         actor: &ClusterMucOccupancyTarget,
         mutation: MucSubjectMutation<'_>,
-        archive: bool,
+        archive: ClusterMucSubjectArchive<'_>,
     ) -> Result<ClusterMucTransitionOutcome> {
         assert_eq!(
             (expected_room_epoch, expected_config_version),
@@ -128,7 +137,8 @@ impl MucRepository for Repository {
             ),
             (ROOM_ID, SENDER, "Alice", "new topic")
         );
-        assert!(archive);
+        assert!(archive.digest_archive);
+        assert_eq!(archive.eligible_stanza, Some(mutation.stanza));
         self.0.record(Event::ClusterSubject(
             operation_id,
             mutation.stanza.to_owned(),
@@ -198,7 +208,6 @@ impl MucRepository for Repository {
     }
 
     unused_async! {
-        fn federated_affiliation(&self, room_id: Uuid, bare_jid: &str) -> Result<Option<String>>;
         fn enabled_local_account(&self, username: &str) -> Result<Option<MucLocalAccount>>;
         fn is_blocked_for_account(&self, owner_id: Uuid, owner_bare_jid: &str, candidate: &str) -> Result<bool>;
         fn blocked_jids(&self, user_id: Uuid) -> Result<Vec<String>>;

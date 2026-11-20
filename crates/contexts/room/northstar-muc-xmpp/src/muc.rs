@@ -48,8 +48,8 @@ use northstar_room_core::MucJoinSnapshotError;
 use northstar_xep_0280::should_copy as should_carbon;
 use northstar_xep_0359::add_stanza_id;
 use northstar_xml_builder::message_policy::{
-    add_delay_from, encrypted_archive_stanza, has_no_store_hint, is_abuse_rated_message,
-    offline_storage_permitted, processing_hints_fragment,
+    add_delay_from, has_no_store_hint, is_abuse_rated_message, offline_storage_permitted,
+    processing_hints_fragment,
 };
 use northstar_xml_builder::rewrite::{set_from, set_to};
 use northstar_xml_builder::stanza::{

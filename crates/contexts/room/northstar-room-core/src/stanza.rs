@@ -225,6 +225,42 @@ pub fn muc_occupant_id(room_secret: &[u8], user_bare_jid: &str) -> String {
 }
 
 /// Replace any client-supplied occupant-id with the authoritative room value.
+/// Preserve the live room ID used under stable policies. If an eligible
+/// message crossed a logging disable, remove the ID for the unwritten row.
+pub fn apply_muc_discussion_reflection(
+    stanza: &mut String,
+    room_jid: &str,
+    admission: crate::MucDiscussionAdmission,
+    expected_archive: bool,
+) {
+    let crate::MucDiscussionAdmission::Stored {
+        id,
+        archived: false,
+    } = admission
+    else {
+        return;
+    };
+    if !expected_archive {
+        return;
+    }
+    let Ok(document) = Document::parse(stanza) else {
+        return;
+    };
+    let id = id.to_string();
+    let generated = document
+        .root_element()
+        .children()
+        .find(|child| {
+            child.has_tag_name(("urn:xmpp:sid:0", "stanza-id"))
+                && child.attribute("by") == Some(room_jid)
+                && child.attribute("id") == Some(id.as_str())
+        })
+        .map(|child| child.range());
+    if let Some(range) = generated {
+        stanza.replace_range(range, "");
+    }
+}
+
 pub fn set_muc_occupant_id(stanza: &str, occupant_id: &str) -> String {
     let Ok(document) = Document::parse(stanza) else {
         return stanza.to_owned();

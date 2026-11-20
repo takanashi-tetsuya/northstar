@@ -222,7 +222,9 @@ fn accepted(x: muc::AcceptanceClass) -> wire::AcceptanceClass {
 }
 fn muc_outcome(x: MucDiscussionAdmission) -> wire::MucOutcome<E> {
     match x {
-        MucDiscussionAdmission::Stored(x) => wire::MucOutcome::Stored(wire::OneId { id: id(x) }),
+        MucDiscussionAdmission::Stored { id: stored, .. } => {
+            wire::MucOutcome::Stored(wire::OneId { id: id(stored) })
+        }
         MucDiscussionAdmission::Replay(x) => wire::MucOutcome::Replay(wire::OneId { id: id(x) }),
         MucDiscussionAdmission::Unauthorized => wire::MucOutcome::Unauthorized(wire::Empty {}),
         MucDiscussionAdmission::Stale => wire::MucOutcome::Stale(wire::Empty {}),
@@ -291,7 +293,8 @@ fn input_command(x: &wire::MucCommand<wire::Id>) -> MucDiscussion {
         nick: x.nick.as_str().into(),
         stanza: x.stanza.as_str().into(),
         encrypted: x.encrypted,
-        archive: x.archive,
+        archive_eligible: x.archive,
+        unarchived_stanza_bytes: None,
         retention_days: x.retention_days,
         authority: MucActorAuthority {
             clustered: a.clustered,
@@ -337,7 +340,7 @@ fn observed_command(x: &MucDiscussion) -> Result<wire::MucCommand<E>> {
         nick: wire::Text::new(&x.nick)?,
         stanza: wire::Text::new(&x.stanza)?,
         encrypted: x.encrypted,
-        archive: x.archive,
+        archive: x.archive_eligible,
         retention_days: x.retention_days,
         authority: wire::Authority {
             clustered: a.clustered,
@@ -511,7 +514,10 @@ impl MucDiscussionRepository for DiscussionRepository {
                 lost(&self.recorder);
             }
             let outcome = self.supplied.original_id.get().map_or_else(
-                || MucDiscussionAdmission::Stored(request.command().id),
+                || MucDiscussionAdmission::Stored {
+                    id: request.command().id,
+                    archived: request.command().archive_eligible,
+                },
                 |x| MucDiscussionAdmission::Replay(x.0),
             );
             // The reply is a supplied repository fact. The real observed COMMIT

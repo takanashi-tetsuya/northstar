@@ -35,6 +35,7 @@ pub(super) struct Host {
     pub state: Arc<State>,
     pub service: MucService<repository::Repository>,
     pub clustered: bool,
+    pub federated: bool,
 }
 
 impl MucHost for Host {
@@ -114,7 +115,16 @@ impl MucHost for Host {
     fn muc_occupants_for(&self, room_jid: &str) -> Vec<(String, Occupant<Self>)> {
         assert_eq!(room_jid, ROOM_JID);
         self.state.record(Event::Recipients);
-        vec![("Bob".to_owned(), occupant("Bob", "bob@local.test/phone"))]
+        let mut occupants = vec![("Bob".to_owned(), occupant("Bob", "bob@local.test/phone"))];
+        if self.federated {
+            let mut remote = occupant("Alice", REMOTE_SENDER);
+            remote.endpoint = MucOccupantEndpoint::Federated {
+                authenticated_domain: "remote.test".to_owned(),
+                connection_id: CONNECTION_ID,
+            };
+            occupants.push(("Alice".to_owned(), remote));
+        }
+        occupants
     }
 
     async fn blocked_muc_recipient_accounts(
@@ -122,11 +132,16 @@ impl MucHost for Host {
         occupants: &[Occupant<Self>],
         stanza_senders: &[String],
     ) -> HashSet<String> {
-        assert_eq!(occupants.len(), 1);
+        let sender = if self.federated {
+            REMOTE_SENDER
+        } else {
+            SENDER
+        };
+        assert_eq!(occupants.len(), if self.federated { 2 } else { 1 });
         assert_eq!(occupants[0].full_jid, "bob@local.test/phone");
         assert_eq!(
             stanza_senders,
-            &[format!("{ROOM_JID}/Alice"), SENDER.to_owned()]
+            &[format!("{ROOM_JID}/Alice"), sender.to_owned()]
         );
         self.state.record(Event::Privacy);
         HashSet::new()
@@ -168,6 +183,40 @@ impl MucHost for Host {
         )
     }
 
+    fn federated_muc_pg_authority_enabled(&self) -> bool {
+        assert!(self.federated);
+        false
+    }
+
+    fn federated_muc_telemetry(&self) -> FederatedMucTelemetry<'_> {
+        assert!(self.federated);
+        let counters = &self.state.counters;
+        FederatedMucTelemetry::new(
+            &counters[0],
+            &counters[1],
+            &counters[2],
+            &counters[3],
+            &counters[4],
+            &counters[5],
+        )
+    }
+
+    fn validate_routed_message(&self, _root: Node<'_, '_>) -> Result<(), &'static str> {
+        assert!(self.federated);
+        Ok(())
+    }
+
+    async fn federated_muc_publish_room_message(
+        &self,
+        room_jid: &str,
+        stanza: &str,
+        real_sender: Option<&str>,
+    ) -> Result<()> {
+        assert!(self.federated);
+        self.publish_muc_cluster_stanza(room_jid, stanza, real_sender)
+            .await
+    }
+
     async fn admit_federated_room_stream<F>(
         &self,
         request: FederatedMamStreamRequest<'_>,
@@ -190,9 +239,7 @@ impl MucHost for Host {
         fn federated_muc_admit_mutation(&self) -> Result<()>;
         fn federated_muc_occupants_for_closed_connection(&self, authenticated_domain: &str, connection_id: Uuid) -> Vec<Occupant<Self>>;
         fn federated_muc_owner_node_id(&self) -> &str;
-        fn federated_muc_pg_authority_enabled(&self) -> bool;
         fn federated_muc_redis_transport_enabled(&self) -> bool;
-        fn federated_muc_telemetry(&self) -> FederatedMucTelemetry<'_>;
         fn local_muc_occupant_by_nick(&self, room_jid: &str, nick: &str) -> Option<Occupant<Self>>;
         fn local_muc_occupant_exact(&self, identity: LocalMucOccupantIdentity<'_>) -> Option<Occupant<Self>>;
         fn mix_muc_mirror_enabled(&self) -> bool;
@@ -208,7 +255,6 @@ impl MucHost for Host {
         fn server_name(&self) -> &str;
         fn set_local_muc_affiliation_exact(&self, identity: LocalMucOccupantIdentity<'_>, affiliation: &str, moderated: bool, only_if_none: bool, expected_affiliation: Option<&str>) -> Option<Occupant<Self>>;
         fn set_local_muc_role_exact(&self, identity: LocalMucOccupantIdentity<'_>, expected_role: &str, role: &str, non_anonymous: Option<bool>) -> Option<Occupant<Self>>;
-        fn validate_routed_message(&self, root: Node<'_, '_>) -> Result<(), &'static str>;
         fn xmpp_external_route_domain_allowed(&self, domain: &str) -> bool;
     }
 
@@ -238,7 +284,6 @@ impl MucHost for Host {
         fn federated_muc_publish_presence(&self, room_jid: &str, occupant: &SerializableMucOccupant, unavailable: bool, created: bool, id: Option<&str>) -> Result<()>;
         fn federated_muc_publish_private_message(&self, room_jid: &str, target_nick: &str, stanza: &str, real_sender: &str) -> Result<()>;
         fn federated_muc_publish_removal_presence(&self, room_jid: &str, occupant: &SerializableMucOccupant, status: Option<u16>, actor_nick: Option<&str>, reason: Option<&str>) -> Result<()>;
-        fn federated_muc_publish_room_message(&self, room_jid: &str, stanza: &str, real_sender: Option<&str>) -> Result<()>;
         fn federated_muc_register_occupant(&self, room_jid: &str, nick: &str, json: &str) -> Result<bool>;
         fn federated_muc_rename_occupant(&self, room_jid: &str, old_nick: &str, new_nick: &str, expected_epoch: Uuid, old_json: &str, new_json: &str) -> Result<MucRename>;
         fn join_cluster_muc_room(&self, room: &str) -> Result<()>;

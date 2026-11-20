@@ -30,7 +30,8 @@ use std::{collections::VecDeque, future::Future, pin::Pin};
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MucSubjectCommand<'a> {
     pub mutation: MucSubjectMutation<'a>,
-    pub archive: bool,
+    /// Stanza-derived candidate for MAM when the room enables logging.
+    pub archive_stanza: Option<&'a str>,
     pub authority: MucActorAuthority,
 }
 
@@ -59,7 +60,11 @@ pub fn validate_muc_subject_command(
     if cmd.mutation.subject.len() > 10_000 {
         return Err(MucSubjectValidationError::SubjectTooLong);
     }
-    if cmd.mutation.stanza.trim().is_empty() {
+    if cmd.mutation.stanza.trim().is_empty()
+        || cmd
+            .archive_stanza
+            .is_some_and(|stanza| stanza.trim().is_empty())
+    {
         return Err(MucSubjectValidationError::EmptyStanza);
     }
     Ok(())
@@ -395,7 +400,12 @@ mod tests {
             command: &'a MucDiscussion,
         ) -> RepositoryFuture<'a, Self::Error> {
             self.calls.fetch_add(1, Ordering::Relaxed);
-            Box::pin(async move { Ok(MucDiscussionAdmission::Stored(command.id)) })
+            Box::pin(async move {
+                Ok(MucDiscussionAdmission::Stored {
+                    id: command.id,
+                    archived: command.archive_eligible,
+                })
+            })
         }
     }
 
@@ -411,7 +421,8 @@ mod tests {
             nick: "Alice".to_owned(),
             stanza: "<message/>".to_owned(),
             encrypted: false,
-            archive: true,
+            archive_eligible: true,
+            unarchived_stanza_bytes: None,
             retention_days: 0,
             authority: MucActorAuthority {
                 clustered: false,
@@ -456,7 +467,13 @@ mod tests {
             "local.test",
         );
         let result = block_on(application.admit_discussion(&command("local.test"))).unwrap();
-        assert_eq!(result, MucDiscussionAdmission::Stored(Uuid::from_u128(1)));
+        assert_eq!(
+            result,
+            MucDiscussionAdmission::Stored {
+                id: Uuid::from_u128(1),
+                archived: true,
+            }
+        );
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
@@ -523,7 +540,7 @@ mod tests {
                 stanza: "<message/>",
                 encrypted: false,
             },
-            archive: true,
+            archive_stanza: Some("<message/>"),
             authority: auth.clone(),
         };
         assert!(validate_muc_subject_command(&valid_cmd).is_ok());

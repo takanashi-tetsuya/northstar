@@ -34,7 +34,7 @@ impl<R: MucRepository> MucService<R> {
         expected_config_version: i64,
         actor: &ClusterMucOccupancyTarget,
         mutation: MucSubjectMutation<'_>,
-        archive: bool,
+        archive: ClusterMucSubjectArchive<'_>,
     ) -> Result<ClusterMucTransitionOutcome> {
         self.repository
             .set_local_cluster_subject(

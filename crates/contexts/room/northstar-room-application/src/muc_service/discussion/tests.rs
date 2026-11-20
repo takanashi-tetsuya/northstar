@@ -82,8 +82,8 @@ impl MucRepository for Repository {
         mutate_local_cluster_registration(operation_id: Uuid, room_id: Uuid, expected_room_epoch: Uuid, expected_config_version: i64, principal: &ClusterMucPrincipal, actor_full_jid: &str, reserved_nick: Option<&str>) -> ClusterMucRegistrationOutcome;
         admit_local_invite_command(configured_domain: &str, id: Uuid, room_id: Uuid, recipient_id: Uuid, sender_jid: &str, stanza: &str, encrypted: bool, policy: OfflineStorePolicy, cluster_authority: Option<&ClusterMucInviteAuthority>) -> DurableMucInviteOutcome;
         admit_federated_invite_command(room_id: Uuid, invitee_bare_jid: &str, target_domain: &str, stanza: &str, bounce_to: Option<&str>, policy: FederatedInvitePolicy, cluster_authority: Option<&ClusterMucInviteAuthority>) -> bool;
-        set_local_subject(mutation: MucSubjectMutation<'_>, archive: bool, authority: MucActorAuthority) -> MucSubjectOutcome;
-        set_local_cluster_subject(operation_id: Uuid, expected_room_epoch: Uuid, expected_config_version: i64, actor: &ClusterMucOccupancyTarget, mutation: MucSubjectMutation<'_>, archive: bool) -> ClusterMucTransitionOutcome;
+        set_local_subject(mutation: MucSubjectMutation<'_>, archive_stanza: Option<&str>, authority: MucActorAuthority) -> MucSubjectOutcome;
+        set_local_cluster_subject(operation_id: Uuid, expected_room_epoch: Uuid, expected_config_version: i64, actor: &ClusterMucOccupancyTarget, mutation: MucSubjectMutation<'_>, archive: ClusterMucSubjectArchive<'_>) -> ClusterMucTransitionOutcome;
         retract_local_message_and_archive_action(mutation: MucRetractionMutation<'_>) -> MucRetractionOutcome;
         update_local_legacy_config(room_id: Uuid, actor_full_jid: &str, config: MucConfigUpdate<'_>) -> MucConfigurationOutcome;
         cancel_locked_room(room_id: Uuid, actor_full_jid: &str) -> bool;
@@ -205,7 +205,10 @@ async fn discussion_service_preserves_receiving_authority() {
     drop(work);
     assert_eq!(
         completion.outcome(),
-        MucDiscussionAdmission::Stored(input.id),
+        MucDiscussionAdmission::Stored {
+            id: input.id,
+            archived: input.archive_eligible,
+        },
         "configured receiver"
     );
     assert_eq!(

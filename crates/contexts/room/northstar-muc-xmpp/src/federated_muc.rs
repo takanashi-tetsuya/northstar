@@ -24,8 +24,7 @@ use northstar_xep_0280::should_copy as should_carbon;
 use northstar_xep_0313::build_extended_form as mam_extended_form;
 use northstar_xep_0359::add_stanza_id;
 use northstar_xml_builder::message_policy::{
-    add_delay_from, encrypted_archive_stanza, message_storage_policy, processing_hints_fragment,
-    MessageStoragePolicy,
+    add_delay_from, message_storage_policy, processing_hints_fragment, MessageStoragePolicy,
 };
 use northstar_xml_builder::rewrite::{set_from, set_to};
 use northstar_xml_builder::stanza::{child_text, iq_result_to, is_encrypted, stanza_error_type};

@@ -16,8 +16,8 @@ pub enum AcceptanceClass {
 }
 
 impl AcceptanceClass {
-    fn for_command(command: &MucDiscussion) -> Self {
-        match (command.archive, command.origin_id.is_some()) {
+    fn for_projection(archived: bool, has_origin_id: bool) -> Self {
+        match (archived, has_origin_id) {
             (true, true) => Self::ArchiveAndIdentity,
             (true, false) => Self::ArchiveOnly,
             (false, true) => Self::IdentityOnly,
@@ -55,7 +55,8 @@ impl PreparedDiscussion {
     }
 
     pub fn requested_class(&self) -> AcceptanceClass {
-        AcceptanceClass::for_command(self.command())
+        let command = self.command();
+        AcceptanceClass::for_projection(command.archive_eligible, command.origin_id.is_some())
     }
 
     fn same_input(&self, other: &Self) -> bool {
@@ -219,7 +220,9 @@ impl Snapshot {
             returned: match self.returned {
                 None => ReturnClass::NotReturned,
                 Some(Returned::Error) => ReturnClass::Error,
-                Some(Returned::Outcome(MucDiscussionAdmission::Stored(_))) => ReturnClass::Stored,
+                Some(Returned::Outcome(MucDiscussionAdmission::Stored { .. })) => {
+                    ReturnClass::Stored
+                }
                 Some(Returned::Outcome(MucDiscussionAdmission::Replay(_))) => ReturnClass::Replay,
                 Some(Returned::Outcome(MucDiscussionAdmission::Unauthorized)) => {
                     ReturnClass::Unauthorized
@@ -366,11 +369,17 @@ impl Request {
     }
 
     fn proposed(&self, outcome: MucDiscussionAdmission) -> Result<CommitFact, Rejected> {
+        let command = self.command();
         let fresh_class = match outcome {
-            MucDiscussionAdmission::Stored(id) if id == self.command().id => {
-                Some(self.observation.0.prepared.requested_class())
+            MucDiscussionAdmission::Stored { id, archived }
+                if id == command.id && (!archived || command.archive_eligible) =>
+            {
+                Some(AcceptanceClass::for_projection(
+                    archived,
+                    command.origin_id.is_some(),
+                ))
             }
-            MucDiscussionAdmission::Replay(_) if self.command().origin_id.is_some() => None,
+            MucDiscussionAdmission::Replay(_) if command.origin_id.is_some() => None,
             _ => return Err(Rejected::Result),
         };
         Ok(CommitFact {
@@ -419,7 +428,7 @@ impl Request {
             return Err(Rejected::NotStarted);
         }
         let fresh = match outcome {
-            MucDiscussionAdmission::Stored(_) | MucDiscussionAdmission::Replay(_) => {
+            MucDiscussionAdmission::Stored { .. } | MucDiscussionAdmission::Replay(_) => {
                 let proposed = self.proposed(outcome)?;
                 match state.knowledge {
                     Knowledge::ReceiptKnown(receipt) if receipt == proposed => {}
@@ -431,7 +440,7 @@ impl Request {
                     }
                     _ => return Err(Rejected::Result),
                 }
-                matches!(outcome, MucDiscussionAdmission::Stored(_))
+                matches!(outcome, MucDiscussionAdmission::Stored { .. })
             }
             MucDiscussionAdmission::Unauthorized | MucDiscussionAdmission::Stale => {
                 if state.knowledge != Knowledge::NoCommitRequested {
@@ -643,14 +652,20 @@ pub(crate) fn assert_commit_fact_cannot_be_substituted() {
         Observation::new(application.prepare_discussion(fixture::command(true, true)));
     let request = observation.request().unwrap();
     request.start().unwrap();
-    let outcome = MucDiscussionAdmission::Stored(request.command().id);
+    let outcome = MucDiscussionAdmission::Stored {
+        id: request.command().id,
+        archived: true,
+    };
     let entered = request.enter_commit(outcome).unwrap();
     let before = observation.snapshot();
     for (label, fact) in [
         (
             "substituted result identity",
             CommitFact {
-                outcome: MucDiscussionAdmission::Stored(uuid::Uuid::from_u128(999)),
+                outcome: MucDiscussionAdmission::Stored {
+                    id: uuid::Uuid::from_u128(999),
+                    archived: true,
+                },
                 fresh_class: Some(AcceptanceClass::ArchiveAndIdentity),
             },
         ),
@@ -702,7 +717,8 @@ mod tests {
             nick: "Alice".to_owned(),
             stanza: "<message/>".to_owned(),
             encrypted: false,
-            archive,
+            archive_eligible: archive,
+            unarchived_stanza_bytes: None,
             retention_days: 0,
             authority: MucActorAuthority {
                 clustered: false,
@@ -744,7 +760,10 @@ mod tests {
     }
 
     fn stored(request: &Request) -> MucDiscussionAdmission {
-        MucDiscussionAdmission::Stored(request.command().id)
+        MucDiscussionAdmission::Stored {
+            id: request.command().id,
+            archived: request.command().archive_eligible,
+        }
     }
 
     fn commit(request: &Request, outcome: MucDiscussionAdmission) {
@@ -806,7 +825,14 @@ mod tests {
         second.start().unwrap();
         let before = left.snapshot();
         for wrong in [
-            MucDiscussionAdmission::Stored(Uuid::from_u128(7)),
+            MucDiscussionAdmission::Stored {
+                id: Uuid::from_u128(7),
+                archived: false,
+            },
+            MucDiscussionAdmission::Stored {
+                id: first.command().id,
+                archived: true,
+            },
             MucDiscussionAdmission::Replay(Uuid::from_u128(1)),
             MucDiscussionAdmission::Unauthorized,
         ] {
@@ -1044,7 +1070,12 @@ mod tests {
         type Error = ();
         fn admit_discussion<'a>(&'a self, command: &'a MucDiscussion) -> RepositoryFuture<'a, ()> {
             self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Box::pin(async move { Ok(MucDiscussionAdmission::Stored(command.id)) })
+            Box::pin(async move {
+                Ok(MucDiscussionAdmission::Stored {
+                    id: command.id,
+                    archived: command.archive_eligible,
+                })
+            })
         }
     }
 
@@ -1086,7 +1117,10 @@ mod tests {
         let input = command(true, true);
         assert_eq!(
             ready(application.admit_discussion(&input)).unwrap(),
-            MucDiscussionAdmission::Stored(input.id)
+            MucDiscussionAdmission::Stored {
+                id: input.id,
+                archived: true,
+            }
         );
         let observation = Observation::new(application.prepare_discussion(input));
         let request = observation.request().unwrap();

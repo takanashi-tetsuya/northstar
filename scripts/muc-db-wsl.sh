@@ -195,6 +195,9 @@ cargo test --locked --offline -p northstar-db-it \
   room::muc::history_identity_and_mutations_are_atomic_under_replay_and_failure \
   -- --ignored --nocapture
 cargo test --locked --offline -p northstar-db-it \
+  room::muc_logging_admission::local_and_federated_discussions_follow_locked_logging \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
   room::cluster_muc::postgres_outbox_maintenance_is_atomic_and_snapshot_is_complete \
   -- --ignored --exact --nocapture
 cargo test --locked --offline -p northstar-db-it \

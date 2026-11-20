@@ -14,6 +14,7 @@ pub struct MucDiscussionLive {
     pub room_from: String,
     pub sender: String,
     pub stanza: String,
+    logging_was_enabled: bool,
 }
 
 impl PreparedMucDiscussion {
@@ -32,13 +33,16 @@ impl PreparedMucDiscussion {
                     == Some(room.localpart.as_str()),
             "MUC discussion room projection mismatch"
         );
-        let archive = if command.archive && command.encrypted {
-            encrypted_archive_stanza(&stanza)
-        } else {
-            stanza.clone()
-        };
+        let archive = crate::federated_muc::message::archive_eligibility::archive_payload(
+            &stanza,
+            command.archive_eligible,
+            command.encrypted,
+        );
         anyhow::ensure!(
-            command.stanza == archive,
+            command.stanza == archive
+                && command
+                    .unarchived_stanza_bytes
+                    .is_none_or(|bytes| bytes == stanza.len()),
             "MUC discussion archive projection mismatch"
         );
         {
@@ -67,6 +71,7 @@ impl PreparedMucDiscussion {
                 room_from,
                 sender,
                 stanza,
+                logging_was_enabled: room.logging_enabled,
             },
         })
     }
@@ -93,10 +98,17 @@ pub struct BoundMucDiscussion {
 
 impl BoundMucDiscussion {
     pub fn finish(
-        self,
+        mut self,
         completion: discussion_owner::Completion,
     ) -> Result<Option<AcceptedMucDiscussion>> {
+        let admission = completion.outcome();
         let permit = completion.into_fanout(&self.observation)?;
+        northstar_room_core::stanza::apply_muc_discussion_reflection(
+            &mut self.live.stanza,
+            &self.live.room_jid,
+            admission,
+            self.request.command().archive_eligible && self.live.logging_was_enabled,
+        );
         Ok(permit.map(|permit| AcceptedMucDiscussion {
             live: self.live,
             permit,

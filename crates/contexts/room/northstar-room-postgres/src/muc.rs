@@ -118,13 +118,7 @@ pub struct MucActorAuthority<'a> {
     pub cluster_target: Option<super::cluster_muc::ClusterMucOccupancyTarget>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MucDiscussionAdmission {
-    Stored(Uuid),
-    Replay(Uuid),
-    Unauthorized,
-    Stale,
-}
+pub use northstar_room_core::MucDiscussionAdmission;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MucSubjectOutcome {
@@ -144,9 +138,9 @@ pub struct MucDiscussion<'a> {
     pub nick: &'a str,
     pub stanza: &'a str,
     pub encrypted: bool,
-    /// `false` records only the origin admission identity, honoring XEP-0334
-    /// without reopening a replay/fan-out path.
-    pub archive: bool,
+    /// Stanza and server policy permit storage when the locked room enables logging.
+    pub archive_eligible: bool,
+    pub unarchived_stanza_bytes: Option<usize>,
     /// The same bounded age policy used by the room MAM archive.  Zero keeps
     /// the project's existing "automatic deletion disabled" semantics.
     pub retention_days: i64,

@@ -15,15 +15,16 @@ use anyhow::Result;
 pub use northstar_room_core::{
     ClusterMucAffiliationSubject, ClusterMucConfigurationOutcome, ClusterMucInviteAuthority,
     ClusterMucJoin, ClusterMucJoinOutcome, ClusterMucOccupancy, ClusterMucOccupancyTarget,
-    ClusterMucPrincipal, ClusterMucRegistrationOutcome, ClusterMucTransitionOutcome,
-    ClusterMucWakeDescriptor, DurableMucInviteOutcome, FederatedInvitePolicy, MucActorAuthority,
-    MucActorPrincipal, MucAdminAffiliationEntry, MucAdminRoleEntry, MucAdminRoleList,
-    MucAdminSnapshot, MucAffiliationBatchOutcome, MucAffiliationBatchWrite, MucAffiliationChange,
-    MucAffiliationTarget, MucCapacityExceeded, MucConfigUpdate, MucConfigurationOutcome,
-    MucConfigurationWrite, MucDiscoPage, MucDiscussion, MucDiscussionAdmission, MucLocalAccount,
-    MucMessage, MucRegistrationOutcome, MucRegistrationTarget, MucRegistrationWrite,
-    MucRetractionKind, MucRetractionMutation, MucRetractionOutcome, MucRoom, MucSubjectMutation,
-    MucSubjectOutcome, OfflineStoreOutcome, OfflineStorePolicy,
+    ClusterMucPrincipal, ClusterMucRegistrationOutcome, ClusterMucSubjectArchive,
+    ClusterMucTransitionOutcome, ClusterMucWakeDescriptor, DurableMucInviteOutcome,
+    FederatedInvitePolicy, MucActorAuthority, MucActorPrincipal, MucAdminAffiliationEntry,
+    MucAdminRoleEntry, MucAdminRoleList, MucAdminSnapshot, MucAffiliationBatchOutcome,
+    MucAffiliationBatchWrite, MucAffiliationChange, MucAffiliationTarget, MucCapacityExceeded,
+    MucConfigUpdate, MucConfigurationOutcome, MucConfigurationWrite, MucDiscoPage, MucDiscussion,
+    MucDiscussionAdmission, MucLocalAccount, MucMessage, MucRegistrationOutcome,
+    MucRegistrationTarget, MucRegistrationWrite, MucRetractionKind, MucRetractionMutation,
+    MucRetractionOutcome, MucRoom, MucSubjectMutation, MucSubjectOutcome, OfflineStoreOutcome,
+    OfflineStorePolicy,
 };
 use northstar_time::{DateTime, Utc};
 use sha2::{Digest, Sha256};
@@ -577,7 +578,7 @@ pub trait MucRepository:
     fn set_local_subject(
         &self,
         mutation: MucSubjectMutation<'_>,
-        archive: bool,
+        archive_stanza: Option<&str>,
         authority: MucActorAuthority,
     ) -> impl std::future::Future<Output = Result<MucSubjectOutcome>> + Send;
     fn set_local_cluster_subject(
@@ -587,7 +588,7 @@ pub trait MucRepository:
         expected_config_version: i64,
         actor: &ClusterMucOccupancyTarget,
         mutation: MucSubjectMutation<'_>,
-        archive: bool,
+        archive: ClusterMucSubjectArchive<'_>,
     ) -> impl std::future::Future<Output = Result<ClusterMucTransitionOutcome>> + Send;
     fn retract_local_message_and_archive_action(
         &self,

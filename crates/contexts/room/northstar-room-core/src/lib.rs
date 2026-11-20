@@ -120,7 +120,10 @@ pub struct MucDiscussion {
     pub nick: String,
     pub stanza: String,
     pub encrypted: bool,
-    pub archive: bool,
+    /// Stanza and server policy permit a MAM projection if room logging is enabled.
+    pub archive_eligible: bool,
+    /// Live XML size when the encrypted archive candidate uses different bytes.
+    pub unarchived_stanza_bytes: Option<usize>,
     pub retention_days: i64,
     pub authority: MucActorAuthority,
 }
@@ -138,7 +141,11 @@ impl MucDiscussion {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MucDiscussionAdmission {
-    Stored(Uuid),
+    /// Fresh admission. The origin identity and MAM projection are independent.
+    Stored {
+        id: Uuid,
+        archived: bool,
+    },
     Replay(Uuid),
     Unauthorized,
     Stale,
@@ -376,6 +383,12 @@ pub struct MucSubjectMutation<'a> {
     pub subject: &'a str,
     pub stanza: &'a str,
     pub encrypted: bool,
+}
+
+/// Clustered subject projection and the archive bit used by existing replay digests.
+pub struct ClusterMucSubjectArchive<'a> {
+    pub eligible_stanza: Option<&'a str>,
+    pub digest_archive: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -656,7 +669,8 @@ mod tests {
             nick: "Alice".to_owned(),
             stanza: "<message/>".to_owned(),
             encrypted: false,
-            archive: true,
+            archive_eligible: true,
+            unarchived_stanza_bytes: None,
             retention_days: 30,
             authority: MucActorAuthority {
                 clustered: false,

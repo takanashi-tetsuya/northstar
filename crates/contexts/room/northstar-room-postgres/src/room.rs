@@ -63,7 +63,8 @@ pub fn discussion_to_db(command: &MucDiscussion) -> crate::muc::MucDiscussion<'_
         nick: &command.nick,
         stanza: &command.stanza,
         encrypted: command.encrypted,
-        archive: command.archive,
+        archive_eligible: command.archive_eligible,
+        unarchived_stanza_bytes: command.unarchived_stanza_bytes,
         retention_days: command.retention_days,
         authority: actor_authority_to_db(&command.authority),
     }
@@ -76,46 +77,19 @@ impl<E: RoomEffects> MucDiscussionRepository for PostgresMucRepository<E> {
         &'a self,
         command: &'a MucDiscussion,
     ) -> RepositoryFuture<'a, Self::Error> {
-        Box::pin(async move {
-            Ok(
-                match crate::muc::admit_muc_discussion(&self.pool, discussion_to_db(command))
-                    .await?
-                {
-                    crate::muc::MucDiscussionAdmission::Stored(id) => {
-                        MucDiscussionAdmission::Stored(id)
-                    }
-                    crate::muc::MucDiscussionAdmission::Replay(id) => {
-                        MucDiscussionAdmission::Replay(id)
-                    }
-                    crate::muc::MucDiscussionAdmission::Unauthorized => {
-                        MucDiscussionAdmission::Unauthorized
-                    }
-                    crate::muc::MucDiscussionAdmission::Stale => MucDiscussionAdmission::Stale,
-                },
-            )
-        })
+        Box::pin(crate::muc::admit_muc_discussion(
+            &self.pool,
+            discussion_to_db(command),
+        ))
     }
 
     fn admit_discussion_observed<'a>(
         &'a self,
         request: &'a northstar_room_application::discussion::Request,
     ) -> RepositoryFuture<'a, Self::Error> {
-        Box::pin(async move {
-            Ok(
-                match crate::muc::admit_muc_discussion_observed(&self.pool, request).await? {
-                    crate::muc::MucDiscussionAdmission::Stored(id) => {
-                        MucDiscussionAdmission::Stored(id)
-                    }
-                    crate::muc::MucDiscussionAdmission::Replay(id) => {
-                        MucDiscussionAdmission::Replay(id)
-                    }
-                    crate::muc::MucDiscussionAdmission::Unauthorized => {
-                        MucDiscussionAdmission::Unauthorized
-                    }
-                    crate::muc::MucDiscussionAdmission::Stale => MucDiscussionAdmission::Stale,
-                },
-            )
-        })
+        Box::pin(crate::muc::admit_muc_discussion_observed(
+            &self.pool, request,
+        ))
     }
 }
 
@@ -419,14 +393,14 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
     async fn set_local_subject(
         &self,
         mutation: MucSubjectMutation<'_>,
-        archive: bool,
+        archive_stanza: Option<&str>,
         authority: MucActorAuthority,
     ) -> Result<MucSubjectOutcome> {
         let authority = actor_authority_to_db(&authority);
         Ok(crate::muc::set_local_muc_subject(
             &self.pool,
             subject_mutation_into_db(mutation),
-            archive,
+            archive_stanza,
             authority,
         )
         .await?
@@ -440,7 +414,7 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
         expected_config_version: i64,
         actor: &ClusterMucOccupancyTarget,
         mutation: MucSubjectMutation<'_>,
-        archive: bool,
+        archive: ClusterMucSubjectArchive<'_>,
     ) -> Result<ClusterMucTransitionOutcome> {
         let actor = actor.into();
         crate::cluster_muc::set_cluster_muc_subject(

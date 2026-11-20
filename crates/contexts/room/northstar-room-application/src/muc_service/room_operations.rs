@@ -20,7 +20,7 @@ impl<R: MucRepository> MucService<R> {
             });
         }
         let outcome = self
-            .set_local_subject(command.mutation, command.archive, command.authority)
+            .set_local_subject(command.mutation, command.archive_stanza, command.authority)
             .await?;
         Ok(MucSubjectResult { outcome })
     }
@@ -407,7 +407,7 @@ impl<R: MucRepository> MucService<R> {
     pub async fn set_local_subject(
         &self,
         mutation: MucSubjectMutation<'_>,
-        archive: bool,
+        archive_stanza: Option<&str>,
         authority: MucActorAuthority,
     ) -> Result<MucSubjectOutcome> {
         if !authority.matches_authenticated_scope(&self.configured_domain) {
@@ -415,7 +415,7 @@ impl<R: MucRepository> MucService<R> {
         }
 
         self.repository
-            .set_local_subject(mutation, archive, authority)
+            .set_local_subject(mutation, archive_stanza, authority)
             .await
     }
 

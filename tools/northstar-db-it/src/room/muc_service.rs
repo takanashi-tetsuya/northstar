@@ -111,7 +111,8 @@ async fn local_actor_scope_requires_the_configured_domain_at_the_service_boundar
             nick: "Alice".to_owned(),
             stanza: "<message/>".to_owned(),
             encrypted: false,
-            archive: false,
+            archive_eligible: false,
+            unarchived_stanza_bytes: None,
             retention_days: 0,
             authority: MucActorAuthority {
                 clustered: false,

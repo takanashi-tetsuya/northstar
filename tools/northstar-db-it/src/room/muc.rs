@@ -37,7 +37,7 @@ fn register_isolated_schema_for_harness(schema: &str, owner_token: &str) {
         .expect("durably flush the isolated MUC test schema record");
 }
 
-async fn create_harness_owned_schema(admin: &sqlx::PgPool, schema: &str) {
+pub(super) async fn create_harness_owned_schema(admin: &sqlx::PgPool, schema: &str) {
     let owner_token = Uuid::new_v4().simple().to_string();
     register_isolated_schema_for_harness(schema, &owner_token);
     let mut transaction = admin.begin().await.unwrap();
@@ -62,7 +62,7 @@ async fn create_harness_owned_schema(admin: &sqlx::PgPool, schema: &str) {
     transaction.commit().await.unwrap();
 }
 
-async fn await_authorization_pause(entered: &Arc<tokio::sync::Notify>, operation: &str) {
+pub(super) async fn await_authorization_pause(entered: &Arc<tokio::sync::Notify>, operation: &str) {
     tokio::time::timeout(Duration::from_secs(5), entered.notified())
         .await
         .unwrap_or_else(|_| panic!("MUC authorization pause was not reached: {operation}"));
@@ -845,7 +845,8 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
                 nick: "Alice",
                 stanza: "<message id='first'/>",
                 encrypted: false,
-                archive: true,
+                archive_eligible: true,
+                unarchived_stanza_bytes: None,
                 retention_days: 30,
                 authority: local_process_authority(
                     room_epoch,
@@ -860,7 +861,10 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
         )
         .await
         .unwrap(),
-        MucDiscussionAdmission::Stored(first_id)
+        MucDiscussionAdmission::Stored {
+            id: first_id,
+            archived: true,
+        }
     );
     assert_eq!(
         admit_muc_discussion(
@@ -874,7 +878,8 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
                 nick: "Renamed",
                 stanza: "<message id='altered-retry'/>",
                 encrypted: true,
-                archive: true,
+                archive_eligible: true,
+                unarchived_stanza_bytes: None,
                 retention_days: 30,
                 authority: local_process_authority(
                     room_epoch,
@@ -904,7 +909,8 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
                 nick: "Bob",
                 stanza: "<message id='same-id-other-actor'/>",
                 encrypted: false,
-                archive: true,
+                archive_eligible: true,
+                unarchived_stanza_bytes: None,
                 retention_days: 30,
                 authority: federated_process_authority(
                     room_epoch,
@@ -917,7 +923,10 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
         )
         .await
         .unwrap(),
-        MucDiscussionAdmission::Stored(other_actor_id)
+        MucDiscussionAdmission::Stored {
+            id: other_actor_id,
+            archived: true,
+        }
     );
 
     let no_store_id = Uuid::new_v4();
@@ -933,7 +942,8 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
                 nick: "Alice",
                 stanza: "<message><body>not retained</body></message>",
                 encrypted: false,
-                archive: false,
+                archive_eligible: false,
+                unarchived_stanza_bytes: None,
                 retention_days: 30,
                 authority: local_process_authority(
                     room_epoch,
@@ -948,7 +958,10 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
         )
         .await
         .unwrap(),
-        MucDiscussionAdmission::Stored(no_store_id)
+        MucDiscussionAdmission::Stored {
+            id: no_store_id,
+            archived: false,
+        }
     );
     assert_eq!(
         admit_muc_discussion(
@@ -962,7 +975,8 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
                 nick: "Alice",
                 stanza: "<message><body>retry must not be retained</body></message>",
                 encrypted: false,
-                archive: true,
+                archive_eligible: true,
+                unarchived_stanza_bytes: None,
                 retention_days: 30,
                 authority: local_process_authority(
                     room_epoch,
@@ -1012,7 +1026,8 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
             nick: "Alice",
             stanza: "<message/>",
             encrypted: false,
-            archive: true,
+            archive_eligible: true,
+            unarchived_stanza_bytes: None,
             retention_days: 30,
             authority: local_process_authority(
                 room_epoch,
@@ -1050,7 +1065,8 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
                     nick: "Alice",
                     stanza: "<message id='concurrent'/>",
                     encrypted: false,
-                    archive: true,
+                    archive_eligible: true,
+                    unarchived_stanza_bytes: None,
                     retention_days: 30,
                     authority: local_process_authority(
                         room_epoch,
@@ -1076,7 +1092,7 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
     assert_eq!(
         outcomes
             .iter()
-            .filter(|outcome| matches!(outcome, MucDiscussionAdmission::Stored(_)))
+            .filter(|outcome| matches!(outcome, MucDiscussionAdmission::Stored { .. }))
             .count(),
         1
     );
@@ -1115,7 +1131,7 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
             stanza: "<message><subject>must roll back</subject></message>",
             encrypted: false,
         },
-        true,
+        Some("<message><subject>must roll back</subject></message>"),
         local_process_authority(
             room_epoch,
             owner_id,
@@ -1157,7 +1173,7 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
                 stanza: "<message><subject>committed</subject></message>",
                 encrypted: false,
             },
-            true,
+            Some("<message><subject>committed</subject></message>"),
             local_process_authority(
                 room_epoch,
                 owner_id,
@@ -1201,7 +1217,7 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
                 stanza: "<message><subject>state only</subject></message>",
                 encrypted: false,
             },
-            false,
+            None,
             local_process_authority(
                 room_epoch,
                 owner_id,
@@ -1275,6 +1291,13 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
     assert!(!configured.allow_private_messages);
     assert!(!configured.logging_enabled);
     assert!(!configured.allow_registration);
+
+    // Later admission and moderation checks need an active archive projection.
+    sqlx::query("UPDATE muc_rooms SET logging_enabled=TRUE WHERE id=$1")
+        .bind(room_id)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let bob_id = Uuid::new_v4();
     let carol_id = Uuid::new_v4();
@@ -1379,7 +1402,8 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
             nick: "Alice",
             stanza: "<message id='forged-domain'/>",
             encrypted: false,
-            archive: true,
+            archive_eligible: true,
+            unarchived_stanza_bytes: None,
             retention_days: 30,
             authority: local_process_authority(
                 room_epoch,
@@ -1425,7 +1449,8 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
                     nick: "Alice",
                     stanza: "<message id='lock-order'/>",
                     encrypted: false,
-                    archive: false,
+                    archive_eligible: false,
+                    unarchived_stanza_bytes: None,
                     retention_days: 30,
                     authority: local_process_authority(
                         room_epoch,
@@ -1476,7 +1501,10 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
     .expect("MUC room/advisory writers must not deadlock");
     assert_eq!(
         admission.unwrap(),
-        MucDiscussionAdmission::Stored(lock_order_id)
+        MucDiscussionAdmission::Stored {
+            id: lock_order_id,
+            archived: false,
+        }
     );
     assert_eq!(affiliation.unwrap(), MucAffiliationOutcome::Applied);
 
@@ -1498,7 +1526,8 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
                     encrypted: false,
                     // Even volatile/no-store traffic must cross the same
                     // authorization transaction before live fan-out.
-                    archive: false,
+                    archive_eligible: false,
+                    unarchived_stanza_bytes: None,
                     retention_days: 30,
                     authority: local_process_authority(
                         room_epoch,
@@ -1552,7 +1581,8 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
                     nick: "Remote",
                     stanza: "<message id='revoked-federated'/>",
                     encrypted: false,
-                    archive: true,
+                    archive_eligible: true,
+                    unarchived_stanza_bytes: None,
                     retention_days: 30,
                     authority: federated_process_authority(
                         room_epoch,
@@ -1763,7 +1793,8 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
                     nick: "ClusterAlice",
                     stanza: "<message id='revoked-cluster'/>",
                     encrypted: false,
-                    archive: true,
+                    archive_eligible: true,
+                    unarchived_stanza_bytes: None,
                     retention_days: 30,
                     authority: MucActorAuthority {
                         clustered: true,
@@ -1858,7 +1889,8 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
                     nick: "ClusterRemote",
                     stanza: "<message id='revoked-federated-cluster'/>",
                     encrypted: false,
-                    archive: true,
+                    archive_eligible: true,
+                    unarchived_stanza_bytes: None,
                     retention_days: 30,
                     authority: MucActorAuthority {
                         clustered: true,
@@ -2010,7 +2042,8 @@ async fn history_identity_and_mutations_are_atomic_under_replay_and_failure() {
             nick: "Alice",
             stanza: "<message id='target'><body>secret</body></message>",
             encrypted: false,
-            archive: true,
+            archive_eligible: true,
+            unarchived_stanza_bytes: None,
             retention_days: 30,
             authority: local_process_authority(
                 room_epoch,

@@ -25,6 +25,14 @@ TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
   operations::data_lifecycle::postgres_hold_cleanup_delete_release_and_audit_invariants \
   -- --ignored --exact --nocapture
 TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
+  cargo test --locked --offline -p northstar-db-it \
+  message::retention::personal_mam_paging_across_deletion_preserves_surviving_cursors \
+  -- --ignored --exact --nocapture
+TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
+  cargo test --locked --offline -p northstar-db-it \
+  operations::data_lifecycle::legal_hold_blocks_sender_retractions_until_release \
+  -- --ignored --exact --nocapture
+TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
   cargo test --locked --offline \
   -p northstar-pubsub-postgres \
   subscription_cleanup::tests::postgres_cleanup_preserves_live_subscriptions_and_event_snapshots_and_is_bounded \

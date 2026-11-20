@@ -767,3 +767,105 @@ async fn offline_retention_and_admin_clear_respect_sm_and_bosh_owners() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn personal_mam_paging_across_deletion_preserves_surviving_cursors() {
+    use northstar_archive_core::{MamArchiveQuery, MamRsmPage::*};
+    use northstar_archive_postgres::mam_user_archive_page;
+
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(4)
+        .connect(&url)
+        .await
+        .unwrap();
+    crate::support::migrate(&pool).await.unwrap();
+    let owner = insert_user(&pool, "mam-paging").await;
+    let [a, b, c, d, e, f, g] = [(); 7].map(|()| Uuid::new_v4());
+    for (id, second) in [a, b, c, d, e, f, g].into_iter().zip(0_i32..7) {
+        sqlx::query(
+            "INSERT INTO message_archive(id,owner_id,peer_jid,peer_full_jid,stanza,encrypted,created_at)
+             VALUES($1,$2,'peer@example.test','peer@example.test','<message/>',FALSE,
+                    TIMESTAMPTZ '2026-01-01 00:00:00Z' + $3::integer * INTERVAL '1 second')",
+        )
+        .bind(id)
+        .bind(owner)
+        .bind(second)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let read = async |page, max| {
+        let query = MamArchiveQuery {
+            with_jid: None,
+            start: None,
+            end: None,
+            before_id: None,
+            after_id: None,
+            ids: Vec::new(),
+            page,
+            max,
+        };
+        mam_user_archive_page(&pool, owner, &query).await.unwrap()
+    };
+    let check = async |page, max, ids: &[Uuid], total, index, complete| {
+        let result = read(page, max)
+            .await
+            .unwrap_or_else(|| panic!("expected a personal MAM page for {page:?}"));
+        let actual: Vec<_> = result.rows.iter().map(|row| row.id).collect();
+        assert_eq!(actual.as_slice(), ids, "{page:?}");
+        assert_eq!(
+            (result.total, result.first_index, result.complete),
+            (total, index, complete),
+            "{page:?}"
+        );
+    };
+    let delete = async |id: Uuid| {
+        assert_eq!(
+            sqlx::query("DELETE FROM message_archive WHERE owner_id=$1 AND id=$2")
+                .bind(owner)
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap()
+                .rows_affected(),
+            1
+        );
+        for cursor in [Before(id), After(id)] {
+            assert!(read(cursor, 2).await.is_none(), "{cursor:?}");
+        }
+    };
+
+    check(First, 4, &[a, b, c, d], 7, 0, false).await;
+    check(After(d), 2, &[e, f], 7, 4, false).await;
+    check(Before(d), 2, &[b, c], 7, 1, false).await;
+    check(Index(4), 2, &[e, f], 7, 4, false).await;
+
+    delete(b).await;
+    check(After(d), 2, &[e, f], 6, 3, false).await;
+    check(Before(d), 2, &[a, c], 6, 0, true).await;
+    // Resuming after four consumed rows by offset skips the unseen row e.
+    check(Index(4), 2, &[f, g], 6, 4, true).await;
+
+    delete(f).await;
+    check(After(d), 2, &[e, g], 5, 3, true).await;
+    check(Before(d), 2, &[a, c], 5, 0, true).await;
+
+    check(After(e), 2, &[g], 5, 4, true).await;
+    check(Before(e), 2, &[c, d], 5, 1, false).await;
+    delete(d).await;
+    check(After(e), 2, &[g], 4, 3, true).await;
+    check(Before(e), 2, &[a, c], 4, 0, true).await;
+
+    check(First, 0, &[], 4, 0, false).await;
+    check(After(g), 0, &[], 4, 0, true).await;
+    check(Before(a), 0, &[], 4, 0, true).await;
+    sqlx::query("DELETE FROM users WHERE id=$1")
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .unwrap();
+}

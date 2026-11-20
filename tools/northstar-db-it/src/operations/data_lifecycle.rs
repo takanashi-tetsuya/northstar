@@ -422,3 +422,408 @@ async fn postgres_hold_cleanup_delete_release_and_audit_invariants() {
         .await
         .unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn legal_hold_blocks_sender_retractions_until_release() {
+    use northstar_archive_postgres::{
+        mam_user_archive_page, MamArchiveQuery, MamRoomReadOutcome, MamRsmPage,
+    };
+    use northstar_message_application::retractions::{
+        ArchiveWrite, OwnerProjection, RetractionCommand, RetractionOutcome, RetractionService,
+    };
+    use northstar_operations_application::api_queries::{ApiQueryRepository, ApiReadAuthority};
+    use northstar_room_postgres::muc::{
+        retract_muc_message_and_archive_action, MucActorAuthority, MucActorPrincipal,
+        MucRetractionKind, MucRetractionMutation, MucRetractionOutcome,
+    };
+    use northstar_workflows::{
+        api_queries::PostgresApiQueryRepository, mam_room::mam_room_archive_page_authorized,
+        retraction_repository::PostgresRetractionRepository,
+    };
+
+    let url = std::env::var("TEST_DATABASE_URL")
+        .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(8)
+        .connect(&url)
+        .await
+        .unwrap();
+    crate::support::migrate(&pool).await.unwrap();
+
+    let [admin, sender, room, hold, personal, muc, personal_action, muc_action] =
+        [(); 8].map(|()| Uuid::new_v4());
+    let username = format!("held-sender-{}", &sender.simple().to_string()[..12]);
+    let actor_scope = format!("{username}@local.test");
+    let sender_jid = format!("{actor_scope}/Device");
+    let peer = "peer@example.test/device";
+    let localpart = format!("held-room-{}", &room.simple().to_string()[..12]);
+    for (id, name, is_admin) in [
+        (
+            admin,
+            format!("held-admin-{}", &admin.simple().to_string()[..12]),
+            true,
+        ),
+        (sender, username.clone(), false),
+    ] {
+        sqlx::query(
+            "INSERT INTO users(id,username,password_hash,is_admin) VALUES($1,$2,'test-only',$3)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(is_admin)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let room_epoch: Uuid = sqlx::query_scalar(
+        "INSERT INTO muc_rooms(id,localpart,owner_id,persistent)
+         VALUES($1,$2,$3,TRUE) RETURNING room_epoch",
+    )
+    .bind(room)
+    .bind(&localpart)
+    .bind(sender)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO muc_affiliations(room_id,user_id,affiliation) VALUES($1,$2,'owner')")
+        .bind(room)
+        .bind(sender)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let personal_original = format!(
+        "<message from='{sender_jid}' to='{peer}' id='personal-original'><body>personal evidence</body></message>"
+    );
+    let muc_original =
+        "<message type='groupchat' id='muc-original'><body>room evidence</body></message>";
+    sqlx::query(
+        "INSERT INTO message_archive(id,owner_id,peer_jid,peer_full_jid,stanza,encrypted,stanza_id,created_at)
+         VALUES($1,$2,'peer@example.test',$3,$4,FALSE,'personal-original',NOW()-INTERVAL '1 day')",
+    )
+    .bind(personal)
+    .bind(sender)
+    .bind(peer)
+    .bind(&personal_original)
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO muc_messages(id,room_id,sender_jid,nick,stanza,encrypted,actor_scope,created_at)
+         VALUES($1,$2,$3,'Sender',$4,FALSE,$5,NOW()-INTERVAL '1 day')",
+    )
+    .bind(muc)
+    .bind(room)
+    .bind(&sender_jid)
+    .bind(muc_original)
+    .bind(&actor_scope)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    create_legal_hold_in_tx(
+        &mut tx,
+        admin,
+        &CreateLegalHold {
+            id: hold,
+            title: "retraction fixture",
+            authority_reference: "case-retraction",
+            reason: "preserve original archive payloads",
+            targets: &[
+                LegalHoldTarget::PersonalArchive(personal),
+                LegalHoldTarget::MucArchiveRoom(room),
+            ],
+            request_id: Uuid::new_v4(),
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let service = RetractionService::new(
+        PostgresRetractionRepository::new(pool.clone()),
+        northstar_abuse_application::guard::test_personal_retraction_content_keyring(),
+        "local.test",
+    );
+    let personal_action_xml = format!(
+        "<message from='{sender_jid}' to='{peer}' id='personal-action'><retract xmlns='urn:xmpp:message-retract:1' id='personal-original'/></message>"
+    );
+    let retract_personal = async || {
+        service
+            .apply(
+                &[OwnerProjection {
+                    owner_id: sender,
+                    peer_jid: peer,
+                }],
+                &sender_jid,
+                &RetractionCommand {
+                    target_id: "personal-original",
+                    action_id: "personal-action",
+                    semantic_payload: &personal_action_xml,
+                },
+                &[ArchiveWrite {
+                    id: personal_action,
+                    owner_id: sender,
+                    peer_jid: peer,
+                    stanza: &personal_action_xml,
+                    encrypted: false,
+                    stanza_id: Some("personal-action"),
+                }],
+                None,
+            )
+            .await
+    };
+    let muc_tombstone = "<message type='groupchat' id='muc-original'><retracted xmlns='urn:xmpp:message-retract:1' id='muc-action'/></message>";
+    let muc_action_xml = format!(
+        "<message type='groupchat' id='muc-action'><retract xmlns='urn:xmpp:message-retract:1' id='{muc}'/></message>"
+    );
+    let retract_muc = async || {
+        retract_muc_message_and_archive_action(
+            &pool,
+            MucRetractionMutation {
+                action_id: muc_action,
+                room_id: room,
+                target_id: muc,
+                expected_stanza: muc_original,
+                actor_scope: &actor_scope,
+                sender_jid: &sender_jid,
+                nick: "Sender",
+                tombstone: muc_tombstone,
+                action_stanza: &muc_action_xml,
+                reason: None,
+                kind: MucRetractionKind::Author,
+                authority: MucActorAuthority {
+                    clustered: false,
+                    expected_room_epoch: room_epoch,
+                    principal: MucActorPrincipal::Local {
+                        user_id: sender,
+                        local_domain: "local.test",
+                    },
+                    actor_scope: &actor_scope,
+                    full_jid: &sender_jid,
+                    nick: "Sender",
+                    occupant_incarnation: Uuid::nil(),
+                    connection_uuid: Uuid::nil(),
+                    expected_role: "moderator",
+                    expected_affiliation: "owner",
+                    cluster_target: None,
+                },
+            },
+        )
+        .await
+    };
+
+    let api = PostgresApiQueryRepository::new(pool.clone());
+    let token = northstar_auth_postgres::users::create_api_session(&pool, sender, 1)
+        .await
+        .unwrap();
+    let query = MamArchiveQuery {
+        with_jid: None,
+        start: None,
+        end: None,
+        before_id: None,
+        after_id: None,
+        ids: Vec::new(),
+        page: MamRsmPage::First,
+        max: 10,
+    };
+    let read_pages = async || {
+        let personal_page = mam_user_archive_page(&pool, sender, &query)
+            .await
+            .unwrap()
+            .unwrap();
+        let history = api
+            .history(
+                ApiReadAuthority {
+                    user_id: sender,
+                    auth_generation: 0,
+                    session_token: &token,
+                },
+                &query,
+            )
+            .await
+            .unwrap()
+            .expect("sender's bearer should authorize personal history")
+            .value
+            .unwrap();
+        assert_eq!(history, personal_page);
+        let MamRoomReadOutcome::Allowed {
+            value: Some(muc_page),
+            ..
+        } = mam_room_archive_page_authorized(
+            &pool,
+            &localpart,
+            &northstar_archive_core::MamLocalAuthority {
+                id: sender,
+                username: username.clone(),
+                auth_generation: 0,
+            },
+            &northstar_archive_core::MamRoomReadAuthority {
+                full_jid: sender_jid.clone(),
+                occupancy: None,
+            },
+            &query,
+        )
+        .await
+        .unwrap()
+        else {
+            panic!("room owner should have a MUC MAM page");
+        };
+        (personal_page, muc_page)
+    };
+    let export = async || {
+        let mut tx = pool.begin().await.unwrap();
+        let page = export_legal_hold_page_in_tx(
+            &mut tx,
+            admin,
+            hold,
+            10,
+            Uuid::new_v4(),
+            None,
+            Uuid::new_v4(),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        assert!(page.complete && page.next.is_none());
+        page
+    };
+
+    for error in [
+        retract_personal().await.unwrap_err(),
+        retract_muc().await.unwrap_err(),
+    ] {
+        let db = error
+            .downcast_ref::<sqlx::Error>()
+            .and_then(sqlx::Error::as_database_error)
+            .expect("held sender retraction should hit the preservation trigger");
+        assert_eq!(db.code().as_deref(), Some("55000"));
+        assert_eq!(
+            db.message(),
+            "data record is protected by an active legal hold"
+        );
+    }
+    let (held_personal, held_muc) = read_pages().await;
+    assert_eq!(held_personal.total, 1);
+    assert_eq!(held_muc.total, 1);
+    assert_eq!(
+        archive_payloads(&held_personal),
+        [(personal, personal_original.as_str())]
+    );
+    assert_eq!(archive_payloads(&held_muc), [(muc, muc_original)]);
+    let held_export = export().await;
+    assert!(held_export.hold.released_at.is_none());
+    assert_eq!(
+        exported_payloads(&held_export),
+        [
+            (
+                "personal_archive",
+                personal,
+                Some(personal_original.as_str())
+            ),
+            ("muc_archive", muc, Some(muc_original)),
+        ]
+    );
+
+    let mut release = pool.begin().await.unwrap();
+    release_legal_hold_in_tx(
+        &mut release,
+        admin,
+        hold,
+        "fixture authority ended",
+        Uuid::new_v4(),
+    )
+    .await
+    .unwrap();
+    release.commit().await.unwrap();
+    assert_eq!(
+        retract_personal().await.unwrap(),
+        RetractionOutcome::Applied {
+            tombstones: 1,
+            live_claim_id: None,
+        }
+    );
+    assert_eq!(retract_muc().await.unwrap(), MucRetractionOutcome::Applied);
+
+    let (released_personal, released_muc) = read_pages().await;
+    assert_eq!(released_personal.total, 2);
+    assert_eq!(released_muc.total, 2);
+    let personal_tombstone = released_personal.rows[0].stanza.as_str();
+    let parsed = roxmltree::Document::parse(personal_tombstone).unwrap();
+    let children: Vec<_> = parsed
+        .root_element()
+        .children()
+        .filter(roxmltree::Node::is_element)
+        .collect();
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].tag_name().name(), "retracted");
+    assert_eq!(
+        children[0].tag_name().namespace(),
+        Some("urn:xmpp:message-retract:1")
+    );
+    assert_eq!(children[0].attribute("id"), Some("personal-action"));
+    assert_eq!(
+        archive_payloads(&released_personal),
+        [
+            (personal, personal_tombstone),
+            (personal_action, personal_action_xml.as_str()),
+        ]
+    );
+    assert_eq!(
+        archive_payloads(&released_muc),
+        [(muc, muc_tombstone), (muc_action, muc_action_xml.as_str())]
+    );
+    assert_eq!(
+        released_personal.rows[0].created_at,
+        held_personal.rows[0].created_at
+    );
+    assert_eq!(released_muc.rows[0].created_at, held_muc.rows[0].created_at);
+    let released_export = export().await;
+    assert!(released_export.hold.released_at.is_some());
+    assert!(released_export.lease_expires_at.is_none());
+    // The exact target follows the current payload of its original row. The
+    // room scope also includes the newly archived retraction action.
+    assert_eq!(
+        exported_payloads(&released_export),
+        [
+            ("personal_archive", personal, Some(personal_tombstone)),
+            ("muc_archive", muc, Some(muc_tombstone)),
+            ("muc_archive", muc_action, Some(muc_action_xml.as_str())),
+        ]
+    );
+
+    sqlx::query("DELETE FROM muc_rooms WHERE id=$1")
+        .bind(room)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM users WHERE id=ANY($1)")
+        .bind(vec![sender, admin])
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+fn archive_payloads(page: &northstar_archive_core::ArchivePage) -> Vec<(Uuid, &str)> {
+    page.rows
+        .iter()
+        .map(|row| (row.id, row.stanza.as_str()))
+        .collect()
+}
+
+fn exported_payloads(page: &LegalHoldExport) -> Vec<(&str, Uuid, Option<&str>)> {
+    page.records
+        .iter()
+        .map(|record| {
+            assert!(!record.encrypted);
+            assert_eq!(record.payload_disposition, "server_plaintext");
+            (
+                record.resource_type.as_str(),
+                record.record_id,
+                record.server_visible_payload.as_deref(),
+            )
+        })
+        .collect()
+}

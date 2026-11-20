@@ -145,6 +145,7 @@ WP-495 後，operation runtime 的現行位置為
 | S41 根 crate 測試碼遷出 | WP-615–623 | backup 映像檔補上伺服器二進位檔連結程式碼的 4 份授權檔，`pool.rs` 與邊界門禁的註解改為 SQLx 0.9（WP-615）；唯讀審計根 crate 的 358 個測試（WP-616）；直接訊息測試移入 `northstar-message-xmpp`（WP-617）；MUC 與聯邦 MUC 測試移入 `northstar-muc-xmpp`，PostCommitPlan 測試移入 room 應用層，刪除一個重複測試，`northstar-archive-postgres` 補上它需要的 `northstar-time` postgres feature（WP-618）；MIX 測試依擁有者移入 `northstar-mix-xmpp`、room 應用層、room core 與 stream（WP-619）；其餘 saved-case 重播、Stage 4 擷取介面卡與 native/frame harness 原樣移入 `northstar-test-harness` 的整合測試目標 `saved_replay`，根 crate 刪除只服務這些測試的依賴，腳本中的品質指令加上 `--workspace`（WP-620）；文件、CODEOWNERS 與 test-support 註解改指新位置，刪除空的 `northstar-auth-xmpp` test-support feature（WP-621）；`test-ocsp-stapling.sh` 改從 `northstar-s2s` 執行 OCSP 測試（WP-622）；記錄階段（WP-623）。盤點見 5.37 | 357 個測試依名稱對應後不變，1 個與 room 應用層測試重複的刪除；根 crate 的 `src/` 只剩組合根與它自己的測試；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S42 門禁再審計 | WP-624–634 | 唯讀審計架構與執行門禁（WP-624），以及其他 17 支讀 Rust 內容的門禁、結構門禁的範圍與兩份過時文件（WP-625）；擁有者 crate 補上 13 個測試：Drop、Clone、簽章與欄位型別探針（WP-626），會話路由移除、MIX 重試喚醒、ReplayService 傳輸方法與三個 context 的欄位清單（WP-627）；兩個內嵌測試模組移為子檔（WP-628）；架構門禁（WP-629）、執行門禁（WP-630）與其他 9 支門禁（WP-631）刪除空轉、重複、已有測試涵蓋與已改寫為測試的檢查；結構門禁擴及 `crates/` 與 `tools/`（WP-632）；改寫 `MODULARIZATION_PROGRESS_REPORT.md` 與 `LIBRARY_SPLIT_LEDGER.md`（WP-633）；記錄階段（WP-634）。盤點見 5.38 | 讀 Rust 的門禁淨減 471 行，自測減少 79 個案例；workspace 測試由 3,461 個增為 3,474 個，原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S43 執行計劃與超標檔 | WP-635–642 | 唯讀審計重構前的執行計劃（WP-635）；依職責拆分 Caps 執行期（WP-636）、叢集單元測試（WP-637）、Stage 4 saved replay 模組（WP-638）與 compact 編解碼的支援程式碼（WP-639），全部只移動；清空結構門禁的超標基線（WP-640）；把執行計劃改寫為現況指南（WP-641）；記錄階段（WP-642）。盤點見 5.39 | 4 個超標檔都降到預算內，基線沒有例外；執行計劃由 1,027 行減為 203 行；workspace 測試仍是 3,474 個，76 個叢集測試依路徑改名；全部門禁、Python 腳本測試與離線 CI 通過 |
+| S44 C1 語義退出（第一批） | WP-643–652 | 唯讀審計 C1 PubSub/PEP（WP-643）與 C2 Archive/MAM（WP-644）；`northstar-stream` 的 `misc.rs` 依職責只移動地拆分（WP-645）；自動建立節點的發布改為一個交易（WP-646）；服務節點的項目與訂閱選項讀取（WP-647）、探索與自身清單（WP-648）、PEP 讀取與探索（WP-649）、MIX 的 profile 轉送（WP-650）與 Private XML 讀取（WP-651）各由一個唯讀快照回答，PEP 建立與 Private XML 一般寫入檢查帳號 generation；記錄階段（WP-652）。盤點見 5.40 | C1 的 16 項發現關閉 8 項；新增 21 個單元測試與 33 個 ignored 資料庫測試，資料庫測試登記在 CI 執行的 DB 腳本，合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -1770,6 +1771,52 @@ S42 結束時留下兩件事：`docs/MODULARIZATION_EXECUTION_PLAN.md`（1,027 �
 S43 後最大的生產檔是 `northstar-listener` 的 `listener.rs`（1,492 行），最大的測試檔是 `stage4_replay/tests.rs`（2,742
 行）。workspace 測試仍是 3,474 個（ignored 296 個），76 個依路徑改名，其餘名稱不變。Cargo.lock 仍是 485 個套件。
 
+### 5.40 S44 盤點：C1 語義退出第一批（`dfb0194d90fe2fc12885d3ebc4f5c6608a62da0f`）
+
+S43 後 C1（PubSub/PEP）與 C2（Archive/MAM）的結構搬移已完成，語義退出審查仍開放。S44 先唯讀審計兩個上下文，同時只移動地
+拆分 stream 的 `misc.rs`，再依 C1 審計修正並發讀寫可能回傳混合狀態、或以已撤銷的帳號身分寫入的路徑。C2 的修正排在下一階段。
+
+C1 審計（WP-643）逐一列出服務節點、PEP、Private XML、profile 與投遞的讀寫路徑，檢查每條路徑的快照、交易與鎖順序，提出 16 項
+發現：查詢分多次讀取授權事實與資料列（C1-01–05、C1-11、C1-13）、自動建立節點與發布分成兩個交易（C1-06）、選項與寫入前提在交易
+外決定（C1-07–09）、兩種帳號寫入沒有 generation fence（C1-10），以及投遞受眾、權威型別、隱私租約與時鐘來源（C1-12、C1-14–16）。
+C2 審計（WP-644）提出 15 項，涵蓋 MUC 與 MIX 的讀取授權、個人封存的偏好取樣、tombstone、legal hold、outbox 配額與 MAM 關閉時的
+附屬介面。
+
+| WP | 內容 |
+| --- | --- |
+| WP-643 | 唯讀審計 C1：操作清單、快照與競態分析、交易與鎖順序、命令／查詢分離，16 項發現與 4 個工作包（審計報告不入庫） |
+| WP-644 | 唯讀審計 C2：查詢清單、tombstone 與刪除、競態分析，15 項發現與工作包（審計報告不入庫） |
+| WP-645 | `northstar-stream` 的 `protocol/misc.rs`（1,429 行）依職責拆出 `account.rs`（770 行）、`binding.rs`（359 行）與 `delivery_settings.rs`（313 行），只移動；父模組降為 19 行，公開路徑不變 |
+| WP-646 | 發布到不存在的服務節點時，建立節點與發布在同一個交易：名稱與擁有者配額、節點與從屬、授權、項目與兩個事件一起提交，任何發布失敗整批回滾（C1-06）。鎖順序：擁有者配額 seed 0 → 建立者儲存 seed 1 → G → A → E |
+| WP-647 | 服務節點的項目 GET（葉節點與集合）與訂閱選項 GET 由一個唯讀快照回答；快照的第一個語句取 `statement_timestamp()`，所有租約與轉址判斷用同一時刻。存取判斷移到 core 的 `item_retrieval_access`（C1-01、C1-02） |
+| WP-648 | 服務節點的 disco#info、disco#items 與以節點篩選的自身訂閱／從屬清單由一個快照回答，找不到節點時在同一快照內判斷轉址（C1-04） |
+| WP-649 | PEP 的 C2S 與 S2S 項目讀取、節點與帳號探索、擁有者訂閱清單由一個快照回答，存取規則移到 core 的 `pep_read_access`；明確建立 PEP 節點在擁有者 advisory 鎖後以 `users FOR SHARE` 檢查帳號仍啟用、auth generation 未變（C1-03、C1-10 的 PEP 部分） |
+| WP-650 | MIX 頻道與聯邦 PAM 的 vCard-temp／vCard4 轉送在一個快照內讀取參與者、PAM、封鎖、偏好與 profile；可見性規則不變，不加 PEP 節點 ACL（C1-13） |
+| WP-651 | Private XML GET 一次讀取全部要求的元素與舊版書籤投影；一般 SET 在既有的 `users FOR UPDATE` 檢查 username、auth generation 與啟用狀態，不符時回滾並回 not-authorized（C1-11、C1-10 的 Private XML 部分） |
+| WP-652 | 記錄階段 |
+
+快照規則：回答需要多個事實的查詢使用一個 `REPEATABLE READ READ ONLY` 交易，沿用既有的 SQL 語句，不取列鎖或 advisory 鎖；每個
+快照都有在唯讀連線上執行的資料庫測試，以及在讀取中途提交撤銷與新資料的並發測試。穩定狀態下的 XML、錯誤條件、子元素順序與
+RSM 游標不變。
+
+與審計的差異：審計把 C1-10 列為一項；它的兩種寫入分屬 PEP 與 Private XML，分別在 WP-649 與 WP-651 修正。
+
+尚未處理：C1 的 presence 重播與其隱私租約副作用（C1-05、C1-15）、訂閱選項的修補語義與交易外的快速路徑（C1-07）、PEP 發布與
+擁有者表單的政策位置（C1-08）、一般寫入的前提（C1-09）、頭像快取的 fence（C1-12）、port 中的正規化權威型別（C1-14）與注入的
+時鐘和 ID（C1-16）。C2 的 MUC／MIX 讀取授權、查詢路由、記錄政策與 MAM 關閉時的附屬介面排在下一階段；需要產品決策的 4 項
+（MIX 個人副本的撤回、legal hold 與撤回的顯示、outbox 配額 fence、聯邦 MUC 的 MAM 投影格式）記錄在[已知問題](../KNOWN_ISSUES.md)
+（`ARCH-MIX-TOMBSTONE`、`ARCH-LEGAL-HOLD-DISPLAY`、`ARCH-OUTBOX-QUOTA`、`ARCH-MUC-MAM-PROJECTION`）。
+
+新決定：
+
+- 自動建立節點的發布失敗時整批回滾，不保留空節點（WP-646）。
+- 帶帳號身分的寫入在既有鎖順序內檢查 id、username、auth generation 與啟用狀態，不符時回滾，以該路徑既有的未授權回覆回應
+  （WP-649、WP-651）。
+- 審計中改變產品行為或線上格式的項目不在修正 WP 中自行決定，先記錄在已知問題。
+
+S44 後最大的生產檔仍是 `northstar-cluster` 的 `listener.rs`（1,492 行），最大的測試檔仍是 `stage4_replay/tests.rs`
+（2,742 行）。workspace 測試由 3,474 個增為 3,528 個（ignored 由 296 個增為 329 個），原有名稱不變。Cargo.lock 仍是 485 個
+套件，沒有新的 migration。
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點），S31 的 WP-483 起 agy 額度用盡，再改由 Codex CLI 執行（第 10 點）。
@@ -2045,7 +2092,13 @@ S43 後最大的生產檔是 `northstar-listener` 的 `listener.rs`（1,492 行�
      訊息（S37）。
    - `fuzz/` 是獨立的工作區，有自己的 Cargo.lock，CI 以 `--locked` 檢查。依賴改變後一併更新，新進的套件以
      `cargo update --precise` 對齊主 lock 的版本（S37）。
-10. Codex（S31 的 WP-483 起，2026-11-16）：agy 額度用盡期間，程式修改改由 Codex CLI（`gpt-6.1-sol`）執行，呼叫方式與
+   - 共用 target 目錄時，cargo 的 `-C metadata` 與 fingerprint 以 workspace 相對路徑計算，dep-info 記的是套件根的相對路徑；
+     另一個 worktree 剛建置過的同名 crate 會被當成最新，驗證跑到別的 WP 的程式碼（WP-646 首跑的 E0432）。驗證在整段期間
+     持有 cargo 鎖，開始前 touch 本階段所有 WP 改過的檔案（S44）。
+   - PubSub outbox 的事件依收件人分流（`{scope}|jid:{recipient}`），序號只在同一收件人內遞增；比較兩個事件序號的測試要把
+     兩個事件送給同一個收件人（S44）。
+10. Codex（S31 的 WP-483 起，2026-11-16）：agy 額度用盡期間，程式修改改由 Codex CLI（`gpt-6.1-sol`，2026-11-19 起
+    `gpt-6.2-sol`）執行，呼叫方式與
     限制同第 8 點，`model_reasoning_effort` 依任務難度選擇；第 1、3、4、7 點與第 9 點的機械搬移做法照舊。agy 恢復後回到
     第 9 點。
 
@@ -2606,3 +2659,13 @@ Stage 證據仍綁定其原提交。
 | WP-640 | 完成：清空結構門禁的超標基線 | 見 `git log --grep '\[WP-640\]'` |
 | WP-641 | 完成：改寫 `docs/MODULARIZATION_EXECUTION_PLAN.md` 為現況指南（1,027 行減為 203 行），舊版以固定連結保留 | 見 `git log --grep '\[WP-641\]'` |
 | WP-642 | 完成：記錄 S43 的階段與盤點（5.39）、R1、目標架構 4.7 與第 5 節。WP-636–641 接成一條鏈驗證：fmt、clippy、workspace 測試、受影響 crate 的單獨建置、測試名稱比對、全部門禁與 Python 腳本測試、離線 CI | 見 `git log --grep '\[WP-642\]'` |
+| WP-643 | 完成：唯讀審計 C1 PubSub/PEP 的語義退出，16 項發現（審計報告不入庫） | 見 `git log --grep '\[WP-643\]'` |
+| WP-644 | 完成：唯讀審計 C2 Archive/MAM 的語義退出，15 項發現（審計報告不入庫） | 見 `git log --grep '\[WP-644\]'` |
+| WP-645 | 完成：`northstar-stream` 的 `protocol/misc.rs` 依職責拆為 3 個子檔（1,429 行降為 19 行） | 見 `git log --grep '\[WP-645\]'` |
+| WP-646 | 完成：自動建立節點與發布在同一個交易，失敗整批回滾（C1-06） | 見 `git log --grep '\[WP-646\]'` |
+| WP-647 | 完成：服務節點的項目與訂閱選項讀取由一個唯讀快照回答（C1-01、C1-02） | 見 `git log --grep '\[WP-647\]'` |
+| WP-648 | 完成：服務節點的探索與以節點篩選的自身清單由一個唯讀快照回答（C1-04） | 見 `git log --grep '\[WP-648\]'` |
+| WP-649 | 完成：PEP 讀取與探索由一個唯讀快照回答，明確建立 PEP 節點檢查帳號 generation（C1-03、C1-10） | 見 `git log --grep '\[WP-649\]'` |
+| WP-650 | 完成：MIX 的 profile 轉送由一個唯讀快照讀取授權與 profile（C1-13） | 見 `git log --grep '\[WP-650\]'` |
+| WP-651 | 完成：Private XML 讀取由一個唯讀快照回答，一般寫入檢查帳號 generation（C1-11、C1-10） | 見 `git log --grep '\[WP-651\]'` |
+| WP-652 | 完成：記錄 S44 的階段與盤點（5.40）、目標架構 4.7 與第 5 節、執行計劃的 C1／C2 列與已知問題的 4 個新項目。WP-646–651 接成一條鏈驗證：fmt、clippy、workspace 測試、受影響 crate 的單獨建置、測試名稱比對、全部門禁與 Python 腳本測試、離線 CI，以及本機 PostgreSQL 上的 PubSub、MIX、room 與 workflows 資料庫測試 | 見 `git log --grep '\[WP-652\]'` |

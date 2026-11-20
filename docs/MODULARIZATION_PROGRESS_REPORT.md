@@ -13,7 +13,7 @@ graph is enforced by the architecture validator (`tools/architecture-validator`)
 the [library-split ledger](LIBRARY_SPLIT_LEDGER.md) summarizes what each tier
 owns and the XEP operator switches.
 
-The structural migration ran as stages S16–S43. Each stage, its work packages
+The structural migration ran as stages S16–S44. Each stage, its work packages
 and its verification are recorded in the
 [engineering structure record](architecture/engineering-structure.zh-TW.md)
 §5; target architecture §5 gives the stage table. After S41 the root package

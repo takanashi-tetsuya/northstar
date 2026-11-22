@@ -70,11 +70,13 @@ impl<E> PostgresAdminCommandRepository<E> {
             sqlx::query("SET LOCAL statement_timeout = '5s'")
                 .execute(&mut *tx)
                 .await?;
+            // The runtime role has no UPDATE on users; the reviewed row-lock
+            // capability takes the FOR SHARE lock and the actor's captured
+            // authority is compared with the locked row version.
             let authorized = sqlx::query_scalar::<_, bool>(
-                "SELECT TRUE FROM users
-                 WHERE id=$1 AND username=$2 AND auth_generation=$3
-                   AND is_admin AND NOT is_disabled
-                 FOR SHARE",
+                "SELECT TRUE FROM northstar_lock_user_rows_share(ARRAY[$1::uuid]) locked
+                 WHERE locked.username=$2 AND locked.auth_generation=$3
+                   AND locked.is_admin AND NOT locked.is_disabled",
             )
             .bind(actor.user_id)
             .bind(&actor.username)

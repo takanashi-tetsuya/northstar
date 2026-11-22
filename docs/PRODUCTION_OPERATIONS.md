@@ -1085,11 +1085,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 160 files from `0001` through
-`0161`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 161 files from `0001` through
+`0162`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0161`, with the exact SQLx description and SHA-384 checksum, before it
+through `0162`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url`, `storage_database_url`, and `command_database_url`
 secrets; none of these identities may attempt DDL. Pending, failed, unknown,
@@ -1173,6 +1173,18 @@ leases opened before the cutover continue in V2 and exact replays return their
 stored responses; every new export is V3. Back up overlays, source facts,
 export cutoffs and the sequence together; releasing a hold restores nothing,
 and ordinary retention later deletes the original and its overlay together.
+[Migration `0162`](../migrations/0162_user_row_lock_capabilities.sql) fixes
+runtime account row locks. Before it, every runtime statement that locked
+`users` directly failed with SQLSTATE `42501` under the reconciled runtime
+role, because PostgreSQL requires `UPDATE` for a row lock: login and Bind 2,
+FAST tokens, API sessions and password changes, OMEMO recovery, roster,
+privacy, blocking, presence subscriptions, PEP, private XML, profile, SM
+resumption, offline recovery replay, account deletion, administrator and
+operation authorization, retention policy and legal-hold account scopes. The
+migration only adds functions and changes no data, but the older binary's
+exact attestation does not accept the new catalog: stop every server process,
+migrate, reconcile exact grants, attest the runtime role and start only
+updated binaries. There is no mixed-version period or rolling rollback.
 On an existing volume, stop every old server process, generate the new storage
 password and URL secrets, reconcile the new role, run migrations and exact
 grants, then start the new binary. The older binary's exact role/ACL audit does
@@ -1346,7 +1358,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0161` manifest
+5. run the one-shot migration job through the complete `0001`-`0162` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

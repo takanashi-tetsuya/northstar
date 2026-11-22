@@ -86,9 +86,11 @@ where
         lock_ids.push(target_id);
         lock_ids.sort_unstable();
     }
+    // The runtime role has no UPDATE on users; the reviewed row-lock
+    // capability locks both accounts in id order and returns the locked rows.
     let locked = sqlx::query(
         "SELECT id,username,auth_generation,is_disabled
-           FROM users WHERE id=ANY($1) ORDER BY id FOR UPDATE",
+           FROM northstar_lock_user_rows_update($1)",
     )
     .bind(&lock_ids)
     .fetch_all(&mut *transaction)
@@ -502,8 +504,9 @@ pub async fn transition_inbound_remote_presence_subscription<E: RosterTransactio
     // actor.  Lock its exact UUID and disabled state, but deliberately do not
     // apply a client auth-generation check to an inbound federated stanza.
     let recipient = sqlx::query(
-        "SELECT id,username,auth_generation FROM users
-          WHERE id=$1 AND NOT is_disabled FOR UPDATE",
+        "SELECT locked.id,locked.username,locked.auth_generation
+           FROM northstar_lock_user_rows_update(ARRAY[$1::uuid]) locked
+          WHERE NOT locked.is_disabled",
     )
     .bind(recipient_id)
     .fetch_optional(&mut *transaction)
@@ -772,9 +775,9 @@ pub async fn transition_remote_presence_subscription_authorized_inner<
     let actor_domain = northstar_xmpp_types::jid::prepare_domainpart(actor_domain)?;
     let contact = northstar_xmpp_types::jid::canonicalize_bare(contact)?;
     let actor = sqlx::query(
-        "SELECT id,username,auth_generation FROM users
-          WHERE id=$1 AND auth_generation=$2 AND NOT is_disabled
-          FOR UPDATE",
+        "SELECT locked.id,locked.username,locked.auth_generation
+           FROM northstar_lock_user_rows_update(ARRAY[$1::uuid]) locked
+          WHERE locked.auth_generation=$2 AND NOT locked.is_disabled",
     )
     .bind(actor_id)
     .bind(expected_auth_generation)

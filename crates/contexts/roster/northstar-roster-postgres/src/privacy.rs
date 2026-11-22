@@ -26,6 +26,13 @@ pub enum RemovePrivacyListOutcome {
     Conflict,
 }
 
+// The runtime role has no UPDATE on users, so account locks go through the
+// reviewed row-lock capabilities. Each returns no row for a deleted account.
+const LOCK_OWNER_FOR_UPDATE_SQL: &str =
+    "SELECT id FROM northstar_lock_user_rows_update(ARRAY[$1::uuid])";
+const LOCK_OWNER_FOR_SHARE_SQL: &str =
+    "SELECT id FROM northstar_lock_user_rows_share(ARRAY[$1::uuid])";
+
 pub async fn privacy_overview(pool: &PgPool, owner_id: Uuid) -> Result<PrivacyOverview> {
     let rows = sqlx::query(
         "SELECT l.name, d.list_name AS default_name FROM privacy_lists l \
@@ -130,7 +137,7 @@ pub async fn replace_privacy_list(
     );
     let mut tx = pool.begin().await?;
     // Serialize list-count enforcement and replacement against account deletion.
-    let owner_exists = sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+    let owner_exists = sqlx::query_scalar::<_, Uuid>(LOCK_OWNER_FOR_UPDATE_SQL)
         .bind(owner_id)
         .fetch_optional(&mut *tx)
         .await?
@@ -198,7 +205,7 @@ pub async fn remove_privacy_list(
 ) -> Result<RemovePrivacyListOutcome> {
     let mut tx = pool.begin().await?;
     // Exclude new selections until the in-use check and deletion commit.
-    let owner = sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+    let owner = sqlx::query_scalar::<_, Uuid>(LOCK_OWNER_FOR_UPDATE_SQL)
         .bind(owner_id)
         .fetch_optional(&mut *tx)
         .await?;
@@ -242,7 +249,7 @@ pub async fn set_default_privacy_list(
     name: Option<&str>,
 ) -> Result<bool> {
     let mut tx = pool.begin().await?;
-    let owner = sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE id=$1 FOR UPDATE")
+    let owner = sqlx::query_scalar::<_, Uuid>(LOCK_OWNER_FOR_UPDATE_SQL)
         .bind(owner_id)
         .fetch_optional(&mut *tx)
         .await?;
@@ -311,7 +318,7 @@ pub async fn set_active_privacy_list_in_transaction(
     // SM finalization already holds this shared authorization lock. Upgrading
     // it would deadlock concurrent resumes for different account resources.
     // List deletion takes the exclusive lock before checking active selections.
-    let owner = sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE id=$1 FOR SHARE")
+    let owner = sqlx::query_scalar::<_, Uuid>(LOCK_OWNER_FOR_SHARE_SQL)
         .bind(owner_id)
         .fetch_optional(&mut **tx)
         .await?;

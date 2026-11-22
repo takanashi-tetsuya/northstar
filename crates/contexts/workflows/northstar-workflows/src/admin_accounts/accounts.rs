@@ -8,10 +8,13 @@ pub(super) async fn admin_authorized_in_tx(
     actor_username: &str,
     actor_generation: i64,
 ) -> Result<bool> {
+    // The runtime role has no UPDATE on users; the reviewed row-lock
+    // capability takes the FOR SHARE lock and the actor's captured authority
+    // is compared with the locked row version.
     Ok(sqlx::query_scalar::<_, bool>(
-        "SELECT TRUE FROM users
-         WHERE id=$1 AND username=$2 AND auth_generation=$3
-           AND is_admin AND NOT is_disabled FOR SHARE",
+        "SELECT TRUE FROM northstar_lock_user_rows_share(ARRAY[$1::uuid]) locked
+         WHERE locked.username=$2 AND locked.auth_generation=$3
+           AND locked.is_admin AND NOT locked.is_disabled",
     )
     .bind(actor_id)
     .bind(actor_username)
@@ -262,10 +265,12 @@ pub async fn replace_admins_authorized(
     // statement.  A promotion racing this command is therefore either included
     // in this replacement or waits until the replacement has committed; it
     // cannot introduce a row-lock inversion through a stale pre-lock snapshot.
+    // The runtime role has no UPDATE on users, so the reviewed row-lock
+    // capability takes the UUID-ordered exclusive locks.
     sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM users
-         WHERE is_admin OR id=ANY($1) OR id=$2
-         ORDER BY id FOR UPDATE",
+        "SELECT id FROM northstar_lock_user_rows_update(ARRAY(
+             SELECT id FROM users WHERE is_admin OR id=ANY($1) OR id=$2
+         ))",
     )
     .bind(&ids)
     .bind(fence.actor_id)

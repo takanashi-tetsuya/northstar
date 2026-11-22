@@ -145,16 +145,13 @@ pub async fn lock_recovery_replay_authorization(
     expected_auth_generation: i64,
 ) -> Result<Option<RecoveryReplayAuthorizationGuard>> {
     let mut transaction = pool.begin().await?;
-    let authorized = sqlx::query_scalar::<_, bool>(
-        "SELECT TRUE FROM users
-          WHERE id=$1 AND auth_generation=$2 AND NOT is_disabled
-          FOR SHARE",
-    )
-    .bind(user_id)
-    .bind(expected_auth_generation)
-    .fetch_optional(&mut *transaction)
-    .await?
-    .is_some();
+    // The runtime role has no UPDATE on users; the reviewed capability takes
+    // the same FOR SHARE lock on the enabled, current-generation row.
+    let authorized = sqlx::query_scalar::<_, bool>("SELECT northstar_lock_auth_generation($1,$2)")
+        .bind(user_id)
+        .bind(expected_auth_generation)
+        .fetch_one(&mut *transaction)
+        .await?;
     if !authorized {
         transaction.rollback().await?;
         return Ok(None);

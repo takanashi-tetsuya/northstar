@@ -337,8 +337,11 @@ pub(super) async fn parent_effect_is_authorized(
         return Ok(true);
     }
     Ok(sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM users
-         WHERE id=$1 AND auth_generation=$2 AND is_admin AND NOT is_disabled FOR SHARE)",
+        // The runtime role has no UPDATE on users; the reviewed row-lock
+        // capability takes the FOR SHARE lock and the predicates are applied
+        // to the locked row version.
+        "SELECT EXISTS(SELECT 1 FROM northstar_lock_user_rows_share(ARRAY[$1::uuid]) actor
+         WHERE actor.auth_generation=$2 AND actor.is_admin AND NOT actor.is_disabled)",
     )
     .bind(parent.actor_subject_id)
     .bind(parent.actor_auth_generation)

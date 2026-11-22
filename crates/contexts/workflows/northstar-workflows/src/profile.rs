@@ -235,10 +235,12 @@ impl PostgresProfileRepository {
         let mut transaction =
             northstar_pubsub_postgres::begin_bounded_pubsub_mutation(&self.pool).await?;
         lock_profile_account(&mut transaction, user_id).await?;
+        // The runtime role has no UPDATE on users; the reviewed row-lock
+        // capability takes the FOR SHARE lock and the predicates are applied
+        // to the locked row version.
         let owner_username = sqlx::query_scalar::<_, String>(
-            "SELECT username FROM users
-              WHERE id=$1 AND auth_generation=$2 AND NOT is_disabled
-              FOR SHARE",
+            "SELECT locked.username FROM northstar_lock_user_rows_share(ARRAY[$1::uuid]) locked
+              WHERE locked.auth_generation=$2 AND NOT locked.is_disabled",
         )
         .bind(user_id)
         .bind(expected_auth_generation)

@@ -198,7 +198,7 @@ mod tests {
                 let blocked: bool = sqlx::query_scalar(
                     "SELECT EXISTS(SELECT 1 FROM pg_stat_activity
                      WHERE datname=current_database() AND wait_event_type='Lock'
-                       AND query='SELECT id FROM users WHERE id=$1 FOR UPDATE')",
+                       AND query='SELECT id FROM northstar_lock_user_rows_update(ARRAY[$1::uuid])')",
                 )
                 .fetch_one(&pool)
                 .await

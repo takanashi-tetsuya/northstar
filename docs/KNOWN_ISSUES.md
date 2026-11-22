@@ -1,7 +1,7 @@
 # Northstar 当前剩余妥协、设计边界与发布门禁
 
-本文記錄 Northstar 的已知限制與驗收邊界。遷移鏈為 `0001`–`0161`，
-共 160 項，保留刻意缺號 `0021`。已解決問題見 [changelog](../CHANGELOG.md)。
+本文記錄 Northstar 的已知限制與驗收邊界。遷移鏈為 `0001`–`0162`，
+共 161 項，保留刻意缺號 `0021`。已解決問題見 [changelog](../CHANGELOG.md)。
 
 CI 验证隔离环境中的代码与运行行为；生产环境、公网互操作和独立安全审计
 需要各自的验收记录。手动测试方法见 [MANUAL_SECURITY_VALIDATION.md](MANUAL_SECURITY_VALIDATION.md)。
@@ -37,6 +37,7 @@ CI 验证隔离环境中的代码与运行行为；生产环境、公网互操�
 | ARCH-MIX-TOMBSTONE | MIX 頻道撤回收斂到個人 MAM 副本 | 已解決的架構債務 | **已實作** | S47 WP-687 依產品決策採用收斂：migration 0159 的 `mix_source_retractions` 為每個頻道撤回保存永久、只插入的來源事實。本地撤回在寫入頻道事件與投遞的同一交易內以來源 advisory 鎖記錄事實；原文封存取共享鎖，所以事實之後才到的原文只保存 tombstone。經驗證的遠端反射才記錄事實，且不得改綁目標或行動者。個人 MAM、HTTP 歷史與 PIE 在讀取同一陳述式內投影相同的無內文 tombstone，不改寫儲存的副本；legal hold 匯出、checksum 與保留仍使用原始資料（S44 審計 C2-08） | 維持 `room::mix_source_retractions` 的五個資料庫測試（投影、兩種寫入順序、回滾、反射綁定、受保留證據）；不得讓直接撤回改寫 MIX 副本，也不得讓未經驗證的反射收斂副本 |
 | ARCH-LEGAL-HOLD-DISPLAY | legal hold 期間的撤回與審核 | 已解決的架構債務 | **已實作** | S47 WP-690 依產品決策讓撤回成功：migration 0161 加入個人與 MUC 顯示覆蓋層、匯出 cutoff 表與共用序列。受保留的列在撤回或審核時插入覆蓋層而不替換原文，線上 MAM、加入歷史與聯邦串流顯示一般 tombstone；原文仍是受治理的證據。legal hold 匯出改為 `northstar-legal-hold-chain-v3`，每筆回傳原文並附 `display_change`，首頁以序列 cutoff 凍結註記（S44 審計 C2-09）。WP-659 的測試改為 `legal_hold_retractions_succeed_without_replacing_evidence` | 維持 `operations::hold_display_races` 的四個競態測試與 V3 雜湊鏈測試；解除 hold 不還原原文；舊版 writer 與 reader 不得與新版同時運行 |
 | ARCH-OUTBOX-QUOTA | 聯邦 MUC 封存入列的 outbox 配額 fence | 已解決的架構債務 | **已實作** | S47 WP-688 採用交易內 generation 列：migration 0160 的單列 `s2s_outbox_enqueue_generation` 在計算列數、位元組與網域上限的同一陳述式內以 `FOR NO KEY UPDATE` 鎖定，插入 outbox 列時推進 generation。快照早於並行入列的寫入者以序列化錯誤失敗而不超額；`admit_federated_room_stream` 只在 SQLSTATE 40001 時回滾並整批重試一次，第二次衝突回傳 `OutboxRejected`，不送出前綴也不喚醒。claim、完成、過期、續租與 SM ACK 不碰該列（S44 審計 C2-10） | 維持 `archive::mam_outbox_generation` 資料庫測試與重試規則單元測試；部署時停止所有入列者，舊版 writer 會繞過 fence |
+| ARCH-RUNTIME-ROW-LOCKS | 執行期角色對 `users` 的列鎖 | 已解決的缺陷 | **已實作** | PostgreSQL 對 `FOR KEY SHARE`／`FOR SHARE`／`FOR NO KEY UPDATE`／`FOR UPDATE` 要求被鎖關聯的 `UPDATE` 權限，而執行期角色對 `users` 只有 `SELECT`；先前登入與 Bind 2、FAST、API 會話與改密、OMEMO 復原、roster、privacy、封鎖、訂閱、PEP、private XML、profile、SM、離線復原重播、帳號刪除、管理與操作授權、保留政策及 legal hold 帳號範圍等直接鎖 `users` 的陳述式在正式角色下都以 SQLSTATE 42501 失敗，只有開發用的擁有者角色能通過。migration 0162 加入三個固定強度的 `northstar_lock_user_rows_*(uuid[])` SECURITY DEFINER 能力，依 id 順序鎖定所要求的既有列並回傳已鎖版本，呼叫端在該版本上套用授權條件；執行期仍沒有 `users` 的表或欄 `UPDATE` | 維持 `scripts/check-runtime-row-locks.py`（生產 SQL 不得直接鎖執行期無 `UPDATE` 的關聯）與角色 CI 中以正式執行期登入重播所有呼叫鎖能力之生產陳述式、三種鎖強度的 NOWAIT 探測與直接鎖 42501 檢查；新增需鎖 `users` 的路徑一律使用能力 |
 | ARCH-MUC-MAM-PROJECTION | 本地與聯邦 MUC MAM 使用同一投影 | 已解決的架構債務 | **已實作；對端互通待驗** | S47 WP-689 依產品決策統一投影：room-core `project_muc_mam_message` 取代兩套渲染，從封存列重建 groupchat 信封（無根 `to`、單一以列 UUID 為值的 stanza-id、單一 room occupant-id、移除儲存的身分宣告、僅在可見時於 muc#user item 帶真實 JID），tombstone 只轉送已驗證的撤回控制。本地 archive-xmpp 與聯邦 `federated_muc/mam.rs` 都呼叫它；格式錯誤的列使整頁失敗，聯邦串流不入列任何前綴（S44 審計 C2-13） | 維持九種線上形狀與偽造宣告的單元測試；聯邦 MUC MAM 格式變更的對端互通證據列為 EXT-FEDERATION 發布門禁，取得前不得宣稱已與第三方伺服器互通 |
 | HIST-JID | 旧 JID 数据的 canonical collision 无法自动决定合并对象 | 历史数据＋刻意 fail-closed | **只能人工关闭每个实例** | `audit-identities --dry-run` 能只读检测格式问题和碰撞，但不能判断两个历史 principal 谁应保留；自动合并可能造成越权 | 在恢复副本上审计，由数据所有者逐项决定合并/重命名/删除，备份后停掉全部节点再迁移。工具不应自行猜测所有权 |
 | HIST-MAM-DIRECTION | 旧 archive 行缺少权威消息方向 | 历史数据 | **新数据可修，旧数据不可无损回填** | REST MAM 对未知 `direction` 参数直接拒绝，而不是根据 JID 猜测后返回不完整结果 | 新 schema 从明确版本开始保存权威方向；API 对旧行返回 `unknown` 或提供版本化契约。不得伪造历史方向 |

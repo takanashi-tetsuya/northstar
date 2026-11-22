@@ -1680,6 +1680,34 @@ if [ "$(grep -Fc "DEFAULT pg_catalog.nextval('archive_display_change_seq'::pg_ca
     exit 1
 fi
 
+user_row_lock_migration="migrations/0162_user_row_lock_capabilities.sql"
+user_row_lock_sql=$(tr -s '[:space:]' ' ' < "$user_row_lock_migration")
+for required_fragment in \
+    'CREATE FUNCTION northstar_lock_user_rows_key_share(requested_users UUID[])' \
+    'CREATE FUNCTION northstar_lock_user_rows_share(requested_users UUID[])' \
+    'CREATE FUNCTION northstar_lock_user_rows_update(requested_users UUID[])' \
+    'WHERE account.id = ANY(requested_users) ORDER BY account.id FOR KEY SHARE OF account;' \
+    'WHERE account.id = ANY(requested_users) ORDER BY account.id FOR SHARE OF account;' \
+    'WHERE account.id = ANY(requested_users) ORDER BY account.id FOR UPDATE OF account;' \
+    'ALTER FUNCTION %I.%s SECURITY DEFINER SET search_path TO pg_catalog, %I, pg_temp' \
+    'REVOKE ALL ON FUNCTION %I.%s FROM PUBLIC'
+do
+    if ! printf '%s\n' "$user_row_lock_sql" | grep -Fq "$required_fragment"; then
+        echo "migration 0162 user row locks are missing: $required_fragment" >&2
+        exit 1
+    fi
+done
+# The capabilities only lock rows: no data change, DDL on users, or grant.
+if grep -Eiq '^[[:space:]]*(INSERT|UPDATE|DELETE|TRUNCATE|GRANT|ALTER[[:space:]]+TABLE|CREATE[[:space:]]+(TABLE|TRIGGER|PROCEDURE))\b' "$user_row_lock_migration"; then
+    echo "migration 0162 must only add row-lock capabilities" >&2
+    exit 1
+fi
+if [ "$(grep -Ec '^ +FOR (KEY SHARE|SHARE|UPDATE) OF account;$' "$user_row_lock_migration")" -ne 3 ]; then
+    echo "migration 0162 must take exactly one row lock per capability" >&2
+    exit 1
+fi
+echo "migration 0162 adds read-only-account row-lock capabilities"
+
 # Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0
 # development line. They are immutable: SQLx will reject changed content in an
 # existing database, and this repository-side manifest catches the same mistake

@@ -136,18 +136,32 @@ async fn authorize_recovery_mutation(
     {
         return Ok(false);
     }
-    Ok(sqlx::query_scalar::<_, bool>(
-        "SELECT TRUE
-         FROM users AS actor
-         JOIN api_sessions AS session ON session.user_id=actor.id
-         WHERE actor.id=$1 AND actor.auth_generation=$2
-           AND NOT actor.is_disabled
-           AND session.token_hash=$3
-           AND session.expires_at > clock_timestamp()
-         FOR UPDATE OF actor,session",
+    // Lock the actor and then the session, the order of the former joined
+    // FOR UPDATE OF actor,session. The runtime role has no UPDATE on users, so
+    // the actor lock uses the reviewed row-lock capability and its predicates
+    // are applied to the locked row version.
+    let actor_current = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(
+             SELECT 1 FROM northstar_lock_user_rows_update(ARRAY[$1::uuid]) actor
+              WHERE actor.auth_generation=$2 AND NOT actor.is_disabled
+         )",
     )
     .bind(user_id)
     .bind(expected_auth_generation)
+    .fetch_one(&mut **tx)
+    .await?;
+    if !actor_current {
+        return Ok(false);
+    }
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT TRUE
+         FROM api_sessions AS session
+         WHERE session.user_id=$1
+           AND session.token_hash=$2
+           AND session.expires_at > clock_timestamp()
+         FOR UPDATE OF session",
+    )
+    .bind(user_id)
     .bind(northstar_auth_core::token_hash(presented_session))
     .fetch_optional(&mut **tx)
     .await?

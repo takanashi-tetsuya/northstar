@@ -127,9 +127,11 @@ impl PostgresPubSubRepository {
         }
         account_ids.sort_unstable();
         account_ids.dedup();
+        // The runtime role has no UPDATE on users; the reviewed row-lock
+        // capability share-locks the accounts in id order.
         let rows = sqlx::query(
-            "SELECT id,username,auth_generation,is_disabled FROM users
-              WHERE id=ANY($1) ORDER BY id FOR SHARE",
+            "SELECT id,username,auth_generation,is_disabled
+               FROM northstar_lock_user_rows_share($1)",
         )
         .bind(&account_ids)
         .fetch_all(&mut **transaction)
@@ -205,11 +207,16 @@ impl PostgresPubSubRepository {
             .collect::<Vec<_>>();
         localparts.sort_unstable();
         localparts.dedup();
+        // Usernames are immutable, so resolving their ids without a lock and
+        // share-locking them in id order through the reviewed row-lock
+        // capability is equivalent to the direct FOR SHARE the runtime role
+        // is not privileged to take.
         let rows = sqlx::query(
-            "SELECT id,username FROM users
-              WHERE username=ANY($1) AND NOT is_disabled
-              ORDER BY id
-              FOR SHARE",
+            "SELECT locked.id,locked.username
+               FROM northstar_lock_user_rows_share(ARRAY(
+                    SELECT account.id FROM users account WHERE account.username=ANY($1)
+               )) locked
+              WHERE NOT locked.is_disabled",
         )
         .bind(&localparts)
         .fetch_all(&mut **transaction)

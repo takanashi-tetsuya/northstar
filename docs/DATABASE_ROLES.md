@@ -311,7 +311,7 @@ This script has no bootstrap secret. It refuses to continue unless:
 - it is connected to database `xmpp`.
 
 Grant application is ledger-gated. The exact manifest for this release contains
-160 migrations from `0001` through `0161`; `0021` is the sole intentional gap.
+161 migrations from `0001` through `0162`; `0021` is the sole intentional gap.
 Every listed row is identified by version, SQLx description and SHA-384 checksum.
 `bootstrap` accepts only a genuinely empty
 database with no sqlx ledger or application object. `auto` accepts either that
@@ -320,7 +320,7 @@ migrated installation. Both non-empty shapes must match the checked-in manifest
 by exact version, SQLx description and SHA-384 checksum; the intentional `0021`
 gap is part of that set. Missing, unknown, failed, duplicated or modified rows,
 one-sided 0114/0115, and post-0115-without-boundary ledgers fail closed. `exact`
-requires the complete checked-in `0001`-`0161` manifest, not merely the
+requires the complete checked-in `0001`-`0162` manifest, not merely the
 `0114`/`0115` transition boundary. Bootstrap and prepare
 leave runtime, storage, command, and backup with **zero** database, schema, object, type,
 or routine capability. Only post-migration exact reconciliation installs the
@@ -486,8 +486,8 @@ that marker before cleanup. It then:
    and separately proves empty bootstrap plus partial/tampered-ledger rejection;
    demotion;
 4. runs Northstar's real `migrate` command as `northstar_migrator`, comparing
-the successful sqlx ledger with all 160 checked-in migrations from `0001`
-through `0161` (including the intentional numbering gap at `0021`);
+the successful sqlx ledger with all 161 checked-in migrations from `0001`
+through `0162` (including the intentional numbering gap at `0021`);
 5. reapplies the shared `exact` post-migration ACL policy;
 6. removes the function/type override rows and injects missing, unknown, failed,
    and checksum/description-tampered ledger states to prove every audit fails
@@ -583,7 +583,7 @@ role also remains a true superuser by design; isolation depends on keeping its
 secret inside the PostgreSQL/bootstrap trust boundary and using it only for
 explicit maintenance.
 
-The `0001`-`0161` migration SQL and checksums used by both the one-shot migrator
+The `0001`-`0162` migration SQL and checksums used by both the one-shot migrator
 and normal startup verifier are embedded in the release binary. The checked-in
 migration directory remains an auditable source/build input, but replacing
 files beside an installed binary cannot redefine the schema that binary accepts.
@@ -675,3 +675,21 @@ archive row or export lease. The runtime may also execute the admin-checked
 which locks the hold header `FOR UPDATE` and, on the first page of an active
 hold, takes `SHARE` on `mix_source_retractions` without widening the runtime's
 table privileges. The migrator owns every new object.
+[Migration `0162`](../migrations/0162_user_row_lock_capabilities.sql) adds the
+runtime-only `SECURITY DEFINER` capabilities
+`northstar_lock_user_rows_key_share(uuid[])`,
+`northstar_lock_user_rows_share(uuid[])` and
+`northstar_lock_user_rows_update(uuid[])`. PostgreSQL requires `UPDATE` on a
+relation for every `FOR KEY SHARE`, `FOR SHARE`, `FOR NO KEY UPDATE` or
+`FOR UPDATE` clause that locks it, and runtime keeps `users` read-only, so a
+runtime transaction takes an account row lock only through these functions or
+the narrower `0150`/`0151` capabilities. Each locks exactly the requested
+existing rows in id order at its fixed strength and returns the locked `id`,
+`username`, `auth_generation`, `is_admin` and `is_disabled`, which runtime can
+already read; callers apply their authorization predicates to that locked
+version. The functions change no data, and runtime still has no table or
+column `UPDATE` on `users`. `scripts/check-runtime-row-locks.py` rejects a
+direct row lock in production SQL on any relation whose runtime manifest row
+lacks `UPDATE`, and the role CI replays every production statement that calls
+a runtime lock capability as the reconciled runtime login. The migrator owns
+the functions.

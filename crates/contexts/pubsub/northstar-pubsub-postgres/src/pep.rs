@@ -67,10 +67,12 @@ pub async fn lock_pep_owner_account(
     transaction: &mut Transaction<'_, Postgres>,
     owner: &PubSubAccount,
 ) -> Result<Option<String>> {
+    // The runtime role has no UPDATE on users; the reviewed row-lock
+    // capability takes the FOR SHARE lock and the captured authority is
+    // compared with the locked row version.
     Ok(sqlx::query_scalar(
-        "SELECT username FROM users
-          WHERE id=$1 AND username=$2 AND auth_generation=$3 AND NOT is_disabled
-          FOR SHARE",
+        "SELECT locked.username FROM northstar_lock_user_rows_share(ARRAY[$1::uuid]) locked
+          WHERE locked.username=$2 AND locked.auth_generation=$3 AND NOT locked.is_disabled",
     )
     .bind(owner.id)
     .bind(&owner.username)

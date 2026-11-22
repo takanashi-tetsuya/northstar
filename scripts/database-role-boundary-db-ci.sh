@@ -168,7 +168,7 @@ esac
 [[ ${#control_password} -ge 32 ]] \
   || fail 'NORTHSTAR_CI_CONTROL_PASSWORD must contain at least 32 characters'
 
-for command in bash cargo chmod grep install mktemp psql python3 rm sed sha384sum; do
+for command in bash cargo chmod grep install mktemp node psql python3 rm sed sha384sum; do
   command -v "$command" >/dev/null || fail "required command is unavailable: $command"
 done
 
@@ -391,7 +391,11 @@ print_role_diagnostic() {
 parse_sql_metadata() {
   local sql="$1"
   local schema="public" object="unknown" privilege="UNKNOWN"
-  if [[ "$sql" =~ ALTER[[:space:]]+TABLE[[:space:]]+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+) ]]; then
+  if [[ "$sql" =~ FROM[[:space:]]+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+).*[[:space:]]FOR[[:space:]]+(KEY[[:space:]]+SHARE|SHARE|NO[[:space:]]+KEY[[:space:]]+UPDATE|UPDATE)$ ]]; then
+    schema="${BASH_REMATCH[1]}"
+    object="${BASH_REMATCH[2]}"
+    privilege="ROW_LOCK"
+  elif [[ "$sql" =~ ALTER[[:space:]]+TABLE[[:space:]]+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+) ]]; then
     schema="${BASH_REMATCH[1]}"
     object="${BASH_REMATCH[2]}"
     privilege="ALTER"
@@ -3474,6 +3478,181 @@ ROLLBACK;
 PSQL
 )
 [[ "$display_fact_lock_ok" == $'t\nt' ]] || fail '0161 runtime cannot fence MIX display facts'
+
+# Migration 0162: PostgreSQL demands UPDATE for every row-locking clause, so
+# the runtime login must still be denied each direct account lock while the
+# three fixed-strength capabilities take exactly that lock on exactly the
+# requested rows.  A separate owner session proves the strength with NOWAIT
+# probes while the runtime transaction that took the lock is still open.
+for user_row_lock_strength in 'KEY SHARE' 'SHARE' 'NO KEY UPDATE' 'UPDATE'; do
+  expect_insufficient_privilege "$runtime_role" "$runtime_password" \
+    "runtime direct account FOR $user_row_lock_strength" \
+    "SELECT id FROM public.users WHERE FALSE FOR $user_row_lock_strength"
+done
+user_row_lock_acl_ok=$(control_psql --dbname="$database_name" --tuples-only --no-align <<'PSQL'
+SELECT pg_catalog.count(*)=3
+   AND pg_catalog.bool_and(
+         routine.prosecdef
+     AND routine.provolatile='v'
+     AND pg_catalog.pg_get_userbyid(routine.proowner)='northstar_migrator'
+     AND routine.proconfig=ARRAY['search_path=pg_catalog, public, pg_temp']::pg_catalog.text[]
+     AND pg_catalog.has_function_privilege('northstar_runtime',routine.oid,'EXECUTE')
+     AND NOT pg_catalog.has_function_privilege('northstar_storage',routine.oid,'EXECUTE')
+     AND NOT pg_catalog.has_function_privilege('northstar_commands',routine.oid,'EXECUTE')
+     AND NOT pg_catalog.has_function_privilege('northstar_backup',routine.oid,'EXECUTE')
+     AND NOT EXISTS (
+       SELECT 1 FROM pg_catalog.aclexplode(routine.proacl) acl
+        WHERE acl.grantee=0 OR (acl.grantee<>routine.proowner AND NOT (
+          pg_catalog.pg_get_userbyid(acl.grantee)='northstar_runtime'
+          AND acl.privilege_type='EXECUTE' AND NOT acl.is_grantable
+        ))
+     )
+   )
+   AND NOT pg_catalog.has_table_privilege('northstar_runtime','public.users','UPDATE')
+   AND NOT pg_catalog.has_any_column_privilege('northstar_runtime','public.users','UPDATE')
+  FROM pg_catalog.pg_proc routine
+ WHERE routine.oid IN (
+   'public.northstar_lock_user_rows_key_share(uuid[])'::pg_catalog.regprocedure,
+   'public.northstar_lock_user_rows_share(uuid[])'::pg_catalog.regprocedure,
+   'public.northstar_lock_user_rows_update(uuid[])'::pg_catalog.regprocedure
+ );
+PSQL
+)
+[[ "$user_row_lock_acl_ok" == 't' ]] \
+  || fail '0162 account row-lock capabilities are not exact runtime-only definers'
+control_psql --dbname="$database_name" --quiet <<'PSQL'
+INSERT INTO public.users(id,username,password_hash,is_admin,is_disabled) VALUES
+  ('11111111-1111-4111-8111-111111111162','northstar_ci_row_lock_a','ci-only-placeholder',TRUE,FALSE),
+  ('11111111-1111-4111-8111-111111111163','northstar_ci_row_lock_b','ci-only-placeholder',FALSE,TRUE),
+  ('11111111-1111-4111-8111-111111111164','northstar_ci_row_lock_c','ci-only-placeholder',FALSE,FALSE);
+PSQL
+user_row_lock_probe="$runtime_dir/user-row-lock-probe.sh"
+user_row_lock_results="$runtime_dir/user-row-lock-probe.out"
+user_row_lock_expected="$runtime_dir/user-row-lock-probe.expected"
+cat >"$user_row_lock_probe" <<'SH'
+# POSIX sh: run by the runtime session through psql's \! while it holds a lock.
+set -u
+label=$1
+for target in 11111111-1111-4111-8111-111111111162 \
+              11111111-1111-4111-8111-111111111163 \
+              11111111-1111-4111-8111-111111111164; do
+  for strength in 'KEY SHARE' 'SHARE' 'NO KEY UPDATE' 'UPDATE'; do
+    if PGPASSWORD=$NORTHSTAR_CI_ROW_LOCK_PROBE_PASSWORD psql \
+        --no-psqlrc --no-password --quiet --set=ON_ERROR_STOP=1 --set=VERBOSITY=verbose \
+        --host "$NORTHSTAR_CI_ROW_LOCK_PROBE_HOST" --port "$NORTHSTAR_CI_ROW_LOCK_PROBE_PORT" \
+        --username northstar_migrator --dbname "$NORTHSTAR_CI_ROW_LOCK_PROBE_DATABASE" \
+        --command "SELECT id FROM public.users WHERE id='$target' FOR $strength NOWAIT" \
+        >/dev/null 2>"$NORTHSTAR_CI_ROW_LOCK_PROBE_ERROR"; then
+      outcome=free
+    elif grep -Eq 'ERROR:[[:space:]]+55P03:' "$NORTHSTAR_CI_ROW_LOCK_PROBE_ERROR"; then
+      outcome=blocked
+    else
+      outcome=error
+    fi
+    printf '%s %s %s %s\n' "$label" "$target" "$strength" "$outcome" \
+      >>"$NORTHSTAR_CI_ROW_LOCK_PROBE_OUT"
+  done
+done
+SH
+: >"$user_row_lock_results"
+user_row_lock_rows=$(
+  NORTHSTAR_CI_ROW_LOCK_PROBE="$user_row_lock_probe" \
+  NORTHSTAR_CI_ROW_LOCK_PROBE_OUT="$user_row_lock_results" \
+  NORTHSTAR_CI_ROW_LOCK_PROBE_ERROR="$runtime_dir/user-row-lock-probe.err" \
+  NORTHSTAR_CI_ROW_LOCK_PROBE_PASSWORD="$migrator_password" \
+  NORTHSTAR_CI_ROW_LOCK_PROBE_HOST="$database_host" \
+  NORTHSTAR_CI_ROW_LOCK_PROBE_PORT="$database_port" \
+  NORTHSTAR_CI_ROW_LOCK_PROBE_DATABASE="$database_name" \
+  psql_as "$runtime_role" "$runtime_password" --quiet --tuples-only --no-align <<'PSQL'
+SELECT pg_catalog.count(*) FROM public.northstar_lock_user_rows_share(NULL);
+BEGIN;
+SELECT pg_catalog.string_agg(
+         pg_catalog.concat_ws(':',id,username,auth_generation,is_admin,is_disabled),',')
+  FROM public.northstar_lock_user_rows_key_share(ARRAY[
+    '11111111-1111-4111-8111-111111111163','11111111-1111-4111-8111-111111111162',
+    '11111111-1111-4111-8111-111111111162','11111111-1111-4111-8111-111111111165'
+  ]::pg_catalog.uuid[]);
+\! sh "$NORTHSTAR_CI_ROW_LOCK_PROBE" key-share
+ROLLBACK;
+BEGIN;
+SELECT pg_catalog.string_agg(pg_catalog.concat_ws(':',id,is_admin,is_disabled),',')
+  FROM public.northstar_lock_user_rows_share(ARRAY[
+    '11111111-1111-4111-8111-111111111162','11111111-1111-4111-8111-111111111163'
+  ]::pg_catalog.uuid[]);
+\! sh "$NORTHSTAR_CI_ROW_LOCK_PROBE" share
+ROLLBACK;
+BEGIN;
+SELECT pg_catalog.string_agg(pg_catalog.concat_ws(':',id,is_admin,is_disabled),',')
+  FROM public.northstar_lock_user_rows_update(ARRAY(
+    SELECT account.id FROM public.users account
+     WHERE account.username IN ('northstar_ci_row_lock_a','northstar_ci_row_lock_b')
+  ));
+\! sh "$NORTHSTAR_CI_ROW_LOCK_PROBE" update
+ROLLBACK;
+PSQL
+)
+[[ "$user_row_lock_rows" == "0
+11111111-1111-4111-8111-111111111162:northstar_ci_row_lock_a:0:t:f,11111111-1111-4111-8111-111111111163:northstar_ci_row_lock_b:0:f:t
+11111111-1111-4111-8111-111111111162:t:f,11111111-1111-4111-8111-111111111163:f:t
+11111111-1111-4111-8111-111111111162:t:f,11111111-1111-4111-8111-111111111163:f:t" ]] \
+  || fail "0162 account row-lock capabilities returned unexpected rows: $user_row_lock_rows"
+: >"$user_row_lock_expected"
+for user_row_lock_label in key-share share update; do
+  for user_row_lock_target in 11111111-1111-4111-8111-111111111162 \
+                              11111111-1111-4111-8111-111111111163 \
+                              11111111-1111-4111-8111-111111111164; do
+    for user_row_lock_strength in 'KEY SHARE' 'SHARE' 'NO KEY UPDATE' 'UPDATE'; do
+      # Only the requested rows are locked; the PostgreSQL row-lock conflict
+      # table then fixes which probe strengths each held strength blocks.
+      user_row_lock_outcome=free
+      if [[ "$user_row_lock_target" != *164 ]]; then
+        case "$user_row_lock_label:$user_row_lock_strength" in
+          key-share:UPDATE|share:'NO KEY UPDATE'|share:UPDATE|update:*)
+            user_row_lock_outcome=blocked
+            ;;
+        esac
+      fi
+      printf '%s %s %s %s\n' "$user_row_lock_label" "$user_row_lock_target" \
+        "$user_row_lock_strength" "$user_row_lock_outcome" >>"$user_row_lock_expected"
+    done
+  done
+done
+if ! cmp -s "$user_row_lock_expected" "$user_row_lock_results"; then
+  diff -u "$user_row_lock_expected" "$user_row_lock_results" >&2 || true
+  fail '0162 account row-lock capabilities did not hold exactly their declared lock strength'
+fi
+control_psql --dbname="$database_name" --quiet <<'PSQL'
+DELETE FROM public.users WHERE id IN (
+  '11111111-1111-4111-8111-111111111162','11111111-1111-4111-8111-111111111163',
+  '11111111-1111-4111-8111-111111111164'
+);
+PSQL
+
+# Every production statement that calls a runtime account lock capability must
+# pass PostgreSQL's executor-start privilege checks (relations, columns, row
+# locks and routine EXECUTE) as the reconciled runtime login. The generated
+# script PREPAREs each statement, EXECUTEs it with NULL arguments and rolls it
+# back; a leading canary in the pre-0162 direct-lock shape must report 42501.
+runtime_capability_replay="$runtime_dir/runtime-capability-replay.sql"
+runtime_capability_replay_log="$runtime_dir/runtime-capability-replay.log"
+python3 "$project_dir/scripts/check-runtime-row-locks.py" \
+  --emit-runtime-capability-replay >"$runtime_capability_replay"
+psql_as "$runtime_role" "$runtime_password" --quiet --tuples-only --no-align \
+  --file="$runtime_capability_replay" >"$runtime_capability_replay_log" 2>&1 \
+  || fail 'the runtime lock-capability statement replay could not run'
+runtime_capability_replay_expected=$(sed -nE \
+  's/^REPLAY-COUNT ([1-9][0-9]*)$/\1/p' "$runtime_capability_replay_log")
+runtime_capability_replay_passed=$(grep -Ec \
+  '^REPLAY crates/[^ ]+ EXECUTE 00000$' "$runtime_capability_replay_log" || true)
+if ! grep -Fxq 'REPLAY canary:direct-account-lock EXECUTE 42501' \
+     "$runtime_capability_replay_log" \
+   || [[ -z "$runtime_capability_replay_expected" ]] \
+   || [[ "$runtime_capability_replay_passed" != "$runtime_capability_replay_expected" ]] \
+   || [[ "$(grep -Ec '^REPLAY ' "$runtime_capability_replay_log")" \
+         != "$((runtime_capability_replay_expected + 1))" ]]; then
+  sed -E 's/(password=)[^[:space:]]+/\1[REDACTED]/gi' "$runtime_capability_replay_log" >&2
+  fail 'a production runtime lock-capability statement failed as northstar_runtime'
+fi
 
 migration_ledger_acl_ok=$(control_psql --dbname="$database_name" --tuples-only --no-align <<'PSQL'
 SELECT NOT EXISTS (

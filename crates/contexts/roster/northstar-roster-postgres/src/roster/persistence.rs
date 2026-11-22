@@ -8,8 +8,11 @@ pub async fn begin_authorized_roster_mutation<'a>(
     expected_auth_generation: i64,
 ) -> Result<Option<Transaction<'a, Postgres>>> {
     let mut transaction = pool.begin().await?;
+    // The runtime role has no UPDATE on users, so the exclusive account lock
+    // goes through the reviewed row-lock capability.
     let eligible = sqlx::query_scalar::<_, bool>(
-        "SELECT TRUE FROM users WHERE id=$1 AND auth_generation=$2 AND NOT is_disabled FOR UPDATE",
+        "SELECT TRUE FROM northstar_lock_user_rows_update(ARRAY[$1::uuid]) locked
+          WHERE locked.auth_generation=$2 AND NOT locked.is_disabled",
     )
     .bind(owner_id)
     .bind(expected_auth_generation)
@@ -192,12 +195,11 @@ pub async fn remove_roster_item_in_transaction<E: RosterTransactionEffects>(
         lock_ids.push(contact.id);
         lock_ids.sort_unstable();
     }
-    let locked = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM users WHERE id=ANY($1) ORDER BY id FOR UPDATE",
-    )
-    .bind(&lock_ids)
-    .fetch_all(&mut *transaction)
-    .await?;
+    let locked =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM northstar_lock_user_rows_update($1)")
+            .bind(&lock_ids)
+            .fetch_all(&mut *transaction)
+            .await?;
     if !locked.contains(&owner_id) {
         transaction.rollback().await?;
         return Ok(AuthorizedRosterRemoval::Missing);

@@ -40,6 +40,12 @@ pub use northstar_operations_application::retention_policy::{
     RetentionPolicyError, RetentionPolicyLimits, UserRetentionPolicy,
 };
 
+/// Hold the actor's account key stable until the policy commits. The runtime
+/// role has no UPDATE on users, so the FOR KEY SHARE lock goes through the
+/// reviewed row-lock capability.
+const ACTOR_IS_ADMIN_KEY_SHARE_SQL: &str =
+    "SELECT locked.is_admin FROM northstar_lock_user_rows_key_share(ARRAY[$1::uuid]) locked";
+
 /// Set the three account-owned retention policies in the caller's existing
 /// authorization/idempotency transaction.  A normal user can only move an
 /// effective cutoff earlier.  Administrators may restore or lengthen a user
@@ -66,12 +72,11 @@ pub async fn set_user_retention_policy_in_tx(
     {
         return Err(RetentionPolicyError::Forbidden);
     }
-    let actor_is_admin: Option<bool> =
-        sqlx::query_scalar("SELECT is_admin FROM users WHERE id=$1 FOR KEY SHARE")
-            .bind(actor_id)
-            .fetch_optional(&mut **tx)
-            .await
-            .map_err(|error| RetentionPolicyError::Internal(error.into()))?;
+    let actor_is_admin: Option<bool> = sqlx::query_scalar(ACTOR_IS_ADMIN_KEY_SHARE_SQL)
+        .bind(actor_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|error| RetentionPolicyError::Internal(error.into()))?;
     let Some(actor_is_admin) = actor_is_admin else {
         return Err(RetentionPolicyError::Forbidden);
     };
@@ -206,12 +211,11 @@ pub async fn set_muc_retention_policy_in_tx(
     if !valid_requested_days(requested_days, global_days, 1) {
         return Err(RetentionPolicyError::Forbidden);
     }
-    let actor_is_admin: Option<bool> =
-        sqlx::query_scalar("SELECT is_admin FROM users WHERE id=$1 FOR KEY SHARE")
-            .bind(actor_id)
-            .fetch_optional(&mut **tx)
-            .await
-            .map_err(|error| RetentionPolicyError::Internal(error.into()))?;
+    let actor_is_admin: Option<bool> = sqlx::query_scalar(ACTOR_IS_ADMIN_KEY_SHARE_SQL)
+        .bind(actor_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|error| RetentionPolicyError::Internal(error.into()))?;
     let Some(actor_is_admin) = actor_is_admin else {
         return Err(RetentionPolicyError::Forbidden);
     };

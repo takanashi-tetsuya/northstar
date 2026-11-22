@@ -130,7 +130,9 @@ pub async fn lock_private_xml_owner(
     // Locking the owning account serializes quota calculations across every
     // namespace. Row locks on existing private_xml entries alone are
     // insufficient when two first writes race into an empty account.
-    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+    // The runtime role has no UPDATE on users, so the exclusive account lock
+    // goes through the reviewed row-lock capability.
+    sqlx::query("SELECT id FROM northstar_lock_user_rows_update(ARRAY[$1::uuid])")
         .bind(user_id)
         .fetch_one(&mut **transaction)
         .await?;
@@ -148,9 +150,8 @@ pub async fn set_private_xml_batch(
     let mut transaction = pool.begin().await?;
     // Keep the account-wide quota lock and verify the captured session under it.
     let locked_owner = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM users
-          WHERE id = $1 AND username = $2 AND auth_generation = $3 AND NOT is_disabled
-          FOR UPDATE",
+        "SELECT locked.id FROM northstar_lock_user_rows_update(ARRAY[$1::uuid]) locked
+          WHERE locked.username = $2 AND locked.auth_generation = $3 AND NOT locked.is_disabled",
     )
     .bind(owner.id)
     .bind(&owner.username)

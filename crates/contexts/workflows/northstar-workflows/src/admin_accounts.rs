@@ -143,7 +143,9 @@ async fn mutate_admin_accounts_authorized_inner<
     }
     lock_ids.sort_unstable();
     lock_ids.dedup();
-    sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE id=ANY($1) ORDER BY id FOR UPDATE")
+    // The runtime role has no UPDATE on users; the reviewed row-lock
+    // capability locks every affected account in id order.
+    sqlx::query_scalar::<_, Uuid>("SELECT id FROM northstar_lock_user_rows_update($1)")
         .bind(&lock_ids)
         .fetch_all(&mut *tx)
         .await?;

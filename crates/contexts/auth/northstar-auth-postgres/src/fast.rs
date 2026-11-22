@@ -198,9 +198,10 @@ pub async fn issue_fast_token_in_transaction(
         .context("FAST strong-auth lifetime does not fit PostgreSQL")?;
     // Serialize token issuance with password rotation and account disablement.
     // Both mutation paths lock the user row before touching fast_tokens.
+    // The runtime role cannot lock users directly; the reviewed capability
+    // takes the same FOR SHARE lock on the enabled, current-generation row.
     let eligible = sqlx::query_scalar::<_, DateTime<Utc>>(
-        "SELECT clock_timestamp() FROM users
-         WHERE id=$1 AND auth_generation=$2 AND NOT is_disabled FOR SHARE",
+        "SELECT clock_timestamp() WHERE northstar_lock_auth_generation($1,$2)",
     )
     .bind(user_id)
     .bind(expected_auth_generation)
@@ -456,16 +457,18 @@ pub async fn finalize_fast_token_in_transaction(
     invalidate: bool,
     expected_auth_generation: i64,
 ) -> Result<bool> {
+    // Lock the token and then its account in the order the former joined
+    // FOR UPDATE OF token,users took them. The account lock goes through the
+    // runtime row-lock capability because the runtime role has no UPDATE on
+    // users; its predicates are applied to the locked row version.
     let row = sqlx::query(
         "SELECT token.user_id,token.device_id
          FROM fast_tokens token
-         JOIN users ON users.id=token.user_id
          WHERE token.id=$1 AND token.revoked_at IS NULL
            AND token.expires_at > clock_timestamp()
            AND token.chain_expires_at > clock_timestamp()
            AND token.auth_generation=$2
-           AND users.auth_generation=$2 AND NOT users.is_disabled
-         FOR UPDATE OF token,users",
+         FOR UPDATE OF token",
     )
     .bind(token_id)
     .bind(expected_auth_generation)
@@ -474,6 +477,19 @@ pub async fn finalize_fast_token_in_transaction(
     let Some(row) = row else {
         return Ok(false);
     };
+    let account_current = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(
+             SELECT 1 FROM northstar_lock_user_rows_update(ARRAY[$1::uuid]) locked
+              WHERE locked.auth_generation=$2 AND NOT locked.is_disabled
+         )",
+    )
+    .bind(row.get::<Uuid, _>("user_id"))
+    .bind(expected_auth_generation)
+    .fetch_one(&mut **tx)
+    .await?;
+    if !account_current {
+        return Ok(false);
+    }
     if was_new {
         let user_id: Uuid = row.get("user_id");
         let device_id: Uuid = row.get("device_id");

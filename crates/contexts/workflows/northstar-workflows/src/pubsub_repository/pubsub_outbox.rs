@@ -132,11 +132,10 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
             }
             account_ids.sort_unstable();
             account_ids.dedup();
+            // The runtime role has no UPDATE on users; the reviewed row-lock
+            // capability share-locks the accounts in id order.
             let rows = sqlx::query(
-                "SELECT id,username,is_disabled FROM users
-              WHERE id=ANY($1)
-              ORDER BY id
-              FOR SHARE",
+                "SELECT id,username,is_disabled FROM northstar_lock_user_rows_share($1)",
             )
             .bind(&account_ids)
             .fetch_all(&mut *transaction)

@@ -337,7 +337,8 @@ impl<E: AuthenticationEffects> PostgresAuthenticationRepository<E> {
                 Err(error) => return (AuthenticationResult::BackendFailure(error.into()), false),
             };
             let state = sqlx::query(
-                "SELECT auth_generation,is_disabled,current_setting('transaction_isolation') AS isolation FROM users WHERE id=$1 FOR SHARE",
+                "SELECT locked.auth_generation,locked.is_disabled,current_setting('transaction_isolation') AS isolation
+                   FROM northstar_lock_user_rows_share(ARRAY[$1::uuid]) locked",
             )
             .bind(user_id)
             .fetch_optional(&mut *transaction)
@@ -850,8 +851,14 @@ async fn load_sanitized_user_by_username_in_transaction(
     username: &str,
 ) -> anyhow::Result<Option<LoadedAccount>> {
     let row = sqlx::query(
-        "SELECT id,username,is_disabled,auth_generation
-           FROM users WHERE username=$1 FOR SHARE",
+        // Usernames are immutable, so resolving the id without a lock and
+        // locking it through the runtime row-lock capability is equivalent to
+        // the direct FOR SHARE the runtime role is not privileged to take.
+        "SELECT locked.id,locked.username,locked.is_disabled,locked.auth_generation
+           FROM northstar_lock_user_rows_share(ARRAY(
+                SELECT account.id FROM users account WHERE account.username=$1
+           )) locked
+          WHERE locked.username=$1",
     )
     .bind(username)
     .fetch_optional(&mut **transaction)

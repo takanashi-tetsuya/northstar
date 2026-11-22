@@ -102,9 +102,19 @@ async fn blocking_is_atomic_bounded_and_indexed_in_postgresql() {
         "CREATE TABLE users(
             id UUID PRIMARY KEY,
             username TEXT NOT NULL,
+            auth_generation BIGINT NOT NULL DEFAULT 0,
+            is_admin BOOLEAN NOT NULL DEFAULT FALSE,
             is_disabled BOOLEAN NOT NULL DEFAULT FALSE
          )",
     )
+    .execute(&pool)
+    .await
+    .unwrap();
+    // Block-owner locks go through the runtime row-lock capability, which
+    // returns every column above; install it from the migration itself.
+    sqlx::raw_sql(include_str!(
+        "../../../../../../migrations/0162_user_row_lock_capabilities.sql"
+    ))
     .execute(&pool)
     .await
     .unwrap();

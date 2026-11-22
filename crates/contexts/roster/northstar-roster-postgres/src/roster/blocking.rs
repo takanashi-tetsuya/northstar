@@ -70,9 +70,11 @@ pub async fn lock_enabled_block_owner_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     owner_id: Uuid,
 ) -> Result<bool> {
+    // The runtime role has no UPDATE on users, so the exclusive account lock
+    // goes through the reviewed row-lock capability.
     Ok(sqlx::query_scalar::<_, bool>(
-        "SELECT TRUE FROM users
-          WHERE id=$1 AND NOT is_disabled FOR UPDATE",
+        "SELECT TRUE FROM northstar_lock_user_rows_update(ARRAY[$1::uuid]) locked
+          WHERE NOT locked.is_disabled",
     )
     .bind(owner_id)
     .fetch_optional(&mut **transaction)

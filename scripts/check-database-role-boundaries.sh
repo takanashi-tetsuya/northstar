@@ -11,6 +11,7 @@ capability_manifest="$project_dir/deploy/postgres-init/lib/northstar-capability-
 migration_ledger_manifest="$project_dir/deploy/postgres-init/lib/northstar-migration-ledger-manifest.sql"
 migration_ledger_generator="$project_dir/scripts/generate-database-migration-ledger.py"
 capability_manifest_check="$project_dir/scripts/check-database-capability-manifest.py"
+runtime_row_lock_check="$project_dir/scripts/check-runtime-row-locks.py"
 grant_runner="$project_dir/scripts/reconcile-database-grants.sh"
 grant_image="$project_dir/deploy/database-grants.Dockerfile"
 backup_image="$project_dir/deploy/backup.Dockerfile"
@@ -136,8 +137,10 @@ if grep -Eq '\b(subprocess\.(run|Popen)|tempfile\.(TemporaryDirectory|NamedTempo
 fi
 if command -v python3 >/dev/null 2>&1; then
   python3 "$capability_manifest_check"
+  python3 "$runtime_row_lock_check"
 elif command -v python >/dev/null 2>&1; then
   python "$capability_manifest_check"
+  python "$runtime_row_lock_check"
 else
   fail 'Python 3 is required for the database capability manifest check'
 fi

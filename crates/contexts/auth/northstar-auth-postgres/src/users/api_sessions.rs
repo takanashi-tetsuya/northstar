@@ -130,16 +130,18 @@ pub async fn user_for_token_in_tx(
     else {
         return Ok(None);
     };
+    if !lock_enabled_user_for_share(tx, user_id).await? {
+        return Ok(None);
+    }
+    // The share lock fences every UPDATE of the row, so this read observes
+    // exactly the locked version.
     let row = sqlx::query(
         "SELECT id,username,display_name,is_admin,auth_generation
-           FROM users WHERE id=$1 AND NOT is_disabled FOR SHARE",
+           FROM users WHERE id=$1",
     )
     .bind(user_id)
-    .fetch_optional(&mut **tx)
+    .fetch_one(&mut **tx)
     .await?;
-    let Some(row) = row else {
-        return Ok(None);
-    };
     let session_live = sqlx::query_scalar::<_, bool>(
         "SELECT TRUE FROM api_sessions
          WHERE user_id=$1 AND token_hash=$2
@@ -176,16 +178,16 @@ pub async fn password_change_subject_for_token_in_tx(
     else {
         return Ok(None);
     };
+    if !lock_enabled_user_for_share(tx, user_id).await? {
+        return Ok(None);
+    }
     let row = sqlx::query(
         "SELECT id,username,display_name,is_admin,auth_generation,password_hash
-           FROM users WHERE id=$1 AND NOT is_disabled FOR SHARE",
+           FROM users WHERE id=$1",
     )
     .bind(user_id)
-    .fetch_optional(&mut **tx)
+    .fetch_one(&mut **tx)
     .await?;
-    let Some(row) = row else {
-        return Ok(None);
-    };
     let session_live = sqlx::query_scalar::<_, bool>(
         "SELECT TRUE FROM api_sessions
          WHERE user_id=$1 AND token_hash=$2
@@ -219,12 +221,13 @@ pub async fn delete_api_session_audited_in_tx(
             .fetch_optional(&mut **tx)
             .await?;
     if let Some(user_id) = user_id {
-        let user_exists =
-            sqlx::query_scalar::<_, bool>("SELECT TRUE FROM users WHERE id=$1 FOR SHARE")
-                .bind(user_id)
-                .fetch_optional(&mut **tx)
-                .await?
-                .is_some();
+        let user_exists = sqlx::query_scalar::<_, bool>(
+            "SELECT TRUE FROM northstar_lock_user_rows_share(ARRAY[$1::uuid])",
+        )
+        .bind(user_id)
+        .fetch_optional(&mut **tx)
+        .await?
+        .is_some();
         if !user_exists {
             return Ok(false);
         }
@@ -265,12 +268,12 @@ pub async fn authorize_admin_in_tx(
     if !authorize_user_in_tx(tx, actor_id, expected_auth_generation, presented_session).await? {
         return Ok(false);
     }
-    Ok(
-        sqlx::query_scalar::<_, bool>("SELECT is_admin FROM users WHERE id=$1 FOR SHARE")
-            .bind(actor_id)
-            .fetch_one(&mut **tx)
-            .await?,
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT locked.is_admin FROM northstar_lock_user_rows_share(ARRAY[$1::uuid]) locked",
     )
+    .bind(actor_id)
+    .fetch_one(&mut **tx)
+    .await?)
 }
 
 /// Revalidate the exact bearer and credential generation observed by a user
@@ -288,16 +291,11 @@ pub async fn authorize_user_in_tx(
     {
         return Ok(false);
     }
-    let actor_live = sqlx::query_scalar::<_, bool>(
-        "SELECT TRUE FROM users
-         WHERE id=$1 AND auth_generation=$2 AND NOT is_disabled
-         FOR SHARE",
-    )
-    .bind(actor_id)
-    .bind(expected_auth_generation)
-    .fetch_optional(&mut **tx)
-    .await?
-    .is_some();
+    let actor_live = sqlx::query_scalar::<_, bool>("SELECT northstar_lock_auth_generation($1,$2)")
+        .bind(actor_id)
+        .bind(expected_auth_generation)
+        .fetch_one(&mut **tx)
+        .await?;
     if !actor_live {
         return Ok(false);
     }
@@ -344,6 +342,25 @@ pub async fn set_user_status_admin_in_tx(
             "account-status capability returned unknown outcome {outcome}"
         ))),
     }
+}
+
+/// Take the users -> api_sessions authorization lock on an enabled account.
+/// The runtime role has no UPDATE on users, so the FOR SHARE lock goes through
+/// the reviewed row-lock capability and the enabled predicate is applied to
+/// the locked row version.
+async fn lock_enabled_user_for_share(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+) -> Result<bool> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(
+             SELECT 1 FROM northstar_lock_user_rows_share(ARRAY[$1::uuid]) locked
+              WHERE NOT locked.is_disabled
+         )",
+    )
+    .bind(user_id)
+    .fetch_one(&mut **tx)
+    .await?)
 }
 
 pub fn api_principal_from_row(row: &sqlx::postgres::PgRow) -> ApiPrincipal {

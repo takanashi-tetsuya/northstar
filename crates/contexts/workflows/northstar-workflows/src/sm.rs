@@ -246,10 +246,13 @@ pub async fn create_sm_session_with_ownership_resolution(
             anyhow::bail!("durable SM live-session reservation conflicts")
         }
     }
+    // The runtime role has no UPDATE on users; the reviewed row-lock
+    // capability takes the FOR KEY SHARE lock and the predicates are applied
+    // to the locked row version.
     let authorized = sqlx::query_scalar::<_, String>(
-        "SELECT username FROM users
-         WHERE id=$1 AND auth_generation=$2 AND NOT is_disabled
-         FOR KEY SHARE",
+        "SELECT locked.username
+           FROM northstar_lock_user_rows_key_share(ARRAY[$1::uuid]) locked
+          WHERE locked.auth_generation=$2 AND NOT locked.is_disabled",
     )
     .bind(user_id)
     .bind(auth_generation)

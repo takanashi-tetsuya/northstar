@@ -14,7 +14,7 @@ CREATE TEMPORARY TABLE northstar_capability_manifest (
   workload pg_catalog.text NOT NULL
     CHECK (workload IN ('runtime','storage','command','private')),
   origin pg_catalog.text NOT NULL
-    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151','0153','0154','0155','0156','0157','0161'))
+    CHECK (origin IN ('baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151','0153','0154','0155','0156','0157','0161','0162'))
 );
 
 INSERT INTO pg_temp.northstar_capability_manifest(signature,workload,origin)
@@ -202,7 +202,10 @@ VALUES
   ('northstar_mix_pam_operation_prune(int8)','runtime','0128'),
   ('northstar_mix_pam_capacity_reconcile()','runtime','0128'),
   ('northstar_mix_delivery_capacity_reconcile()','runtime','0128'),
-  ('northstar_lock_legal_hold_export(uuid,uuid,bool)','runtime','0161');
+  ('northstar_lock_legal_hold_export(uuid,uuid,bool)','runtime','0161'),
+  ('northstar_lock_user_rows_key_share(uuid[])','runtime','0162'),
+  ('northstar_lock_user_rows_share(uuid[])','runtime','0162'),
+  ('northstar_lock_user_rows_update(uuid[])','runtime','0162');
 
 -- Complete, positive table-level privilege manifest for the runtime login.
 -- Every final public application table (plus sqlx's ledger) appears exactly

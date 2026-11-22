@@ -67,6 +67,7 @@ MIGRATIONS = {
     "0157": ROOT / "migrations/0157_sm_recovery_retention.sql",
     "0158": ROOT / "migrations/0158_sm_cleanup_claim_alias.sql",
     "0161": ROOT / "migrations/0161_archive_display_overlays.sql",
+    "0162": ROOT / "migrations/0162_user_row_lock_capabilities.sql",
 }
 
 # A later migration may replace an existing routine without changing its
@@ -131,7 +132,7 @@ REPLACEMENT_HARDENING_SUCCESSORS = {
 
 ROW = re.compile(
     r"^\s*\('([^']+\([^']*\))','(runtime|storage|command|private)',"
-    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131|0144|0145|0146|0149|0150|0151|0153|0154|0155|0156|0157|0161)'\)[,;]\s*$",
+    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131|0144|0145|0146|0149|0150|0151|0153|0154|0155|0156|0157|0161|0162)'\)[,;]\s*$",
     re.MULTILINE,
 )
 RELATION_ROW = re.compile(
@@ -949,7 +950,7 @@ if "ON COMMIT DROP" in generator_text:
     fail("migration ledger temp table would disappear in autocommit audit sessions")
 
 manifest_text = read(MANIFEST)
-if "'baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151','0153','0154','0155','0156','0157','0161'" not in manifest_text:
+if "'baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151','0153','0154','0155','0156','0157','0161','0162'" not in manifest_text:
     fail("canonical manifest origin constraint omits a reviewed capability migration")
 rows = ROW.findall(manifest_text)
 if not rows:
@@ -963,7 +964,7 @@ by_workload = {
 }
 by_origin = {
     origin: {signature for signature, _, row_origin in rows if row_origin == origin}
-    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131", "0144", "0145", "0146", "0149", "0150", "0151", "0153", "0154", "0155", "0156", "0157", "0161")
+    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131", "0144", "0145", "0146", "0149", "0150", "0151", "0153", "0154", "0155", "0156", "0157", "0161", "0162")
 }
 require_exact(
     "SM retention helper introduction",
@@ -979,6 +980,18 @@ require_exact(
 )
 if "northstar_lock_legal_hold_export(uuid,uuid,bool)" not in by_workload["runtime"]:
     fail("legal hold export lock must remain in the runtime capability partition")
+USER_ROW_LOCK_CAPABILITIES = {
+    "northstar_lock_user_rows_key_share(uuid[])",
+    "northstar_lock_user_rows_share(uuid[])",
+    "northstar_lock_user_rows_update(uuid[])",
+}
+require_exact(
+    "user row lock capability introduction",
+    by_origin["0162"],
+    USER_ROW_LOCK_CAPABILITIES,
+)
+if not USER_ROW_LOCK_CAPABILITIES <= by_workload["runtime"]:
+    fail("user row lock capabilities must remain in the runtime capability partition")
 
 if "northstar_session_cleanup_live(int8)" not in by_origin["0114"]:
     fail("SM cleanup callable identity must retain its 0114 introduction origin")

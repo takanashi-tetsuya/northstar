@@ -200,15 +200,12 @@ pub async fn stage_user_agent_login_epoch_in_transaction(
     operation_id: Uuid,
     ttl_seconds: u64,
 ) -> Result<Option<i64>> {
-    let eligible = sqlx::query_scalar::<_, bool>(
-        "SELECT TRUE FROM users
-         WHERE id=$1 AND auth_generation=$2 AND NOT is_disabled FOR SHARE",
-    )
-    .bind(user_id)
-    .bind(expected_auth_generation)
-    .fetch_optional(&mut **tx)
-    .await?;
-    if eligible.is_none() {
+    let eligible = sqlx::query_scalar::<_, bool>("SELECT northstar_lock_auth_generation($1,$2)")
+        .bind(user_id)
+        .bind(expected_auth_generation)
+        .fetch_one(&mut **tx)
+        .await?;
+    if !eligible {
         return Ok(None);
     }
     let ttl_seconds =
@@ -551,19 +548,43 @@ pub async fn authorize_password_change_in_tx(
     {
         return Ok(false);
     }
-    Ok(sqlx::query_scalar::<_, bool>(
-        "SELECT TRUE
-         FROM users AS actor
-         JOIN api_sessions AS session ON session.user_id=actor.id
-         WHERE actor.id=$1 AND actor.password_hash=$2
-           AND actor.auth_generation=$3 AND NOT actor.is_disabled
-           AND session.token_hash=$4
-           AND session.expires_at > clock_timestamp()
-         FOR UPDATE OF actor,session",
+    // Lock the actor and then the session, the order of the former joined
+    // FOR UPDATE OF actor,session. The runtime role has no UPDATE on users, so
+    // the actor lock uses the reviewed row-lock capability. The exclusive lock
+    // fences every UPDATE of the row, so the verifier comparison below reads
+    // exactly the locked version.
+    let actor_current = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(
+             SELECT 1 FROM northstar_lock_user_rows_update(ARRAY[$1::uuid]) actor
+              WHERE actor.auth_generation=$2 AND NOT actor.is_disabled
+         )",
     )
     .bind(user_id)
-    .bind(expected_password_hash)
     .bind(expected_auth_generation)
+    .fetch_one(&mut **tx)
+    .await?;
+    if !actor_current {
+        return Ok(false);
+    }
+    let verifier_current =
+        sqlx::query_scalar::<_, bool>("SELECT TRUE FROM users WHERE id=$1 AND password_hash=$2")
+            .bind(user_id)
+            .bind(expected_password_hash)
+            .fetch_optional(&mut **tx)
+            .await?
+            .is_some();
+    if !verifier_current {
+        return Ok(false);
+    }
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT TRUE
+         FROM api_sessions AS session
+         WHERE session.user_id=$1
+           AND session.token_hash=$2
+           AND session.expires_at > clock_timestamp()
+         FOR UPDATE OF session",
+    )
+    .bind(user_id)
     .bind(auth::token_hash(presented_session))
     .fetch_optional(&mut **tx)
     .await?

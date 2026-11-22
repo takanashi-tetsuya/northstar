@@ -186,16 +186,37 @@ async fn insert_hold_target(
             .await
         }
         LegalHoldTarget::PersonalArchiveOwner(id) => {
-            insert_scope(tx, hold_id, "personal_archive_owner", id, "users").await
+            insert_scope(
+                tx,
+                hold_id,
+                "personal_archive_owner",
+                id,
+                ScopeSubject::Account,
+            )
+            .await
         }
         LegalHoldTarget::MucArchiveRoom(id) => {
-            insert_scope(tx, hold_id, "muc_archive_room", id, "muc_rooms").await
+            insert_scope(tx, hold_id, "muc_archive_room", id, ScopeSubject::Room).await
         }
         LegalHoldTarget::OfflineMessageRecipient(id) => {
-            insert_scope(tx, hold_id, "offline_message_recipient", id, "users").await
+            insert_scope(
+                tx,
+                hold_id,
+                "offline_message_recipient",
+                id,
+                ScopeSubject::Account,
+            )
+            .await
         }
         LegalHoldTarget::ReportEvidenceReport(id) => {
-            insert_scope(tx, hold_id, "report_evidence_report", id, "abuse_reports").await
+            insert_scope(
+                tx,
+                hold_id,
+                "report_evidence_report",
+                id,
+                ScopeSubject::Report,
+            )
+            .await
         }
     }
     .map_err(|error| LegalHoldError::Internal(error.into()))?;
@@ -205,19 +226,41 @@ async fn insert_hold_target(
     Ok(())
 }
 
+/// The relation that owns a legal-hold scope subject.
+#[derive(Clone, Copy)]
+enum ScopeSubject {
+    Account,
+    Room,
+    Report,
+}
+
+/// Insert one scope while its subject row is held FOR KEY SHARE, so the
+/// subject cannot be deleted or re-keyed before the hold commits. The runtime
+/// role has no UPDATE on users, so account subjects are locked through the
+/// reviewed row-lock capability; rooms and reports are runtime-writable.
 async fn insert_scope(
     tx: &mut Transaction<'_, Postgres>,
     hold_id: Uuid,
     scope_type: &'static str,
     subject_id: Uuid,
-    table: &'static str,
+    subject: ScopeSubject,
 ) -> std::result::Result<sqlx::postgres::PgQueryResult, sqlx::Error> {
-    debug_assert!(matches!(table, "users" | "muc_rooms" | "abuse_reports"));
-    let query = format!(
-        "INSERT INTO legal_hold_scopes(hold_id,scope_type,subject_id)
-         SELECT $1,$2,id FROM {table} WHERE id=$3 FOR KEY SHARE"
-    );
-    sqlx::query(sqlx::AssertSqlSafe(query.as_str()))
+    let query = match subject {
+        ScopeSubject::Account => {
+            "INSERT INTO legal_hold_scopes(hold_id,scope_type,subject_id)
+             SELECT $1,$2,locked.id
+               FROM northstar_lock_user_rows_key_share(ARRAY[$3::uuid]) locked"
+        }
+        ScopeSubject::Room => {
+            "INSERT INTO legal_hold_scopes(hold_id,scope_type,subject_id)
+             SELECT $1,$2,id FROM muc_rooms WHERE id=$3 FOR KEY SHARE"
+        }
+        ScopeSubject::Report => {
+            "INSERT INTO legal_hold_scopes(hold_id,scope_type,subject_id)
+             SELECT $1,$2,id FROM abuse_reports WHERE id=$3 FOR KEY SHARE"
+        }
+    };
+    sqlx::query(query)
         .bind(hold_id)
         .bind(scope_type)
         .bind(subject_id)

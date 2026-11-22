@@ -223,9 +223,14 @@ and Docker artifacts and their provenance. They do not repeat source CI.
   display-change tables, `USAGE, SELECT` on `archive_display_change_seq` and
   `EXECUTE` on `northstar_lock_legal_hold_export(uuid,uuid,bool)` before
   starting updated binaries; never run old and new processes together.
+- [ ] Apply [migration `0162`](../migrations/0162_user_row_lock_capabilities.sql)
+  with every server process stopped. Reconcile exact grants and verify that
+  runtime holds `EXECUTE` on the three `northstar_lock_user_rows_*(uuid[])`
+  capabilities and still has no table or column `UPDATE` on `users` before
+  starting updated binaries; never run old and new processes together.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 160 migrations from `0001` through the current
-  repository maximum `0161`, with `0021` as the sole intentional gap.
+  identity and verify all 161 migrations from `0001` through the current
+  repository maximum `0162`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

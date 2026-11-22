@@ -20,9 +20,12 @@ See [migration policy](../../docs/database/migration-policy.md).
 **Role and privilege boundaries**
 
 - `scripts/check-database-role-boundaries.sh` checks the role boundaries
-  statically.
+  statically. It runs `scripts/check-runtime-row-locks.py`, which rejects a
+  production SQL row lock on any relation the runtime role cannot `UPDATE`.
 - The `database-role-boundary` CI job runs
-  `scripts/database-role-boundary-db-ci.sh` against a live database.
+  `scripts/database-role-boundary-db-ci.sh` against a live database. It
+  replays every production statement that calls a runtime account lock
+  capability as the reconciled runtime login.
 
 See [database roles](../../docs/DATABASE_ROLES.md).
 

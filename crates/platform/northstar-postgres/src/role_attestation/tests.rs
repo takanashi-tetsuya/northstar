@@ -34,6 +34,17 @@ fn embedded_capability_manifest_is_complete_and_partitioned() {
         .position(|signature| signature == "northstar_lock_legal_hold_export(uuid,uuid,bool)")
         .expect("legal-hold export lock capability is absent");
     assert_eq!(workloads[hold_export_lock], "runtime");
+    for signature in [
+        "northstar_lock_user_rows_key_share(uuid[])",
+        "northstar_lock_user_rows_share(uuid[])",
+        "northstar_lock_user_rows_update(uuid[])",
+    ] {
+        let index = signatures
+            .iter()
+            .position(|candidate| candidate == signature)
+            .unwrap_or_else(|| panic!("user row lock capability {signature} is absent"));
+        assert_eq!(workloads[index], "runtime");
+    }
     assert!(signatures
         .iter()
         .all(|signature| signature.contains('(') && signature.ends_with(')')));
@@ -171,8 +182,8 @@ fn embedded_migration_ledger_is_complete_and_preserves_intentional_gaps() {
     // The ledger has one intentional historical gap (0021).  Keep this
     // assertion exact so adding a migration requires reviewing both the
     // embedded capability manifest and its attestation expectation.
-    assert_eq!(manifest.versions.last(), Some(&161));
-    assert_eq!(manifest.versions.len(), 160);
+    assert_eq!(manifest.versions.last(), Some(&162));
+    assert_eq!(manifest.versions.len(), 161);
     assert!(!manifest.versions.contains(&21));
     assert!(manifest
         .checksum_hex

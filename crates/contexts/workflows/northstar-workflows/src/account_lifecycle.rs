@@ -540,12 +540,13 @@ async fn delete_user_with_roster_inner<E: RosterTransactionEffects>(
     }
     lock_ids.sort_unstable();
     lock_ids.dedup();
-    let locked = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE",
-    )
-    .bind(&lock_ids)
-    .fetch_all(&mut *transaction)
-    .await?;
+    // The runtime role has no UPDATE on users; the reviewed row-lock
+    // capability locks every affected account in id order.
+    let locked =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM northstar_lock_user_rows_update($1)")
+            .bind(&lock_ids)
+            .fetch_all(&mut *transaction)
+            .await?;
     if !locked.contains(&user_id) {
         transaction.rollback().await?;
         return Ok(None);
@@ -821,11 +822,9 @@ pub async fn publish_user_agent_login_epoch_in_transaction(
     let epoch = sqlx::query_scalar::<_, i64>(
         "SELECT stage.epoch
            FROM user_agent_login_epoch_stages stage
-           JOIN users u ON u.id=stage.user_id
           WHERE stage.operation_id=$1 AND stage.connection_id=$2
             AND stage.user_id=$3 AND stage.device_id=$4
             AND stage.auth_generation=$5 AND stage.expires_at>clock_timestamp()
-            AND NOT u.is_disabled AND u.auth_generation=stage.auth_generation
             AND (
                 EXISTS (
                     SELECT 1 FROM deployment_session_leases lease
@@ -840,7 +839,7 @@ pub async fn publish_user_agent_login_epoch_in_transaction(
                        AND claim.expires_at>clock_timestamp()
                 ))
             )
-          FOR UPDATE OF stage,u",
+          FOR UPDATE OF stage",
     )
     .bind(operation_id)
     .bind(connection_id)
@@ -853,6 +852,23 @@ pub async fn publish_user_agent_login_epoch_in_transaction(
     let Some(epoch) = epoch else {
         return Ok(None);
     };
+    // Lock the account after the stage, the order of the former joined
+    // FOR UPDATE OF stage,u. The runtime role has no UPDATE on users, so the
+    // account lock uses the reviewed row-lock capability and the stage's
+    // generation is compared with the locked row version.
+    let account_current = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(
+             SELECT 1 FROM northstar_lock_user_rows_update(ARRAY[$1::uuid]) u
+              WHERE NOT u.is_disabled AND u.auth_generation=$2
+         )",
+    )
+    .bind(user_id)
+    .bind(expected_auth_generation)
+    .fetch_one(&mut **tx)
+    .await?;
+    if !account_current {
+        return Ok(None);
+    }
     sqlx::query(
         "INSERT INTO user_agent_login_epochs(user_id,device_id,epoch)
          VALUES($1,$2,$3)

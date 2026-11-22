@@ -134,13 +134,14 @@ pub trait MucHost: Send + Sync + 'static {
         &self,
         command: FederatedMamMetadataCommand,
     ) -> impl Future<Output = Result<MamMetadataResult>> + Send;
+    /// The synchronous, side-effect-free renderer may receive a fresh page on retry.
     fn admit_federated_room_stream<F>(
         &self,
         request: FederatedMamStreamRequest<'_>,
         render: F,
     ) -> impl Future<Output = Result<FederatedMamAdmissionOutcome>> + Send
     where
-        F: FnOnce(&FederatedMamStreamPage) -> Result<Vec<String>> + Send;
+        F: FnMut(&FederatedMamStreamPage) -> Result<Vec<String>> + Send;
 
     fn admit_muc_pg_mutation(&self) -> Result<()>;
     fn archive_requires_encryption(&self) -> bool;

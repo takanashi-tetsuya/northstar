@@ -98,3 +98,15 @@ do
     "message::archive_admission::$test_name" \
     -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee -a "$test_log"
 done
+
+for test_name in \
+  different_rooms_cannot_overadmit_global_rows_bytes_or_domain_rows \
+  read_committed_winner_forces_fresh_room_authorization_and_render \
+  second_serialization_conflict_rolls_back_without_wake \
+  expiry_and_completion_do_not_advance_or_lock_the_generation
+do
+  TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$runner_schema" \
+    cargo test --locked --offline -p northstar-db-it \
+    "archive::mam_outbox_generation::$test_name" \
+    -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee -a "$test_log"
+done

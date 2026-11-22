@@ -256,8 +256,23 @@ pub async fn enqueue_s2s_outbox_with_id_in_transaction(
         .await?;
 
     let totals = sqlx::query(
-        "SELECT COUNT(*)::BIGINT AS row_count, COALESCE(SUM(octet_length(stanza)), 0)::BIGINT AS byte_count FROM s2s_outbox WHERE expires_at > NOW()",
+        "WITH locked_fence AS MATERIALIZED (
+             SELECT singleton
+             FROM s2s_outbox_enqueue_generation
+             WHERE singleton
+             FOR NO KEY UPDATE
+         )
+         SELECT totals.row_count, totals.byte_count, totals.domain_count
+         FROM locked_fence
+         CROSS JOIN (
+             SELECT COUNT(*)::BIGINT AS row_count,
+                    COALESCE(SUM(octet_length(stanza)), 0)::BIGINT AS byte_count,
+                    (COUNT(*) FILTER (WHERE target_domain = $1))::BIGINT AS domain_count
+             FROM s2s_outbox
+             WHERE expires_at > statement_timestamp()
+         ) AS totals",
     )
+    .bind(&target_domain)
     .fetch_one(&mut **transaction)
     .await?;
     let row_count: i64 = totals.try_get("row_count")?;
@@ -268,19 +283,22 @@ pub async fn enqueue_s2s_outbox_with_id_in_transaction(
         return Err(S2sOutboxCapacityExceeded::Global.into());
     }
 
-    let domain_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*)::BIGINT FROM s2s_outbox WHERE target_domain = $1 AND expires_at > NOW()",
-    )
-    .bind(&target_domain)
-    .fetch_one(&mut **transaction)
-    .await?;
+    let domain_count: i64 = totals.try_get("domain_count")?;
     if domain_count >= policy.max_per_domain {
         S2S_OUTBOX_CAPACITY_REJECTIONS_TOTAL.fetch_add(1, Ordering::Relaxed);
         return Err(S2sOutboxCapacityExceeded::PerDomain.into());
     }
 
-    sqlx::query(
-        "INSERT INTO s2s_outbox (id, target_domain, bounce_to, stanza, dedupe_hash, expires_at) VALUES ($1, $2, $3, $4, $5, NOW() + ($6 * INTERVAL '1 second'))",
+    let inserted = sqlx::query(
+        "WITH advanced_fence AS (
+             UPDATE s2s_outbox_enqueue_generation
+             SET generation = generation + 1
+             WHERE singleton
+             RETURNING singleton
+         )
+         INSERT INTO s2s_outbox (id, target_domain, bounce_to, stanza, dedupe_hash, expires_at)
+         SELECT $1, $2, $3, $4, $5, NOW() + ($6 * INTERVAL '1 second')
+         FROM advanced_fence",
     )
     .bind(id)
     .bind(&target_domain)
@@ -290,6 +308,10 @@ pub async fn enqueue_s2s_outbox_with_id_in_transaction(
     .bind(i64::try_from(policy.ttl_seconds).context("S2S outbox TTL is too large")?)
     .execute(&mut **transaction)
     .await?;
+    anyhow::ensure!(
+        inserted.rows_affected() == 1,
+        "S2S outbox generation row is missing"
+    );
     Ok(())
 }
 

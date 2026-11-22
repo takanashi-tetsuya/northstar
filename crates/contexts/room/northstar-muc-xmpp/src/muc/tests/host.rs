@@ -223,7 +223,7 @@ impl MucHost for Host {
         render: F,
     ) -> Result<FederatedMamAdmissionOutcome>
     where
-        F: FnOnce(&FederatedMamStreamPage) -> Result<Vec<String>> + Send,
+        F: FnMut(&FederatedMamStreamPage) -> Result<Vec<String>> + Send,
     {
         let _ = (request, render);
         panic!("unexpected federated archive stream");

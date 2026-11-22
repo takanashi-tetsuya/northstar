@@ -5,16 +5,25 @@ use anyhow::Result;
 use northstar_archive_application::*;
 use northstar_archive_postgres as archive;
 use northstar_room_postgres::mam_authorization::FederatedMamRoomGuard;
-use sqlx::{Acquire, PgPool};
+use sqlx::{Acquire, PgPool, Postgres, Transaction};
+
+#[cfg(feature = "test-support")]
+pub mod test_support;
 
 #[derive(Clone)]
 pub struct PostgresMamRepository {
     pool: PgPool,
+    #[cfg(feature = "test-support")]
+    admission_pauses: test_support::AdmissionPauses,
 }
 
 impl PostgresMamRepository {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            #[cfg(feature = "test-support")]
+            admission_pauses: Default::default(),
+        }
     }
 }
 
@@ -163,10 +172,51 @@ impl FederatedMamStreamWriter for PostgresMamRepository {
         &self,
         limits: FederatedMamOutboxLimits,
         request: FederatedMamStreamRequest<'_>,
-        render: F,
+        mut render: F,
     ) -> Result<FederatedMamAdmissionOutcome>
     where
-        F: FnOnce(&FederatedMamStreamPage) -> Result<Vec<String>> + Send,
+        F: FnMut(&FederatedMamStreamPage) -> Result<Vec<String>> + Send,
+    {
+        let mut attempt = 1;
+        loop {
+            match self
+                .admit_federated_room_stream_attempt(limits, request, attempt, &mut render)
+                .await
+            {
+                Ok(outcome) => return Ok(outcome),
+                Err(FederatedMamAttemptError::Other(error)) => return Err(error),
+                Err(FederatedMamAttemptError::Serialization(error)) => {
+                    if !federated_mam_should_retry(attempt, database_sqlstate(&error).as_deref()) {
+                        tracing::warn!(
+                            domain = request.target_domain,
+                            room = request.localpart,
+                            attempt,
+                            ?error,
+                            "federated MAM serialization retry exhausted"
+                        );
+                        return Ok(FederatedMamAdmissionOutcome::OutboxRejected);
+                    }
+                    #[cfg(feature = "test-support")]
+                    self.admission_pauses
+                        .pause(attempt, test_support::FederatedMamPausePoint::BeforeRetry)
+                        .await?;
+                    attempt += 1;
+                }
+            }
+        }
+    }
+}
+
+impl PostgresMamRepository {
+    async fn admit_federated_room_stream_attempt<F>(
+        &self,
+        limits: FederatedMamOutboxLimits,
+        request: FederatedMamStreamRequest<'_>,
+        attempt: u8,
+        render: &mut F,
+    ) -> Result<FederatedMamAdmissionOutcome, FederatedMamAttemptError>
+    where
+        F: FnMut(&FederatedMamStreamPage) -> Result<Vec<String>> + Send,
     {
         let Some(mut guard) = FederatedMamRoomGuard::acquire(&self.pool, request.localpart).await?
         else {
@@ -174,49 +224,90 @@ impl FederatedMamStreamWriter for PostgresMamRepository {
         };
         let room_id = guard.room_id();
         let mut transaction = guard.begin_snapshot().await?;
+        let result = match self
+            .render_and_enqueue_room_stream(
+                &mut transaction,
+                room_id,
+                limits,
+                request,
+                attempt,
+                render,
+            )
+            .await
+        {
+            Ok(outcome) => match transaction.commit().await.map_err(classify_sqlx_error) {
+                Ok(()) => Ok(outcome),
+                Err(error @ FederatedMamAttemptError::Other(_)) => return Err(error),
+                Err(error) => Err(error),
+            },
+            Err(error @ FederatedMamAttemptError::Serialization(_)) => {
+                transaction.rollback().await?;
+                Err(error)
+            }
+            Err(error) => return Err(error),
+        };
+        let released = guard.release().await;
+        match result {
+            Ok(outcome) => outcome.map_err(FederatedMamAttemptError::Other),
+            Err(FederatedMamAttemptError::Serialization(error)) if !released => {
+                Err(FederatedMamAttemptError::Other(error.context(
+                    "federated MAM room guard release could not be confirmed",
+                )))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn render_and_enqueue_room_stream<F>(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        room_id: uuid::Uuid,
+        limits: FederatedMamOutboxLimits,
+        request: FederatedMamStreamRequest<'_>,
+        attempt: u8,
+        render: &mut F,
+    ) -> Result<Result<FederatedMamAdmissionOutcome>, FederatedMamAttemptError>
+    where
+        F: FnMut(&FederatedMamStreamPage) -> Result<Vec<String>> + Send,
+    {
         let page = match mam_room::mam_federated_room_archive_page_authorized_in_transaction(
-            &mut transaction,
+            transaction,
             room_id,
             request.localpart,
             request.authority,
             request.query,
         )
-        .await?
+        .await
+        .map_err(classify_transaction_error)?
         {
             archive::MamRoomReadOutcome::Allowed {
                 access,
                 value: Some(page),
             } => map_federated_stream_page(access, page),
             archive::MamRoomReadOutcome::Allowed { value: None, .. } => {
-                transaction.commit().await?;
-                guard.release().await;
-                return Ok(FederatedMamAdmissionOutcome::PageMissing);
+                return Ok(Ok(FederatedMamAdmissionOutcome::PageMissing));
             }
             archive::MamRoomReadOutcome::Missing => {
-                transaction.commit().await?;
-                guard.release().await;
-                return Ok(FederatedMamAdmissionOutcome::Missing);
+                return Ok(Ok(FederatedMamAdmissionOutcome::Missing));
             }
             archive::MamRoomReadOutcome::Forbidden | archive::MamRoomReadOutcome::StaleAccount => {
-                transaction.commit().await?;
-                guard.release().await;
-                return Ok(FederatedMamAdmissionOutcome::Forbidden);
+                return Ok(Ok(FederatedMamAdmissionOutcome::Forbidden));
             }
         };
 
         let responses = match render(&page) {
             Ok(responses) => responses,
-            Err(error) => {
-                transaction.commit().await?;
-                guard.release().await;
-                return Err(error);
-            }
+            Err(error) => return Ok(Err(error)),
         };
         if responses.is_empty() {
-            transaction.commit().await?;
-            guard.release().await;
-            anyhow::bail!("federated MAM renderer omitted the terminal response");
+            return Ok(Err(anyhow::anyhow!(
+                "federated MAM renderer omitted the terminal response"
+            )));
         }
+        #[cfg(feature = "test-support")]
+        self.admission_pauses
+            .pause(attempt, test_support::FederatedMamPausePoint::AfterRender)
+            .await?;
         let policy = northstar_federation_core::S2sOutboxPolicy {
             ttl_seconds: limits.ttl_seconds,
             max_rows: limits.max_rows,
@@ -225,7 +316,7 @@ impl FederatedMamStreamWriter for PostgresMamRepository {
         };
         // Keep the response batch atomic while preserving the historical
         // one-time room repair if response admission is rejected.
-        let mut outbox = transaction.begin().await?;
+        let mut outbox = transaction.begin().await.map_err(classify_sqlx_error)?;
         for response in &responses {
             if let Err(error) = northstar_federation_postgres::enqueue_s2s_outbox_in_transaction(
                 &mut outbox,
@@ -237,22 +328,67 @@ impl FederatedMamStreamWriter for PostgresMamRepository {
             .await
             {
                 outbox.rollback().await?;
-                transaction.commit().await?;
-                guard.release().await;
+                let error = match classify_transaction_error(error) {
+                    error @ FederatedMamAttemptError::Serialization(_) => return Err(error),
+                    FederatedMamAttemptError::Other(error) => error,
+                };
                 tracing::warn!(
                     domain = request.target_domain,
                     room = request.localpart,
+                    attempt,
                     ?error,
                     "federated MAM response stream was rejected atomically"
                 );
-                return Ok(FederatedMamAdmissionOutcome::OutboxRejected);
+                return Ok(Ok(FederatedMamAdmissionOutcome::OutboxRejected));
             }
         }
-        outbox.commit().await?;
-        transaction.commit().await?;
-        guard.release().await;
-        Ok(FederatedMamAdmissionOutcome::Queued)
+        outbox.commit().await.map_err(classify_sqlx_error)?;
+        Ok(Ok(FederatedMamAdmissionOutcome::Queued))
     }
+}
+
+enum FederatedMamAttemptError {
+    Serialization(anyhow::Error),
+    Other(anyhow::Error),
+}
+
+impl From<anyhow::Error> for FederatedMamAttemptError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<sqlx::Error> for FederatedMamAttemptError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Other(error.into())
+    }
+}
+
+fn database_sqlstate(error: &anyhow::Error) -> Option<std::borrow::Cow<'_, str>> {
+    error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<sqlx::Error>()?
+            .as_database_error()?
+            .code()
+    })
+}
+
+fn classify_sqlx_error(error: sqlx::Error) -> FederatedMamAttemptError {
+    classify_transaction_error(error.into())
+}
+
+fn classify_transaction_error(error: anyhow::Error) -> FederatedMamAttemptError {
+    if database_sqlstate(&error).as_deref() == Some(SERIALIZATION_FAILURE) {
+        FederatedMamAttemptError::Serialization(error)
+    } else {
+        FederatedMamAttemptError::Other(error)
+    }
+}
+
+const SERIALIZATION_FAILURE: &str = "40001";
+
+fn federated_mam_should_retry(attempt: u8, sqlstate: Option<&str>) -> bool {
+    attempt == 1 && sqlstate == Some(SERIALIZATION_FAILURE)
 }
 
 fn map_room_access(access: archive::MamRoomArchiveAccess) -> MamRoomAccess {
@@ -305,3 +441,6 @@ fn map_federated_stream_page(
         complete: page.complete,
     }
 }
+
+#[cfg(test)]
+mod tests;

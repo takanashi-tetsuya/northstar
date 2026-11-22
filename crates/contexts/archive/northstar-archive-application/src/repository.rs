@@ -69,7 +69,8 @@ pub trait MamPreferencesWriter: Send + Sync {
 pub trait FederatedMamStreamWriter: Send + Sync {
     type Error;
     /// Keep room authorization and all response rows, including the terminal
-    /// IQ, in one transaction. Rendering must be synchronous and side-effect free.
+    /// IQ, in one transaction. The synchronous, side-effect-free renderer may
+    /// be called again with a freshly authorized page.
     fn admit_federated_room_stream<F>(
         &self,
         limits: FederatedMamOutboxLimits,
@@ -77,5 +78,5 @@ pub trait FederatedMamStreamWriter: Send + Sync {
         render: F,
     ) -> impl Future<Output = Result<FederatedMamAdmissionOutcome, Self::Error>> + Send
     where
-        F: FnOnce(&FederatedMamStreamPage) -> Result<Vec<String>, Self::Error> + Send;
+        F: FnMut(&FederatedMamStreamPage) -> Result<Vec<String>, Self::Error> + Send;
 }

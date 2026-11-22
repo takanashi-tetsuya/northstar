@@ -119,7 +119,7 @@ impl<R: FederatedMamStreamWriter<Error = anyhow::Error>> MamService<R> {
         render: F,
     ) -> Result<FederatedMamAdmissionOutcome>
     where
-        F: FnOnce(&FederatedMamStreamPage) -> Result<Vec<String>> + Send,
+        F: FnMut(&FederatedMamStreamPage) -> Result<Vec<String>> + Send,
     {
         let outcome = self
             .repository

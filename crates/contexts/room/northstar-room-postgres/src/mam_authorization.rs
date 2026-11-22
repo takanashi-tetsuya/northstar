@@ -208,7 +208,8 @@ impl FederatedMamRoomGuard {
         Ok(transaction)
     }
 
-    pub async fn release(mut self) {
+    /// Return whether the advisory unlock was confirmed. Otherwise discard the session.
+    pub async fn release(mut self) -> bool {
         let unlocked = sqlx::query_scalar::<_, bool>(
             "SELECT pg_advisory_unlock(hashtextextended($1::TEXT, 29))",
         )
@@ -226,6 +227,7 @@ impl FederatedMamRoomGuard {
         }
         // On failure Drop closes the session. Once the transaction committed,
         // an unlock failure must not report a failed read or outbox admission.
+        !self.maybe_held
     }
 }
 

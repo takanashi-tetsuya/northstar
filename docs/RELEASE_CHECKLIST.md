@@ -213,9 +213,13 @@ and Docker artifacts and their provenance. They do not repeat source CI.
   with every server process stopped. Reconcile exact grants and verify that
   runtime holds only `SELECT, INSERT` on `mix_source_retractions` before
   starting updated binaries; never run old and new readers or writers together.
+- [ ] Apply [migration `0160`](../migrations/0160_s2s_outbox_enqueue_generation.sql)
+  with every S2S outbox writer stopped. Reconcile exact grants and verify that
+  runtime holds only `SELECT, UPDATE` on `s2s_outbox_enqueue_generation` before
+  starting updated binaries; never run old and new writers together.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 158 migrations from `0001` through the current
-  repository maximum `0159`, with `0021` as the sole intentional gap.
+  identity and verify all 159 migrations from `0001` through the current
+  repository maximum `0160`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

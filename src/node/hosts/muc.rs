@@ -125,7 +125,7 @@ impl MucHost for ServerNode {
         render: F,
     ) -> Result<FederatedMamAdmissionOutcome>
     where
-        F: FnOnce(&FederatedMamStreamPage) -> Result<Vec<String>> + Send,
+        F: FnMut(&FederatedMamStreamPage) -> Result<Vec<String>> + Send,
     {
         self.archive
             .mam_service()

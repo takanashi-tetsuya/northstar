@@ -1085,11 +1085,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 158 files from `0001` through
-`0159`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 159 files from `0001` through
+`0160`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0159`, with the exact SQLx description and SHA-384 checksum, before it
+through `0160`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url`, `storage_database_url`, and `command_database_url`
 secrets; none of these identities may attempt DDL. Pending, failed, unknown,
@@ -1153,6 +1153,13 @@ retraction and an old writer would skip the source fence, so there is no
 mixed-version period or rolling rollback. The guarantee is forward-only:
 retractions committed before the cutover are not backfilled, except that an
 exact verified reflection replay records its missing fact.
+[Migration `0160`](../migrations/0160_s2s_outbox_enqueue_generation.sql) fences
+S2S outbox quota admission with an in-transaction generation row, so concurrent
+federated MAM streams for different rooms can no longer together exceed the
+global row, byte or per-domain limit. It is a stopped-writer boundary: stop
+every process that enqueues S2S outbox rows, migrate, reconcile exact grants
+and start only updated binaries. An old writer bypasses the fence, so neither a
+mixed-version period nor a rolling rollback to an older binary is safe.
 On an existing volume, stop every old server process, generate the new storage
 password and URL secrets, reconcile the new role, run migrations and exact
 grants, then start the new binary. The older binary's exact role/ACL audit does
@@ -1326,7 +1333,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0159` manifest
+5. run the one-shot migration job through the complete `0001`-`0160` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

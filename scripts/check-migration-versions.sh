@@ -1628,6 +1628,27 @@ if grep -Eiq '\b(REFERENCES|FOREIGN|TRIGGER|FUNCTION|PROCEDURE|DO|INSERT|UPDATE|
     echo 'migration 0159 must add only the independent source-fence relation and index, without backfill' >&2
     exit 1
 fi
+outbox_generation_migration="migrations/0160_s2s_outbox_enqueue_generation.sql"
+outbox_generation_sql=$(tr -s '[:space:]' ' ' < "$outbox_generation_migration")
+for required_fragment in \
+    'CREATE TABLE IF NOT EXISTS s2s_outbox_enqueue_generation (' \
+    'singleton BOOLEAN PRIMARY KEY DEFAULT TRUE,' \
+    'generation BIGINT NOT NULL DEFAULT 0,' \
+    'CONSTRAINT s2s_outbox_enqueue_generation_singleton CHECK (singleton),' \
+    'CONSTRAINT s2s_outbox_enqueue_generation_nonnegative CHECK (generation >= 0)' \
+    'INSERT INTO s2s_outbox_enqueue_generation (singleton, generation) VALUES (TRUE, 0) ON CONFLICT (singleton) DO NOTHING;' \
+    'REVOKE ALL ON TABLE s2s_outbox_enqueue_generation FROM PUBLIC;'
+do
+    if ! printf '%s\n' "$outbox_generation_sql" | grep -Fq "$required_fragment"; then
+        echo "migration 0160 outbox generation is missing: $required_fragment" >&2
+        exit 1
+    fi
+done
+if printf '%s\n' "$outbox_generation_sql" | grep -Eiq 'DO UPDATE|CREATE (OR REPLACE )?(CONSTRAINT )?TRIGGER'; then
+    echo "migration 0160 must not reset the outbox generation or install a trigger" >&2
+    exit 1
+fi
+echo "migration 0160 seeds a protected singleton without resetting its generation"
 
 # Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0
 # development line. They are immutable: SQLx will reject changed content in an

@@ -16,15 +16,15 @@ use sqlx::{postgres::PgPoolOptions, PgConnection, PgPool};
 use std::time::Duration;
 use uuid::Uuid;
 
-struct Fixture {
+pub(super) struct Fixture {
     url: String,
     schema: String,
     admin: PgPool,
-    pool: PgPool,
+    pub(super) pool: PgPool,
 }
 
 impl Fixture {
-    async fn new() -> Self {
+    pub(super) async fn new() -> Self {
         let url = std::env::var("TEST_DATABASE_URL")
             .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
         let admin = PgPoolOptions::new()
@@ -73,7 +73,7 @@ impl Fixture {
             .unwrap()
     }
 
-    async fn cleanup(self) {
+    pub(super) async fn cleanup(self) {
         self.pool.close().await;
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "DROP SCHEMA {} CASCADE",
@@ -103,14 +103,14 @@ async fn account(pool: &PgPool, username: &str) -> MamLocalAuthority {
     }
 }
 
-fn viewer(full_jid: &str, occupancy: Option<MamOccupancyProof>) -> MamRoomReadAuthority {
+pub(super) fn viewer(full_jid: &str, occupancy: Option<MamOccupancyProof>) -> MamRoomReadAuthority {
     MamRoomReadAuthority {
         full_jid: full_jid.to_owned(),
         occupancy,
     }
 }
 
-fn query() -> MamArchiveQuery {
+pub(super) fn query() -> MamArchiveQuery {
     MamArchiveQuery {
         with_jid: None,
         start: None,
@@ -394,7 +394,7 @@ async fn muc_mam_requires_the_exact_live_occupancy_on_all_read_surfaces() {
     fixture.cleanup().await;
 }
 
-async fn room_message(connection: &mut PgConnection, room: Uuid) -> Uuid {
+pub(super) async fn room_message(connection: &mut PgConnection, room: Uuid) -> Uuid {
     sqlx::query_scalar(
         "INSERT INTO muc_messages(id,room_id,sender_jid,nick,stanza,encrypted,message_kind,actor_scope)
          VALUES(gen_random_uuid(),$1,'sender@remote.test/Phone','Sender','<message/>',

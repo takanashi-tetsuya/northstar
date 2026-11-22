@@ -2519,6 +2519,41 @@ expect_insufficient_privilege "$storage_role" "$storage_password" \
   'storage unrelated users read' \
   'SELECT id FROM public.users LIMIT 1'
 
+outbox_generation_acl_ok=$(control_psql --dbname="$database_name" --tuples-only --no-align <<'PSQL'
+SELECT pg_catalog.pg_get_userbyid(relation.relowner) = 'northstar_migrator'
+   AND pg_catalog.has_table_privilege('northstar_runtime',relation.oid,'SELECT')
+   AND pg_catalog.has_table_privilege('northstar_runtime',relation.oid,'UPDATE')
+   AND pg_catalog.has_table_privilege('northstar_backup',relation.oid,'SELECT')
+   AND NOT EXISTS (
+     SELECT 1 FROM pg_catalog.aclexplode(relation.relacl) AS acl
+      WHERE acl.grantee=0 OR (acl.grantee<>relation.relowner AND NOT (
+        (pg_catalog.pg_get_userbyid(acl.grantee)='northstar_runtime'
+          AND acl.privilege_type IN ('SELECT','UPDATE') AND NOT acl.is_grantable)
+        OR (pg_catalog.pg_get_userbyid(acl.grantee)='northstar_backup'
+          AND acl.privilege_type='SELECT' AND NOT acl.is_grantable)
+      ))
+   )
+  FROM pg_catalog.pg_class AS relation
+ WHERE relation.oid='public.s2s_outbox_enqueue_generation'::pg_catalog.regclass;
+PSQL
+)
+[[ "$outbox_generation_acl_ok" == 't' ]] || fail '0160 S2S outbox generation table ACL drifted'
+for role_and_password in storage command; do
+  if [[ "$role_and_password" == storage ]]; then
+    generation_probe_role="$storage_role"
+    generation_probe_password="$storage_password"
+  else
+    generation_probe_role="$command_role"
+    generation_probe_password="$command_password"
+  fi
+  expect_insufficient_privilege "$generation_probe_role" "$generation_probe_password" \
+    "$role_and_password outbox generation read" \
+    'SELECT generation FROM public.s2s_outbox_enqueue_generation WHERE singleton'
+  expect_insufficient_privilege "$generation_probe_role" "$generation_probe_password" \
+    "$role_and_password outbox generation update" \
+    'UPDATE public.s2s_outbox_enqueue_generation SET generation=generation WHERE false'
+done
+
 xep0133_state_acl_ok=$(control_psql --dbname="$database_name" --tuples-only --no-align <<'PSQL'
 SELECT NOT EXISTS (
   SELECT 1

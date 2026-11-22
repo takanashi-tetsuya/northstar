@@ -84,6 +84,11 @@ run_exact_ignored() {
   fi
 }
 
+if [[ "${XMPP_TEST_MEASURE_S2S_OUTBOX:-false}" == "true" ]]; then
+  run_exact_ignored northstar-db-it pubsub::integration::lock_measure::federation::federation_enqueue_generation_contention
+  exit 0
+fi
+
 run_exact_ignored northstar-federation-postgres db_tests::claim_preserves_mam_results_before_fin
 run_exact_ignored northstar-federation-postgres db_tests::scoped_claims_are_cross_worker_ordered_and_component_safe
 run_exact_ignored northstar-federation-postgres db_tests::sm_ack_accepts_terminal_pam_cleanup_without_losing_other_claim_fences

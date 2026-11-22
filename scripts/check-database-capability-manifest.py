@@ -1089,6 +1089,7 @@ for relation_name, expected_acl in {
     "mix_pam_operations": (True, False, True, False),
     "sm_resume_sessions": (False, False, False, False),
     "mix_source_retractions": (True, True, False, False),
+    "s2s_outbox_enqueue_generation": (True, False, True, False),
 }.items():
     if relation_manifest.get(relation_name, ())[:4] != expected_acl:
         fail(f"least-privilege runtime ACL drifted for {relation_name}")

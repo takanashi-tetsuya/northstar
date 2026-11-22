@@ -19,6 +19,8 @@ use tokio::task::JoinSet;
 
 #[path = "lock_measure/auto_create.rs"]
 mod auto_create;
+#[path = "lock_measure/federation.rs"]
+mod federation;
 #[path = "lock_measure/graph.rs"]
 mod graph;
 #[path = "lock_measure/items.rs"]
@@ -138,6 +140,7 @@ struct Scenario {
     name: &'static str,
     pool: PgPool,
     monitor_pool: PgPool,
+    sample_advisory_key: Option<i64>,
 }
 
 impl Scenario {
@@ -147,6 +150,15 @@ impl Scenario {
         let _ = sqlx::query("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
             .execute(&pool)
             .await;
+        sqlx::query(
+            "SELECT pg_catalog.set_config('search_path', pg_catalog.format('pg_catalog, %I', ns.nspname), FALSE)
+               FROM pg_catalog.pg_extension ext
+               JOIN pg_catalog.pg_namespace ns ON ns.oid=ext.extnamespace
+              WHERE ext.extname='pg_stat_statements'",
+        )
+        .execute(&monitor_pool)
+        .await
+        .unwrap();
 
         // Open the worker connections outside the measurement window.
         let mut connections = Vec::new();
@@ -158,6 +170,7 @@ impl Scenario {
             name,
             pool,
             monitor_pool,
+            sample_advisory_key: None,
         }
     }
 
@@ -175,11 +188,19 @@ impl Scenario {
         E: Fn(&T) -> bool + Clone + Send + Sync + 'static,
     {
         let stats_available = sqlx::query("SELECT pg_stat_statements_reset()")
-            .execute(&self.pool)
+            .execute(&self.monitor_pool)
             .await
             .is_ok();
+        assert!(
+            self.sample_advisory_key.is_none() || stats_available,
+            "the S2S lock measurement needs pg_stat_statements and reset permission"
+        );
         let (stop, stopped) = oneshot::channel();
-        let monitor = tokio::spawn(sample_lock_waits(self.monitor_pool.clone(), stopped));
+        let monitor = tokio::spawn(sample_lock_waits(
+            self.monitor_pool.clone(),
+            stopped,
+            self.sample_advisory_key,
+        ));
         let barrier = Arc::new(Barrier::new(concurrency + 1));
         let mut workers = JoinSet::new();
         for worker in 0..concurrency {
@@ -209,7 +230,7 @@ impl Scenario {
         let _ = stop.send(());
         let lock_wait = monitor.await.unwrap().unwrap();
         let statements = if stats_available {
-            statement_statistics(&self.pool).await.unwrap()
+            statement_statistics(&self.monitor_pool).await.unwrap()
         } else {
             json!({ "pg_stat_statements": "unavailable" })
         };
@@ -232,32 +253,60 @@ fn milliseconds(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 
-async fn sample_lock_waits(pool: PgPool, mut stopped: oneshot::Receiver<()>) -> Result<Value> {
+async fn sample_lock_waits(
+    pool: PgPool,
+    mut stopped: oneshot::Receiver<()>,
+    advisory_key: Option<i64>,
+) -> Result<Value> {
     let mut ticks = tokio::time::interval(LOCK_SAMPLE_INTERVAL);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut samples = 0;
     let mut max_waiters = 0;
     let mut waiter_sum = 0;
+    let mut tuple_waiter_sum = 0;
+    let mut advisory_waiter_sum = 0;
+    let mut advisory_holder_sum = 0;
     loop {
         tokio::select! {
             biased;
             _ = &mut stopped => break,
             _ = ticks.tick() => {}
         }
-        let waiters: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM pg_stat_activity
+        let (waiters, tuple_waiters): (i64, i64) = sqlx::query_as(
+            "SELECT count(*), count(*) FILTER (WHERE wait_event IN ('tuple','transactionid'))
+             FROM pg_stat_activity
              WHERE datname = current_database() AND wait_event_type = 'Lock'",
         )
         .fetch_one(&pool)
         .await?;
+        if let Some(key) = advisory_key {
+            let (waiting, holding): (i64, i64) = sqlx::query_as(
+                "SELECT count(*) FILTER (WHERE NOT granted), count(*) FILTER (WHERE granted)
+                   FROM pg_locks
+                  WHERE locktype='advisory' AND objsubid=1
+                    AND database=(SELECT oid FROM pg_database WHERE datname=current_database())
+                    AND classid::bigint=(($1::bigint >> 32) & 4294967295)
+                    AND objid::bigint=($1::bigint & 4294967295)",
+            )
+            .bind(key)
+            .fetch_one(&pool)
+            .await?;
+            advisory_waiter_sum += waiting;
+            advisory_holder_sum += holding;
+        }
         samples += 1;
         max_waiters = max_waiters.max(waiters);
         waiter_sum += waiters;
+        tuple_waiter_sum += tuple_waiters;
     }
+    let interval_ms = milliseconds(LOCK_SAMPLE_INTERVAL);
     Ok(json!({
         "samples": samples,
         "max_waiters": max_waiters,
-        "estimated_wait_ms": waiter_sum as f64 * milliseconds(LOCK_SAMPLE_INTERVAL),
+        "estimated_wait_ms": waiter_sum as f64 * interval_ms,
+        "estimated_tuple_or_transaction_wait_ms": tuple_waiter_sum as f64 * interval_ms,
+        "estimated_key_advisory_wait_ms": advisory_key.map(|_| advisory_waiter_sum as f64 * interval_ms),
+        "estimated_key_advisory_hold_ms": advisory_key.map(|_| advisory_holder_sum as f64 * interval_ms),
     }))
 }
 
@@ -278,6 +327,7 @@ async fn statement_statistics(pool: &PgPool) -> Result<Value> {
              WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
                AND query NOT ILIKE '%pg_stat_statements%'
                AND query NOT ILIKE '%pg_stat_activity%'
+               AND query NOT ILIKE '%pg_locks%'
          ), slowest AS (
              SELECT * FROM stats ORDER BY total_exec_time DESC, queryid, userid, toplevel LIMIT 10
          )

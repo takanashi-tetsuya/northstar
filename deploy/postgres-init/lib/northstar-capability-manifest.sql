@@ -388,4 +388,5 @@ VALUES
   ('upload_storage_migration_items',FALSE,FALSE,FALSE,FALSE,'0149'),
   ('upload_storage_migration_attempts',FALSE,FALSE,FALSE,FALSE,'0149'),
   ('northstar_restore_outcome_markers',FALSE,FALSE,FALSE,FALSE,'0149'),
-  ('mix_source_retractions',TRUE,TRUE,FALSE,FALSE,'0159');
+  ('mix_source_retractions',TRUE,TRUE,FALSE,FALSE,'0159'),
+  ('s2s_outbox_enqueue_generation',TRUE,FALSE,TRUE,FALSE,'0160');

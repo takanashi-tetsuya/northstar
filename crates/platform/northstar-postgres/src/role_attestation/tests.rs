@@ -145,8 +145,8 @@ fn embedded_migration_ledger_is_complete_and_preserves_intentional_gaps() {
     // The ledger has one intentional historical gap (0021).  Keep this
     // assertion exact so adding a migration requires reviewing both the
     // embedded capability manifest and its attestation expectation.
-    assert_eq!(manifest.versions.last(), Some(&159));
-    assert_eq!(manifest.versions.len(), 158);
+    assert_eq!(manifest.versions.last(), Some(&160));
+    assert_eq!(manifest.versions.len(), 159);
     assert!(!manifest.versions.contains(&21));
     assert!(manifest
         .checksum_hex

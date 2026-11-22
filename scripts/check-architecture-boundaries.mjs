@@ -635,7 +635,7 @@ function protocolModuleSource(name, readFile = (relative) => readProductionModul
 
 // Preserve single-file reads for unrelated modules in the mixed inventories below.
 const productionProtocolModules = new Set([
-  'pep.rs', 'pubsub.rs', 'messaging.rs', 'commands.rs', 'presence.rs', 'sasl2.rs',
+  'pep.rs', 'pubsub.rs', 'messaging.rs', 'commands.rs', 'presence.rs', 'sasl2.rs', 'sm.rs',
 ]);
 function readProtocolSource(name) {
   return productionProtocolModules.has(name) ? protocolModuleSource(name) : protocolModuleSource(name, read);
@@ -2698,7 +2698,7 @@ if (!read('crates/contexts/session/northstar-session-application/src/post_action
       /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(protocolModuleSource(name, read)))
     || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('crates/edges/northstar-stream/src/protocol/ibr.rs'))
     || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(readProductionModule('crates/edges/northstar-stream/src/protocol/misc.rs', { root }))
-    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(read('crates/edges/northstar-stream/src/protocol/sm.rs'))
+    || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(readProductionModule('crates/edges/northstar-stream/src/protocol/sm.rs', { root }))
     || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(readProductionModule('crates/edges/northstar-stream/src/protocol/sasl2.rs', { root }))
     || /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(c2sProtocol)
     || /(?:self\.)?(?:state|host)\.metrics\b/.test(readProductionModule('crates/contexts/message/northstar-message-xmpp/src/messaging.rs', { root }))

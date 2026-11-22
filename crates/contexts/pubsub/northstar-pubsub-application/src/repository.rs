@@ -168,6 +168,7 @@ pub trait PubSubItemMutationRepository: Send + Sync {
         node: &PubSubNode,
         publisher_jid: &str,
         items: &[(String, String)],
+        publish_options: Option<&PubSubNodeConfig>,
         max_storage_bytes_per_owner: i64,
     ) -> impl std::future::Future<Output = Result<PublishItemsOutcome>> + Send;
     fn create_node_and_publish_items(

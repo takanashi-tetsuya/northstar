@@ -611,7 +611,7 @@ async fn collection_edges_require_child_ownership_and_legacy_edges_do_not_disclo
             &victim,
             &[(
                 "private-second".to_owned(),
-                "<item id='private-second'/>".to_owned(),
+                "<item id='private-second'><value xmlns='urn:test'/></item>".to_owned(),
             )],
             false,
             1_000_000,
@@ -655,7 +655,7 @@ async fn collection_edges_require_child_ownership_and_legacy_edges_do_not_disclo
             &victim,
             &[(
                 "private-authorized".to_owned(),
-                "<item id='private-authorized'/>".to_owned(),
+                "<item id='private-authorized'><value xmlns='urn:test'/></item>".to_owned(),
             )],
             false,
             1_000_000,

@@ -119,7 +119,10 @@ async fn restricted_open_publish_is_denied_by_locked_publish_and_retract() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    let forbidden_item = vec![("forbidden".to_owned(), "<item id='forbidden'/>".to_owned())];
+    let forbidden_item = vec![(
+        "forbidden".to_owned(),
+        "<item id='forbidden'><value xmlns='urn:test'/></item>".to_owned(),
+    )];
     assert_eq!(
         publish_items_with_renderer(
             &pool,
@@ -312,7 +315,7 @@ async fn publish_rechecks_access_model_after_concurrent_config_change() {
             .expect("publisher did not finish after configuration commit")
             .unwrap()
             .unwrap(),
-        PublishItemsOutcome::PreconditionFailed
+        PublishItemsOutcome::Forbidden
     );
     assert!(tokio::time::timeout(
         Duration::from_secs(5),
@@ -586,7 +589,10 @@ async fn prohibited_affiliation_wins_atomically_over_owner_subscription_batch() 
                 &pool,
                 &node,
                 &owner,
-                &[(format!("prohibited-{index}"), "<item/>".to_owned())],
+                &[(
+                    format!("prohibited-{index}"),
+                    "<item><value xmlns='urn:test'/></item>".to_owned(),
+                )],
                 false,
                 1_000_000,
                 &publish_renderer,

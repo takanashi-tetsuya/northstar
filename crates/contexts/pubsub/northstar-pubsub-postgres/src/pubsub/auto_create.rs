@@ -1,6 +1,6 @@
 //! Atomic creation and first publication for service nodes.
 
-use super::item::{lock_creator_storage_quota, publish_items_in_transaction};
+use super::item::{lock_creator_storage_quota, publish_items_in_transaction, PublishPolicyScope};
 use super::node::{
     create_node_in_transaction, lock_node_owner_quota, CreateNodeInTransactionOutcome,
 };
@@ -40,9 +40,10 @@ pub async fn create_node_and_publish_items_with_renderer(
             &created,
             &publisher_jid,
             items,
+            None,
             max_storage_bytes_per_owner,
             renderer,
-            Some(config),
+            PublishPolicyScope::AutoCreate(config),
         )
         .await?
         {

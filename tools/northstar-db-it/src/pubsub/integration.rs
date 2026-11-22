@@ -39,6 +39,8 @@ mod pep_policy_lock;
 mod pep_snapshot;
 #[path = "integration/presence_replay_tests.rs"]
 mod presence_replay;
+#[path = "integration/publish_precondition_tests.rs"]
+mod publish_precondition;
 #[path = "integration/read_only_disco_tests.rs"]
 mod read_only_disco;
 #[path = "integration/subscription_lock_wait_tests.rs"]

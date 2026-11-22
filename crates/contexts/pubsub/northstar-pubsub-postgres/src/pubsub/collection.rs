@@ -3,17 +3,31 @@
 use super::*;
 
 pub async fn collection_parents(pool: &PgPool, child_id: Uuid) -> Result<Vec<PubSubNode>> {
+    collection_parents_with_executor(pool, child_id).await
+}
+
+pub(super) async fn collection_parents_with_executor<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    child_id: Uuid,
+) -> Result<Vec<PubSubNode>> {
     let rows = sqlx::query("SELECT n.id, n.node, n.creator_jid, n.access_model, n.publish_model, n.max_items, n.title, n.description, n.deliver_payloads, n.notify_delete, n.notify_retract, n.persist_items, n.send_last_published_item, n.node_type, n.deliver_notifications, n.notify_config, n.notify_sub, n.language, n.payload_type, n.max_payload_size, n.children_max, n.children_association_policy, n.children_association_whitelist, n.created_at FROM pubsub_collection_members e JOIN pubsub_nodes n ON n.id = e.collection_node_id WHERE e.child_node_id = $1 ORDER BY n.node")
         .bind(child_id)
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?;
     Ok(rows.iter().map(row_to_node).collect())
 }
 
 pub async fn collection_children(pool: &PgPool, collection_id: Uuid) -> Result<Vec<PubSubNode>> {
+    collection_children_with_executor(pool, collection_id).await
+}
+
+pub(super) async fn collection_children_with_executor<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    collection_id: Uuid,
+) -> Result<Vec<PubSubNode>> {
     let rows = sqlx::query("SELECT n.id, n.node, n.creator_jid, n.access_model, n.publish_model, n.max_items, n.title, n.description, n.deliver_payloads, n.notify_delete, n.notify_retract, n.persist_items, n.send_last_published_item, n.node_type, n.deliver_notifications, n.notify_config, n.notify_sub, n.language, n.payload_type, n.max_payload_size, n.children_max, n.children_association_policy, n.children_association_whitelist, n.created_at FROM pubsub_collection_members e JOIN pubsub_nodes n ON n.id = e.child_node_id WHERE e.collection_node_id = $1 ORDER BY n.node LIMIT 1000")
         .bind(collection_id)
-        .fetch_all(pool)
+        .fetch_all(executor)
         .await?;
     Ok(rows.iter().map(row_to_node).collect())
 }

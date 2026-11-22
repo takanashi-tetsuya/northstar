@@ -32,6 +32,7 @@ impl From<crate::PublishItemsOutcome> for PublishItemsOutcome {
             crate::PublishItemsOutcome::QuotaExceeded => Self::QuotaExceeded,
             crate::PublishItemsOutcome::Forbidden => Self::Forbidden,
             crate::PublishItemsOutcome::PreconditionFailed => Self::PreconditionFailed,
+            crate::PublishItemsOutcome::Rejected(rejection) => Self::Rejected(rejection),
         }
     }
 }
@@ -41,6 +42,8 @@ impl From<crate::RetractItemsOutcome> for RetractItemsOutcome {
         match value {
             crate::RetractItemsOutcome::Retracted => Self::Retracted,
             crate::RetractItemsOutcome::NotFound => Self::NotFound,
+            crate::RetractItemsOutcome::NotLeafNode => Self::NotLeafNode,
+            crate::RetractItemsOutcome::NotPersistent => Self::NotPersistent,
             crate::RetractItemsOutcome::Forbidden => Self::Forbidden,
         }
     }

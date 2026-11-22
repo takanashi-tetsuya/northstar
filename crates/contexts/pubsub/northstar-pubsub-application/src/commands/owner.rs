@@ -205,9 +205,8 @@ pub fn validate_pubsub_configure_node_command(
     if command.write.requester.trim().is_empty() {
         return Err(anyhow::anyhow!("requester must not be empty"));
     }
-    if command.write.node.trim().is_empty() {
-        return Err(anyhow::anyhow!("node must not be empty"));
-    }
+    // The name and id are carried together by the preflight node.
+    northstar_pubsub_core::PubSubNodeName::parse(&command.write.node.node)?;
     Ok(())
 }
 

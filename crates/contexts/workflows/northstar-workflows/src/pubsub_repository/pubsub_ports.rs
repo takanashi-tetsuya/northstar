@@ -272,20 +272,23 @@ impl PubSubItemMutationRepository for PostgresPubSubRepository {
         node: &PubSubNode,
         publisher_jid: &str,
         items: &[(String, String)],
+        publish_options: Option<&PubSubNodeConfig>,
         max_storage_bytes_per_owner: i64,
     ) -> Result<PublishItemsOutcome> {
         let outcome: Result<_> = async {
-            Ok(northstar_pubsub_postgres::publish_items_with_renderer(
-                &self.pool,
-                node,
-                publisher_jid,
-                items,
-                false,
-                max_storage_bytes_per_owner,
-                &self.renderer,
+            Ok(
+                northstar_pubsub_postgres::publish_items_with_options_and_renderer(
+                    &self.pool,
+                    node,
+                    publisher_jid,
+                    items,
+                    publish_options,
+                    max_storage_bytes_per_owner,
+                    &self.renderer,
+                )
+                .await?
+                .into(),
             )
-            .await?
-            .into())
         }
         .await;
         outcome.map_err(map_database_busy)

@@ -624,12 +624,6 @@ fn valid_cancel_form_structure(form: Node<'_, '_>) -> bool {
         && has_no_element_content(form)
 }
 
-async fn is_owner<H: PubSubHost>(host: &H, node_id: uuid::Uuid, jid: &str) -> Result<bool> {
-    host.pubsub_application_service()
-        .is_owner(node_id, jid)
-        .await
-}
-
 #[cfg(test)]
 fn pubsub_policy_suppression_is_terminal(
     show_eligible_resources: usize,

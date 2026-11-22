@@ -27,14 +27,15 @@ use northstar_pubsub_application::{
     PubSubAffiliationMutationRepository, PubSubAffiliationQueryRepository,
     PubSubDiscoverySnapshotRepository, PubSubItemMutationRepository, PubSubItemQueryRepository,
     PubSubItemSnapshotRepository, PubSubNodeMutationRepository, PubSubNodeQueryRepository,
-    PubSubPresenceReplayQueryRepository, PubSubReplayDigestRepository,
-    PubSubRootDiscoveryQueryRepository, PubSubSubscriptionMutationRepository,
-    PubSubSubscriptionQueryRepository,
+    PubSubOwnerPreflightRepository, PubSubPresenceReplayQueryRepository,
+    PubSubReplayDigestRepository, PubSubRootDiscoveryQueryRepository,
+    PubSubSubscriptionMutationRepository, PubSubSubscriptionQueryRepository,
 };
 
 /// The repository ports the PubSub and PEP handlers reach through the PubSub service.
 pub trait PubSubRepositories:
     PubSubNodeQueryRepository
+    + PubSubOwnerPreflightRepository
     + PubSubNodeMutationRepository
     + PubSubRootDiscoveryQueryRepository
     + PubSubDiscoverySnapshotRepository
@@ -61,6 +62,7 @@ pub trait PubSubRepositories:
 
 impl<R> PubSubRepositories for R where
     R: PubSubNodeQueryRepository
+        + PubSubOwnerPreflightRepository
         + PubSubNodeMutationRepository
         + PubSubRootDiscoveryQueryRepository
         + PubSubDiscoverySnapshotRepository

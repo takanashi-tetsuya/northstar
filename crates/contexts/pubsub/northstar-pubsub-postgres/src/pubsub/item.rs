@@ -11,72 +11,16 @@ pub async fn publish_items(
     _can_replace_other_publishers: bool,
     max_storage_bytes_per_owner: i64,
 ) -> Result<PublishItemsOutcome> {
-    struct EmptyRenderer;
-    impl PubSubMutationOutboxRenderer for EmptyRenderer {
-        fn render_items(
-            &self,
-            _node: &PubSubNode,
-            _items: &[(String, String)],
-            _audience: &[PubSubNotificationDelivery],
-            _event_id: Uuid,
-            _created_at: DateTime<Utc>,
-        ) -> Result<Vec<super::super::PubSubOutboxInsert>> {
-            Ok(Vec::new())
-        }
-
-        fn render_purge(
-            &self,
-            _node: &PubSubNode,
-            _audience: &[PubSubNotificationDelivery],
-            _event_id: Uuid,
-            _created_at: DateTime<Utc>,
-        ) -> Result<Vec<super::super::PubSubOutboxInsert>> {
-            Ok(Vec::new())
-        }
-
-        fn render_delete(
-            &self,
-            _node: &PubSubNode,
-            _redirect: Option<&str>,
-            _audience: &[PubSubNotificationDelivery],
-            _nonactive_recipients: &[String],
-            _event_id: Uuid,
-            _created_at: DateTime<Utc>,
-        ) -> Result<Vec<super::super::PubSubOutboxInsert>> {
-            Ok(Vec::new())
-        }
-
-        fn render_configuration(
-            &self,
-            _node: &PubSubNode,
-            _config: &PubSubNodeConfig,
-            _audience: &[PubSubNotificationDelivery],
-            _event_id: Uuid,
-            _created_at: DateTime<Utc>,
-        ) -> Result<Vec<super::super::PubSubOutboxInsert>> {
-            Ok(Vec::new())
-        }
-
-        fn render_collection_edge(
-            &self,
-            _source: &PubSubNode,
-            _action: &str,
-            _target_node: &str,
-            _audience: &[PubSubNotificationDelivery],
-            _event_id: Uuid,
-            _created_at: DateTime<Utc>,
-        ) -> Result<Vec<super::super::PubSubOutboxInsert>> {
-            Ok(Vec::new())
-        }
-    }
-    publish_items_with_renderer(
+    // Low-level DB fixtures seed retained items that need not be protocol publications.
+    publish_items_with_policy(
         pool,
         node,
         publisher_jid,
         items,
-        _can_replace_other_publishers,
+        None,
         max_storage_bytes_per_owner,
-        &EmptyRenderer,
+        &NoopMutationOutboxRenderer,
+        PublishPolicyScope::Fixture,
     )
     .await
 }
@@ -91,6 +35,58 @@ pub async fn publish_items_with_renderer(
     max_storage_bytes_per_owner: i64,
     renderer: &dyn PubSubMutationOutboxRenderer,
 ) -> Result<PublishItemsOutcome> {
+    publish_items_with_options_and_renderer(
+        pool,
+        node,
+        publisher_jid,
+        items,
+        None,
+        max_storage_bytes_per_owner,
+        renderer,
+    )
+    .await
+}
+
+pub async fn publish_items_with_options_and_renderer(
+    pool: &PgPool,
+    node: &PubSubNode,
+    publisher_jid: &str,
+    items: &[(String, String)],
+    publish_options: Option<&PubSubNodeConfig>,
+    max_storage_bytes_per_owner: i64,
+    renderer: &dyn PubSubMutationOutboxRenderer,
+) -> Result<PublishItemsOutcome> {
+    publish_items_with_policy(
+        pool,
+        node,
+        publisher_jid,
+        items,
+        publish_options,
+        max_storage_bytes_per_owner,
+        renderer,
+        PublishPolicyScope::Existing,
+    )
+    .await
+}
+
+pub(super) enum PublishPolicyScope<'a> {
+    Existing,
+    AutoCreate(&'a PubSubNodeConfig),
+    #[cfg(any(test, feature = "test-support"))]
+    Fixture,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn publish_items_with_policy(
+    pool: &PgPool,
+    node: &PubSubNode,
+    publisher_jid: &str,
+    items: &[(String, String)],
+    publish_options: Option<&PubSubNodeConfig>,
+    max_storage_bytes_per_owner: i64,
+    renderer: &dyn PubSubMutationOutboxRenderer,
+    policy: PublishPolicyScope<'_>,
+) -> Result<PublishItemsOutcome> {
     let publisher_jid = northstar_xmpp_types::jid::canonical_bare_key(publisher_jid)?;
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
     lock_creator_storage_quota(&mut transaction, &node.creator_jid).await?;
@@ -99,9 +95,10 @@ pub async fn publish_items_with_renderer(
         node,
         &publisher_jid,
         items,
+        publish_options,
         max_storage_bytes_per_owner,
         renderer,
-        None,
+        policy,
     )
     .await?;
     if outcome == PublishItemsOutcome::Published {
@@ -123,14 +120,16 @@ pub(super) async fn lock_creator_storage_quota(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn publish_items_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     node: &PubSubNode,
     publisher_jid: &str,
     items: &[(String, String)],
+    publish_options: Option<&PubSubNodeConfig>,
     max_storage_bytes_per_owner: i64,
     renderer: &dyn PubSubMutationOutboxRenderer,
-    auto_create_config: Option<&PubSubNodeConfig>,
+    policy: PublishPolicyScope<'_>,
 ) -> Result<PublishItemsOutcome> {
     super::node::lock_collection_graph(transaction).await?;
     // Subscription, collection and configuration mutations all lock their
@@ -142,7 +141,7 @@ pub(super) async fn publish_items_in_transaction(
     let Some(fresh) = get_node_by_id_in_transaction(transaction, node.id).await? else {
         return Ok(PublishItemsOutcome::Conflict);
     };
-    if !publish_preconditions_match(node, &fresh) {
+    if !publish_identity_matches(node, &fresh) {
         return Ok(PublishItemsOutcome::PreconditionFailed);
     }
     let (authorized, _) =
@@ -150,10 +149,25 @@ pub(super) async fn publish_items_in_transaction(
     if !authorized {
         return Ok(PublishItemsOutcome::Forbidden);
     }
-    // Auto-create used to check the requested options against the reloaded
-    // node. Preserve that comparison, including options for collection edges.
-    if auto_create_config.is_some_and(|config| config != &fresh.config()) {
-        return Ok(PublishItemsOutcome::PreconditionFailed);
+    match policy {
+        PublishPolicyScope::Existing => {
+            if let Some(rejection) = northstar_pubsub_application::publish_policy_rejection(
+                &fresh.config(),
+                publish_options,
+                items,
+            ) {
+                return Ok(PublishItemsOutcome::Rejected(rejection));
+            }
+        }
+        // Auto-create prevalidates the requested config in the service and
+        // compares that config in full after reloading the inserted row.
+        PublishPolicyScope::AutoCreate(config) => {
+            if config != &fresh.config() {
+                return Ok(PublishItemsOutcome::PreconditionFailed);
+            }
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        PublishPolicyScope::Fixture => {}
     }
     let audience =
         notification_audience_in_transaction(transaction, &fresh, "items", event_time).await?;
@@ -294,6 +308,14 @@ pub async fn retract_items_with_renderer(
         transaction.rollback().await?;
         return Ok(RetractItemsOutcome::NotFound);
     };
+    if node.node_type != "leaf" {
+        transaction.rollback().await?;
+        return Ok(RetractItemsOutcome::NotLeafNode);
+    }
+    if !node.persist_items {
+        transaction.rollback().await?;
+        return Ok(RetractItemsOutcome::NotPersistent);
+    }
     let (can_publish, can_retract_other_publishers) =
         locked_publish_authorization(&mut transaction, &node, &publisher_jid, event_time).await?;
     if !can_publish {

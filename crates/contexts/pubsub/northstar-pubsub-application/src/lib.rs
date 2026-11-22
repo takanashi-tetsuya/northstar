@@ -18,12 +18,16 @@ pub mod subscription_cleanup;
 pub use service::PubSubService;
 mod discovery_snapshot;
 pub use discovery_snapshot::*;
+mod owner_preflight;
+pub use owner_preflight::PubSubOwnerPreflightRepository;
 mod list_page;
 pub use list_page::{page_pubsub_list, PubSubListPage, PubSubListPageError, PubSubListPageQuery};
 mod root_discovery;
 pub use root_discovery::{discover_roots, PubSubRootDiscoQuery, PubSubRootDiscoResult};
 mod publish_policy;
-pub use publish_policy::{existing_node_publish_admission_outcome, publish_validation_outcome};
+pub use publish_policy::{
+    existing_node_publish_admission_outcome, publish_policy_rejection, publish_validation_outcome,
+};
 
 mod admission;
 mod admission_key;

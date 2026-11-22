@@ -1026,7 +1026,7 @@ async fn lease_expiry_is_evaluated_after_a_graph_lock_wait() {
                 &publish_owner,
                 &[(
                     "after-wait".to_owned(),
-                    "<item id='after-wait'/>".to_owned(),
+                    "<item id='after-wait'><value xmlns='urn:test'/></item>".to_owned(),
                 )],
                 false,
                 1_000_000,

@@ -160,7 +160,10 @@ async fn mutation_authority_and_stale_preconditions_are_checked_in_transaction()
             &pool,
             &stale_node,
             &publisher,
-            &[("allowed".to_owned(), "<item id='allowed'/>".to_owned())],
+            &[(
+                "allowed".to_owned(),
+                "<item id='allowed'><value xmlns='urn:test'/></item>".to_owned(),
+            )],
             false,
             1_000_000,
             &renderer,
@@ -171,9 +174,11 @@ async fn mutation_authority_and_stale_preconditions_are_checked_in_transaction()
     );
 
     let mut changed_config = stale_node.config();
-    // Change a publication-semantic field, not display-only metadata.
-    // A stale handler must not retain an obsolete persistence decision.
+    // Change publication-semantic fields, not display-only metadata.
+    // The stale node would accept this payload; the locked notification-only
+    // config forbids items, so the decision must come from the locked row.
     changed_config.persist_items = false;
+    changed_config.deliver_payloads = false;
     assert_eq!(
         update_node_config_and_graph(&pool, &stale_node, &owner, &changed_config,)
             .await
@@ -185,14 +190,17 @@ async fn mutation_authority_and_stale_preconditions_are_checked_in_transaction()
             &pool,
             &stale_node,
             &publisher,
-            &[("stale".to_owned(), "<item id='stale'/>".to_owned())],
+            &[(
+                "stale".to_owned(),
+                "<item id='stale'><value xmlns='urn:test'/></item>".to_owned(),
+            )],
             false,
             1_000_000,
             &renderer,
         )
         .await
         .unwrap(),
-        PublishItemsOutcome::PreconditionFailed,
+        PublishItemsOutcome::Rejected(northstar_pubsub_core::PublishPolicyRejection::ItemForbidden),
         "validation against an old node configuration must not authorize a write"
     );
 

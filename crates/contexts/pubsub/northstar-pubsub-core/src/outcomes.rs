@@ -70,6 +70,19 @@ pub enum PublishItemsOutcome {
     QuotaExceeded,
     Forbidden,
     PreconditionFailed,
+    Rejected(PublishPolicyRejection),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PublishPolicyRejection {
+    PreconditionNotMet,
+    NotLeafNode,
+    MaxItemsExceeded,
+    ItemRequired,
+    ItemForbidden,
+    PayloadRequired,
+    PayloadTooBig,
+    InvalidPayload,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,6 +100,8 @@ pub enum AutoCreatePublishOutcome {
 pub enum RetractItemsOutcome {
     Retracted,
     NotFound,
+    NotLeafNode,
+    NotPersistent,
     Forbidden,
 }
 
@@ -184,6 +199,21 @@ pub enum PubSubPublishOutcome {
     InvalidPayload,
     QuotaExceeded,
     Conflict,
+}
+
+impl From<PublishPolicyRejection> for PubSubPublishOutcome {
+    fn from(rejection: PublishPolicyRejection) -> Self {
+        match rejection {
+            PublishPolicyRejection::PreconditionNotMet => Self::PreconditionNotMet,
+            PublishPolicyRejection::NotLeafNode => Self::NotLeafNode,
+            PublishPolicyRejection::MaxItemsExceeded => Self::MaxItemsExceeded,
+            PublishPolicyRejection::ItemRequired => Self::ItemRequired,
+            PublishPolicyRejection::ItemForbidden => Self::ItemForbidden,
+            PublishPolicyRejection::PayloadRequired => Self::PayloadRequired,
+            PublishPolicyRejection::PayloadTooBig => Self::PayloadTooBig,
+            PublishPolicyRejection::InvalidPayload => Self::InvalidPayload,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

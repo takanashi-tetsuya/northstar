@@ -141,12 +141,15 @@ pub enum PublishItemsOutcome {
     QuotaExceeded,
     Forbidden,
     PreconditionFailed,
+    Rejected(northstar_pubsub_core::PublishPolicyRejection),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RetractItemsOutcome {
     Retracted,
     NotFound,
+    NotLeafNode,
+    NotPersistent,
     Forbidden,
 }
 

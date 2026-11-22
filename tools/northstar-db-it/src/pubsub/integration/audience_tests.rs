@@ -153,7 +153,10 @@ async fn publish_audience_is_linearizable_with_unsubscribe() {
                 &waiting_pool,
                 &second_node,
                 &second_owner,
-                &[("second".to_owned(), "<item id='second'/>".to_owned())],
+                &[(
+                    "second".to_owned(),
+                    "<item id='second'><value xmlns='urn:test'/></item>".to_owned(),
+                )],
                 false,
                 1_000_000,
                 &*second_renderer_task,
@@ -265,7 +268,7 @@ async fn retract_graph_outcast_and_last_item_snapshots_are_linearizable() {
             &owner,
             &[(
                 "graph-first".to_owned(),
-                "<item id='graph-first'/>".to_owned()
+                "<item id='graph-first'><value xmlns='urn:test'/></item>".to_owned()
             )],
             false,
             1_000_000,
@@ -362,7 +365,7 @@ async fn retract_graph_outcast_and_last_item_snapshots_are_linearizable() {
             &owner,
             &[(
                 "mutation-first".to_owned(),
-                "<item id='mutation-first'/>".to_owned()
+                "<item id='mutation-first'><value xmlns='urn:test'/></item>".to_owned()
             )],
             false,
             1_000_000,
@@ -508,7 +511,10 @@ async fn retract_graph_outcast_and_last_item_snapshots_are_linearizable() {
             &pool,
             &leaf,
             &owner,
-            &[("rollback".to_owned(), "<item id='rollback'/>".to_owned())],
+            &[(
+                "rollback".to_owned(),
+                "<item id='rollback'><value xmlns='urn:test'/></item>".to_owned(),
+            )],
             false,
             1_000_000,
             &NoopMutationOutboxRenderer,

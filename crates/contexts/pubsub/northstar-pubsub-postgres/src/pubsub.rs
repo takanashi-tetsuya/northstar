@@ -18,6 +18,7 @@ mod item_snapshot;
 mod locked;
 mod node;
 mod outbox_commands;
+mod owner_preflight;
 mod renderer;
 mod replay_snapshot;
 mod subscription;
@@ -27,7 +28,7 @@ use self::locked::{
     canonical_bare_jids, edge_exceeds_max_depth, enqueue_locked_mutation_outbox,
     get_node_by_id_in_transaction, latest_item_in_transaction, lock_notification_authority,
     locked_event_time, locked_publish_authorization, notification_audience_in_transaction,
-    owner_jids_in_transaction, publish_preconditions_match, requester_is_owner,
+    owner_jids_in_transaction, publish_identity_matches, requester_is_owner,
     requester_owns_locked_collection_child, row_to_node, row_to_subscription,
 };
 #[cfg(any(test, feature = "test-support"))]
@@ -49,6 +50,7 @@ pub use self::outbox_commands::{
     set_subscription_limited_with_options_and_outbox, set_subscriptions_with_outbox,
     unsubscribe_checked_with_outbox,
 };
+pub use self::owner_preflight::owner_preflight;
 #[cfg(any(test, feature = "test-support"))]
 pub use self::renderer::NoopMutationOutboxRenderer;
 pub use self::renderer::PubSubMutationOutboxRenderer;

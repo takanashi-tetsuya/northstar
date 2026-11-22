@@ -1,6 +1,14 @@
 //! Handle owner namespace operations and collection association replies.
 
 use super::*;
+use northstar_pubsub_application::{
+    PubSubAffiliationMutationRepository, PubSubItemMutationRepository,
+    PubSubNodeMutationRepository, PubSubNodeQueryRepository, PubSubOwnerPreflightRepository,
+    PubSubSubscriptionMutationRepository,
+};
+use northstar_pubsub_core::{
+    PubSubAddress, PubSubBareJid, PubSubNodeId, PubSubNodeName, PubSubOwnerPreflight,
+};
 
 pub(super) async fn handle_owner_get<H: PubSubHost>(
     host: &H,
@@ -155,20 +163,54 @@ pub(super) async fn handle_owner_set<H: PubSubHost>(
     if operations.len() != 1 {
         return Ok(PubSubReply::Error("bad-request"));
     }
-    let requester = normalized_bare(requester)?;
+    let requester = PubSubAddress::parse(requester)?.bare();
     let operation = operations[0];
     let node_name = match required_node_id(operation.attribute("node")) {
         Ok(node) => node,
         Err(reply) => return Ok(reply),
     };
-    let Some(node) = host
-        .pubsub_application_service()
-        .get_node(node_name)
-        .await?
-    else {
+    let Ok(node_key) = PubSubNodeName::parse(node_name) else {
         return missing_node_reply(host, node_name).await;
     };
-    if operation.tag_name().name() == "collection" {
+    handle_owner_set_operation(
+        host.pubsub_application_service(),
+        &requester,
+        &node_key,
+        operation,
+        missing_node_reply(host, node_name),
+    )
+    .await
+}
+
+async fn handle_owner_set_operation<
+    R: PubSubOwnerPreflightRepository
+        + PubSubNodeQueryRepository
+        + PubSubNodeMutationRepository
+        + PubSubItemMutationRepository
+        + PubSubSubscriptionMutationRepository
+        + PubSubAffiliationMutationRepository,
+>(
+    service: &PubSubService<R>,
+    requester: &PubSubBareJid,
+    node_key: &PubSubNodeName,
+    operation: Node<'_, '_>,
+    missing_reply: impl std::future::Future<Output = Result<PubSubReply>> + Send,
+) -> Result<PubSubReply> {
+    let node_name = node_key.as_str();
+    let operation_name = operation.tag_name().name();
+    let Some(PubSubOwnerPreflight {
+        node,
+        is_owner,
+        parents,
+        children,
+    }) = service
+        .owner_preflight(node_key, requester, operation_name == "configure")
+        .await?
+    else {
+        return missing_reply.await;
+    };
+    let requester = requester.to_string();
+    if operation_name == "collection" {
         if !has_only_attributes(operation, &["node"]) {
             return Ok(PubSubReply::Error("bad-request"));
         }
@@ -195,8 +237,7 @@ pub(super) async fn handle_owner_set<H: PubSubHost>(
         } else {
             PubSubCollectionEdgeOperation::Dissociate
         };
-        let result = host
-            .pubsub_application_service()
+        let result = service
             .execute_pubsub_collection_edge(PubSubCollectionEdgeCommand {
                 requester: &requester,
                 collection: &node,
@@ -206,10 +247,11 @@ pub(super) async fn handle_owner_set<H: PubSubHost>(
             .await?;
         return Ok(collection_edge_reply(result));
     }
-    if !is_owner(host, node.id, &requester).await? {
+    if !is_owner {
         return Ok(PubSubReply::Error("forbidden"));
     }
-    match operation.tag_name().name() {
+    let node_id = PubSubNodeId::new(node.id);
+    match operation_name {
         "configure" => {
             if !has_only_attributes(operation, &["node"]) {
                 return Ok(PubSubReply::Error("bad-request"));
@@ -225,20 +267,8 @@ pub(super) async fn handle_owner_set<H: PubSubHost>(
                 });
             }
             let mut current = node.config();
-            current.collections = host
-                .pubsub_application_service()
-                .collection_parents(node.id)
-                .await?
-                .into_iter()
-                .map(|node| node.node)
-                .collect();
-            current.children = host
-                .pubsub_application_service()
-                .collection_children(node.id)
-                .await?
-                .into_iter()
-                .map(|node| node.node)
-                .collect();
+            current.collections = parents;
+            current.children = children;
             let expected = current.clone();
             let config = match parse_node_config(operation, current) {
                 Ok(config) => config,
@@ -246,16 +276,11 @@ pub(super) async fn handle_owner_set<H: PubSubHost>(
             };
             let cmd = PubSubConfigureNodeCommand::from(PubSubConfigureNodeWrite {
                 requester: &requester,
-                node: node_name,
+                node: &node,
                 expected: &expected,
                 config: &config,
             });
-            match host
-                .pubsub_application_service()
-                .execute_pubsub_configure_node(cmd)
-                .await?
-                .outcome
-            {
+            match service.execute_pubsub_configure_node(cmd).await?.outcome {
                 PubSubConfigOutcome::Updated => {}
                 PubSubConfigOutcome::Conflict => {
                     return Ok(PubSubReply::Error("conflict"));
@@ -328,14 +353,10 @@ pub(super) async fn handle_owner_set<H: PubSubHost>(
                 let cmd = PubSubSetSubscriptionsCommand::from(PubSubSetSubscriptionsWrite {
                     requester: &requester,
                     node: node_name,
+                    node_id,
                     changes: &changes,
                 });
-                match host
-                    .pubsub_application_service()
-                    .execute_pubsub_set_subscriptions(cmd)
-                    .await?
-                    .outcome
-                {
+                match service.execute_pubsub_set_subscriptions(cmd).await?.outcome {
                     SetSubscriptionsOutcome::Updated(transitions) => transitions,
                     SetSubscriptionsOutcome::LimitExceeded => {
                         return Ok(PubSubReply::ExtendedError(PubSubError::new(
@@ -403,14 +424,10 @@ pub(super) async fn handle_owner_set<H: PubSubHost>(
                 let cmd = PubSubSetAffiliationsCommand::from(PubSubSetAffiliationsWrite {
                     requester: &requester,
                     node: node_name,
+                    node_id,
                     changes: &changes,
                 });
-                match host
-                    .pubsub_application_service()
-                    .execute_pubsub_set_affiliations(cmd)
-                    .await?
-                    .outcome
-                {
+                match service.execute_pubsub_set_affiliations(cmd).await?.outcome {
                     SetAffiliationsOutcome::LastOwner => {
                         return Ok(PubSubReply::Error("not-acceptable"));
                     }
@@ -432,21 +449,13 @@ pub(super) async fn handle_owner_set<H: PubSubHost>(
             if !has_only_attributes(operation, &["node"]) {
                 return Ok(PubSubReply::Error("bad-request"));
             }
-            if node.node_type != "leaf" || !node.persist_items {
-                return Ok(PubSubReply::ExtendedError(PubSubError::unsupported(
-                    "persistent-items",
-                )));
-            }
             let cmd = PubSubPurgeNodeCommand::from(PubSubPurgeNodeWrite {
                 requester: &requester,
                 node: node_name,
+                node_id,
+                observed_node: &node,
             });
-            match host
-                .pubsub_application_service()
-                .execute_pubsub_purge_node(cmd)
-                .await?
-                .outcome
-            {
+            match service.execute_pubsub_purge_node(cmd).await?.outcome {
                 OwnerMutationOutcome::Applied => {}
                 OwnerMutationOutcome::NotFound => {
                     return Ok(PubSubReply::Error("item-not-found"));
@@ -497,14 +506,10 @@ pub(super) async fn handle_owner_set<H: PubSubHost>(
             let cmd = PubSubDeleteNodeCommand::from(PubSubDeleteNodeWrite {
                 requester: &requester,
                 node: node_name,
+                node_id,
                 redirect,
             });
-            match host
-                .pubsub_application_service()
-                .execute_pubsub_delete_node(cmd)
-                .await?
-                .outcome
-            {
+            match service.execute_pubsub_delete_node(cmd).await?.outcome {
                 OwnerMutationOutcome::Applied => {}
                 OwnerMutationOutcome::NotFound => {
                     return Ok(PubSubReply::Error("item-not-found"));
@@ -548,3 +553,6 @@ pub(super) fn collection_edge_reply(result: PubSubCollectionEdgeResult) -> PubSu
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

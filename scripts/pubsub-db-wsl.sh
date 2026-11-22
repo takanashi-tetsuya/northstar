@@ -273,6 +273,20 @@ run_exact_ignored \
 run_exact_ignored \
   pubsub::integration::mutation_transaction::mutation_authority_and_stale_preconditions_are_checked_in_transaction
 run_exact_ignored \
+  pubsub::integration::publish_precondition::compatible_max_items_increase_does_not_fail_a_waiting_publish
+run_exact_ignored \
+  pubsub::integration::publish_precondition::explicit_options_are_compared_with_the_locked_config
+run_exact_ignored \
+  pubsub::integration::publish_precondition::payload_policy_is_decided_on_the_locked_config
+run_exact_ignored \
+  pubsub::integration::publish_precondition::forbidden_still_precedes_policy_under_the_lock
+run_exact_ignored \
+  pubsub::integration::publish_precondition::retract_after_persistence_disabled_is_not_persistent
+run_exact_ignored \
+  pubsub::integration::publish_precondition::owner_write_after_same_name_replacement_fails_closed
+run_exact_ignored \
+  pubsub::integration::publish_precondition::owner_preflight_reads_one_snapshot_on_a_read_only_connection
+run_exact_ignored \
   pubsub::integration::audience::publish_audience_is_linearizable_with_unsubscribe
 run_exact_ignored \
   pubsub::integration::audience::retract_graph_outcast_and_last_item_snapshots_are_linearizable

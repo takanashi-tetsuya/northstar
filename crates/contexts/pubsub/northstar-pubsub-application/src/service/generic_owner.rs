@@ -5,29 +5,23 @@ use crate::{
     validate_pubsub_collection_edge_command, validate_pubsub_configure_node_command,
     validate_pubsub_create_node_command, validate_pubsub_delete_node_command,
     validate_pubsub_purge_node_command, validate_pubsub_set_affiliations_command,
-    validate_pubsub_set_subscriptions_command, PubSubAffiliationMutationRepository,
-    PubSubAffiliationQueryRepository, PubSubCollectionEdgeCommand, PubSubCollectionEdgeOperation,
-    PubSubCollectionEdgeResult, PubSubConfigureNodeCommand, PubSubConfigureNodeResult,
-    PubSubCreateNodeCommand, PubSubCreateNodeResult, PubSubDeleteNodeCommand,
-    PubSubDeleteNodeResult, PubSubItemMutationRepository, PubSubItemQueryRepository,
+    validate_pubsub_set_subscriptions_command, PubSubAdmissionKey,
+    PubSubAffiliationMutationRepository, PubSubCollectionEdgeCommand,
+    PubSubCollectionEdgeOperation, PubSubCollectionEdgeResult, PubSubConfigureNodeCommand,
+    PubSubConfigureNodeResult, PubSubCreateNodeCommand, PubSubCreateNodeResult,
+    PubSubDeleteNodeCommand, PubSubDeleteNodeResult, PubSubItemMutationRepository,
     PubSubNodeMutationRepository, PubSubNodeQueryRepository, PubSubPurgeNodeCommand,
     PubSubPurgeNodeResult, PubSubSetAffiliationsCommand, PubSubSetAffiliationsResult,
     PubSubSetSubscriptionsCommand, PubSubSetSubscriptionsResult,
-    PubSubSubscriptionMutationRepository, PubSubSubscriptionQueryRepository,
+    PubSubSubscriptionMutationRepository,
 };
 use anyhow::Result;
-use northstar_pubsub_core::{
-    OwnerMutationOutcome, PubSubConfigOutcome, SetAffiliationsOutcome, SetSubscriptionsOutcome,
-};
+use northstar_pubsub_core::{OwnerMutationOutcome, PubSubNodeId};
 
 impl<
-        R: PubSubNodeQueryRepository
-            + PubSubNodeMutationRepository
-            + PubSubItemQueryRepository
+        R: PubSubNodeMutationRepository
             + PubSubItemMutationRepository
-            + PubSubSubscriptionQueryRepository
             + PubSubSubscriptionMutationRepository
-            + PubSubAffiliationQueryRepository
             + PubSubAffiliationMutationRepository,
     > PubSubService<R>
 {
@@ -53,13 +47,12 @@ impl<
     ) -> Result<PubSubDeleteNodeResult> {
         validate_pubsub_delete_node_command(&command)?;
         let write = command.write;
-        let Some(node) = self.get_node(write.node).await? else {
-            return Ok(PubSubDeleteNodeResult {
-                outcome: OwnerMutationOutcome::NotFound,
-            });
-        };
         let outcome = self
-            .delete_node_as_owner_with_redirect_and_outbox(node.id, write.requester, write.redirect)
+            .delete_node_as_owner_with_redirect_and_outbox(
+                write.node_id.get(),
+                write.requester,
+                write.redirect,
+            )
             .await?;
         Ok(PubSubDeleteNodeResult { outcome })
     }
@@ -69,18 +62,14 @@ impl<
     ) -> Result<PubSubPurgeNodeResult> {
         validate_pubsub_purge_node_command(&command)?;
         let write = command.write;
-        let Some(node) = self.get_node(write.node).await? else {
-            return Ok(PubSubPurgeNodeResult {
-                outcome: OwnerMutationOutcome::NotFound,
-            });
-        };
+        let node = write.observed_node;
         if node.node_type != "leaf" || !node.persist_items {
             return Ok(PubSubPurgeNodeResult {
                 outcome: OwnerMutationOutcome::Invalid,
             });
         }
         let outcome = self
-            .purge_node_as_owner_with_outbox(node.id, write.requester)
+            .purge_node_as_owner_with_outbox(write.node_id.get(), write.requester)
             .await?;
         Ok(PubSubPurgeNodeResult { outcome })
     }
@@ -90,14 +79,9 @@ impl<
     ) -> Result<PubSubConfigureNodeResult> {
         validate_pubsub_configure_node_command(&command)?;
         let write = command.write;
-        let Some(node) = self.get_node(write.node).await? else {
-            return Ok(PubSubConfigureNodeResult {
-                outcome: PubSubConfigOutcome::NotFound,
-            });
-        };
         let outcome = self
             .update_node_config_and_graph_with_outbox(
-                &node,
+                write.node,
                 write.requester,
                 write.expected,
                 write.config,
@@ -111,13 +95,8 @@ impl<
     ) -> Result<PubSubSetSubscriptionsResult> {
         validate_pubsub_set_subscriptions_command(&command)?;
         let write = command.write;
-        let Some(node) = self.get_node(write.node).await? else {
-            return Ok(PubSubSetSubscriptionsResult {
-                outcome: SetSubscriptionsOutcome::NotFound,
-            });
-        };
         let outcome = self
-            .set_subscriptions(node.id, write.requester, write.changes)
+            .set_subscriptions(write.node_id.get(), write.requester, write.changes)
             .await?;
         Ok(PubSubSetSubscriptionsResult { outcome })
     }
@@ -127,13 +106,8 @@ impl<
     ) -> Result<PubSubSetAffiliationsResult> {
         validate_pubsub_set_affiliations_command(&command)?;
         let write = command.write;
-        let Some(node) = self.get_node(write.node).await? else {
-            return Ok(PubSubSetAffiliationsResult {
-                outcome: SetAffiliationsOutcome::NotFound,
-            });
-        };
         let outcome = self
-            .set_affiliations(node.id, write.requester, write.changes)
+            .set_affiliations(write.node_id.get(), write.requester, write.changes)
             .await?;
         Ok(PubSubSetAffiliationsResult { outcome })
     }
@@ -149,10 +123,16 @@ impl<R: PubSubNodeQueryRepository + PubSubNodeMutationRepository> PubSubService<
         let Some(child) = self.get_node(command.child).await? else {
             return Ok(PubSubCollectionEdgeResult::MissingChild);
         };
-        let collection_key = collection.id.to_string();
-        let child_key = child.id.to_string();
         let _permit = self
-            .admit_mutation(&[command.requester, &collection_key, &child_key], true)
+            .mutation_admission
+            .acquire_keys(
+                &[
+                    PubSubAdmissionKey::Text(command.requester),
+                    PubSubAdmissionKey::NodeId(PubSubNodeId::new(collection.id)),
+                    PubSubAdmissionKey::NodeId(PubSubNodeId::new(child.id)),
+                ],
+                true,
+            )
             .await?;
         // Node snapshots here identify graph endpoints only. The PostgreSQL
         // adapter locks the graph, reloads policy and ownership, and commits

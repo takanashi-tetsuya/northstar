@@ -26,6 +26,7 @@ pub use clock::*;
 
 mod node;
 mod outcomes;
+mod owner_preflight;
 mod pep;
 mod replay;
 mod subscription;
@@ -33,6 +34,7 @@ mod writes;
 
 pub use node::*;
 pub use outcomes::*;
+pub use owner_preflight::PubSubOwnerPreflight;
 pub use pep::*;
 pub use replay::*;
 pub use subscription::*;

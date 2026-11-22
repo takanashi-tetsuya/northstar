@@ -350,18 +350,10 @@ pub(super) async fn latest_item_in_transaction(
     }))
 }
 
-pub(super) fn publish_preconditions_match(expected: &PubSubNode, actual: &PubSubNode) -> bool {
+pub(super) fn publish_identity_matches(expected: &PubSubNode, actual: &PubSubNode) -> bool {
     expected.id == actual.id
         && expected.node == actual.node
         && expected.creator_jid == actual.creator_jid
-        && expected.access_model == actual.access_model
-        && expected.publish_model == actual.publish_model
-        && expected.max_items == actual.max_items
-        && expected.deliver_payloads == actual.deliver_payloads
-        && expected.persist_items == actual.persist_items
-        && expected.node_type == actual.node_type
-        && expected.payload_type == actual.payload_type
-        && expected.max_payload_size == actual.max_payload_size
 }
 
 /// Recheck publication authority after the node and notification authority

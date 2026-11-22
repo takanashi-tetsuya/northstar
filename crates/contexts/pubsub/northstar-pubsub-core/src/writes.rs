@@ -1,6 +1,6 @@
 //! Generic PubSub write inputs.
 
-use crate::{PubSubNodeConfig, PubSubSubscriptionOptions};
+use crate::{PubSubNode, PubSubNodeConfig, PubSubNodeId, PubSubSubscriptionOptions};
 
 pub struct PubSubPublishWrite<'a> {
     pub publisher_jid: &'a str,
@@ -43,17 +43,20 @@ pub struct PubSubCreateNodeWrite<'a> {
 pub struct PubSubDeleteNodeWrite<'a> {
     pub requester: &'a str,
     pub node: &'a str,
+    pub node_id: PubSubNodeId,
     pub redirect: Option<&'a str>,
 }
 
 pub struct PubSubPurgeNodeWrite<'a> {
     pub requester: &'a str,
     pub node: &'a str,
+    pub node_id: PubSubNodeId,
+    pub observed_node: &'a PubSubNode,
 }
 
 pub struct PubSubConfigureNodeWrite<'a> {
     pub requester: &'a str,
-    pub node: &'a str,
+    pub node: &'a PubSubNode,
     pub expected: &'a PubSubNodeConfig,
     pub config: &'a PubSubNodeConfig,
 }
@@ -61,11 +64,13 @@ pub struct PubSubConfigureNodeWrite<'a> {
 pub struct PubSubSetSubscriptionsWrite<'a> {
     pub requester: &'a str,
     pub node: &'a str,
+    pub node_id: PubSubNodeId,
     pub changes: &'a [(String, String, Option<String>)],
 }
 
 pub struct PubSubSetAffiliationsWrite<'a> {
     pub requester: &'a str,
     pub node: &'a str,
+    pub node_id: PubSubNodeId,
     pub changes: &'a [(String, String)],
 }

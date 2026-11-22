@@ -1,6 +1,8 @@
 //! Repository-facing PEP and PubSub queries, authorization snapshots, and admitted aggregate mutation adapters.
 
 use super::*;
+use crate::{PubSubAdmissionKey, PubSubOwnerPreflightRepository};
+use northstar_pubsub_core::{PubSubBareJid, PubSubNodeId, PubSubNodeName, PubSubOwnerPreflight};
 
 impl<R: PepNodeQueryRepository> PubSubService<R> {
     pub async fn pep_node(&self, owner_id: Uuid, node: &str) -> Result<Option<PepNodeConfig>> {
@@ -104,7 +106,16 @@ impl<
         config: &PubSubNodeConfig,
         max_nodes_per_owner: i64,
     ) -> Result<CreateNodeOutcome> {
-        let _permit = self.admit_mutation(&[creator_jid, node], true).await?;
+        let _permit = self
+            .mutation_admission
+            .acquire_keys(
+                &[
+                    PubSubAdmissionKey::Text(creator_jid),
+                    PubSubAdmissionKey::Text(node),
+                ],
+                true,
+            )
+            .await?;
         self.repository
             .create_node(node, creator_jid, config, max_nodes_per_owner)
             .await
@@ -114,14 +125,20 @@ impl<
         node: &PubSubNode,
         publisher_jid: &str,
         items: &[(String, String)],
+        publish_options: Option<&PubSubNodeConfig>,
         max_storage_bytes_per_owner: i64,
     ) -> Result<PublishItemsOutcome> {
-        let node_key = node.id.to_string();
         let _permit = self
-            .admit_mutation(&[publisher_jid, &node_key], true)
+            .admit_node_mutation(publisher_jid, node.id, true)
             .await?;
         self.repository
-            .publish_items(node, publisher_jid, items, max_storage_bytes_per_owner)
+            .publish_items(
+                node,
+                publisher_jid,
+                items,
+                publish_options,
+                max_storage_bytes_per_owner,
+            )
             .await
     }
     #[allow(clippy::too_many_arguments)]
@@ -177,9 +194,8 @@ impl<
         publisher_jid: &str,
         force_notification: bool,
     ) -> Result<RetractItemsOutcome> {
-        let node_key = node_id.to_string();
         let _permit = self
-            .admit_mutation(&[publisher_jid, &node_key], true)
+            .admit_node_mutation(publisher_jid, node_id, true)
             .await?;
         self.repository
             .retract_items(node_id, item_ids, publisher_jid, force_notification)
@@ -192,8 +208,7 @@ impl<
         expected: &PubSubNodeConfig,
         config: &PubSubNodeConfig,
     ) -> Result<PubSubConfigOutcome> {
-        let node_key = node.id.to_string();
-        let _permit = self.admit_mutation(&[requester, &node_key], true).await?;
+        let _permit = self.admit_node_mutation(requester, node.id, true).await?;
         self.repository
             .update_node_config_and_graph_with_outbox(node, requester, expected, config)
             .await
@@ -204,8 +219,7 @@ impl<
         requester: &str,
         changes: &[(String, String, Option<String>)],
     ) -> Result<SetSubscriptionsOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self.admit_mutation(&[requester, &node_key], false).await?;
+        let _permit = self.admit_node_mutation(requester, node_id, false).await?;
         self.repository
             .set_subscriptions(node_id, requester, changes)
             .await
@@ -216,8 +230,7 @@ impl<
         requester: &str,
         changes: &[(String, String)],
     ) -> Result<SetAffiliationsOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self.admit_mutation(&[requester, &node_key], false).await?;
+        let _permit = self.admit_node_mutation(requester, node_id, false).await?;
         self.repository
             .set_affiliations(node_id, requester, changes)
             .await
@@ -227,8 +240,7 @@ impl<
         node_id: Uuid,
         requester: &str,
     ) -> Result<OwnerMutationOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self.admit_mutation(&[requester, &node_key], true).await?;
+        let _permit = self.admit_node_mutation(requester, node_id, true).await?;
         self.repository
             .purge_node_as_owner_with_outbox(node_id, requester)
             .await
@@ -239,10 +251,41 @@ impl<
         requester: &str,
         redirect: Option<&str>,
     ) -> Result<OwnerMutationOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self.admit_mutation(&[requester, &node_key], true).await?;
+        let _permit = self.admit_node_mutation(requester, node_id, true).await?;
         self.repository
             .delete_node_as_owner_with_redirect_and_outbox(node_id, requester, redirect)
+            .await
+    }
+}
+
+impl<R> PubSubService<R> {
+    async fn admit_node_mutation(
+        &self,
+        requester: &str,
+        node_id: Uuid,
+        collection_graph: bool,
+    ) -> Result<PubSubMutationPermit> {
+        self.mutation_admission
+            .acquire_keys(
+                &[
+                    PubSubAdmissionKey::Text(requester),
+                    PubSubAdmissionKey::NodeId(PubSubNodeId::new(node_id)),
+                ],
+                collection_graph,
+            )
+            .await
+    }
+}
+
+impl<R: PubSubOwnerPreflightRepository> PubSubService<R> {
+    pub async fn owner_preflight(
+        &self,
+        node: &PubSubNodeName,
+        requester: &PubSubBareJid,
+        include_graph: bool,
+    ) -> Result<Option<PubSubOwnerPreflight>> {
+        self.repository
+            .owner_preflight(node, requester, include_graph)
             .await
     }
 }

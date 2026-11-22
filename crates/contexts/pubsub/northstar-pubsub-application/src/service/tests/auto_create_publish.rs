@@ -1,5 +1,8 @@
 use super::*;
-use northstar_pubsub_core::PubSubPublishWrite;
+use northstar_pubsub_core::{
+    PubSubConfigureNodeWrite, PubSubDeleteNodeWrite, PubSubNodeId, PubSubPublishWrite,
+    PubSubPurgeNodeWrite, PubSubSetAffiliationsWrite, PubSubSetSubscriptionsWrite,
+};
 
 const NODE: &str = "news";
 const PUBLISHER: &str = "publisher@example.test/mobile";
@@ -8,6 +11,7 @@ struct PublishRepository {
     auto_create: AutoCreatePublishOutcome,
     reloaded: Option<PubSubNode>,
     authorized: bool,
+    owner_node_id: Option<Uuid>,
     calls: Mutex<Vec<&'static str>>,
 }
 
@@ -17,8 +21,15 @@ impl PublishRepository {
             auto_create,
             reloaded: None,
             authorized: false,
+            owner_node_id: None,
             calls: Mutex::new(Vec::new()),
         }
+    }
+
+    fn record_owner_write(&self, operation: &'static str, node_id: Uuid, requester: &str) {
+        assert_eq!(Some(node_id), self.owner_node_id);
+        assert_eq!(requester, PUBLISHER);
+        self.calls.lock().unwrap().push(operation);
     }
 }
 
@@ -54,13 +65,34 @@ impl PubSubNodeQueryRepository for PublishRepository {
 }
 
 impl PubSubNodeMutationRepository for PublishRepository {
+    async fn delete_node_as_owner_with_redirect_and_outbox(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        redirect: Option<&str>,
+    ) -> Result<OwnerMutationOutcome> {
+        self.record_owner_write("delete", node_id, requester);
+        assert_eq!(redirect, Some("xmpp:new@example.test"));
+        Ok(OwnerMutationOutcome::NotFound)
+    }
+
+    async fn update_node_config_and_graph_with_outbox(
+        &self,
+        node: &PubSubNode,
+        requester: &str,
+        expected: &PubSubNodeConfig,
+        config: &PubSubNodeConfig,
+    ) -> Result<PubSubConfigOutcome> {
+        self.record_owner_write("configure", node.id, requester);
+        assert_eq!(node.node, NODE);
+        assert_eq!(expected, &node.config());
+        assert_eq!(config.title.as_deref(), Some("edited"));
+        Ok(PubSubConfigOutcome::Conflict)
+    }
+
     unexpected_calls! {
         fn create_node(_node: &str, _creator: &str, _config: &PubSubNodeConfig, _limit: i64)
             -> CreateNodeOutcome;
-        fn delete_node_as_owner_with_redirect_and_outbox(_node_id: Uuid, _requester: &str, _redirect: Option<&str>)
-            -> OwnerMutationOutcome;
-        fn update_node_config_and_graph_with_outbox(_node: &PubSubNode, _requester: &str, _expected: &PubSubNodeConfig, _config: &PubSubNodeConfig)
-            -> PubSubConfigOutcome;
         fn associate_collection_child(_collection: &PubSubNode, _child: &PubSubNode, _requester: &str)
             -> northstar_pubsub_core::CollectionUpdateOutcome;
         fn dissociate_collection_child(_collection: &PubSubNode, _child: &PubSubNode, _requester: &str)
@@ -111,18 +143,28 @@ impl PubSubItemMutationRepository for PublishRepository {
         node: &PubSubNode,
         publisher_jid: &str,
         items: &[(String, String)],
+        publish_options: Option<&PubSubNodeConfig>,
         max_storage_bytes_per_owner: i64,
     ) -> Result<PublishItemsOutcome> {
         assert_eq!(node.id, self.reloaded.as_ref().unwrap().id);
         assert_eq!(publisher_jid, PUBLISHER);
         assert_eq!(items, publish_items().as_slice());
+        assert_eq!(publish_options, Some(&PubSubNodeConfig::default()));
         assert_eq!(max_storage_bytes_per_owner, 1_000);
         self.calls.lock().unwrap().push("publish_items");
         Ok(PublishItemsOutcome::Published)
     }
 
+    async fn purge_node_as_owner_with_outbox(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+    ) -> Result<OwnerMutationOutcome> {
+        self.record_owner_write("purge", node_id, requester);
+        Ok(OwnerMutationOutcome::NotFound)
+    }
+
     unexpected_calls! {
-        fn purge_node_as_owner_with_outbox(_node_id: Uuid, _requester: &str) -> OwnerMutationOutcome;
         fn retract_items(_node_id: Uuid, _item_ids: &[String], _publisher: &str, _notify: bool) -> RetractItemsOutcome;
     }
 }
@@ -142,6 +184,18 @@ impl PubSubSubscriptionMutationRepository for PublishRepository {
         panic!("unexpected call to local_domain");
     }
 
+    async fn set_subscriptions(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        changes: &[(String, String, Option<String>)],
+    ) -> Result<SetSubscriptionsOutcome> {
+        self.record_owner_write("subscriptions", node_id, requester);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].2.as_deref(), Some("subid"));
+        Ok(SetSubscriptionsOutcome::NotFound)
+    }
+
     unexpected_calls! {
         fn update_subscription_options_checked(_node_id: Uuid, _requester: &str, _subscriber: &str, _subid: Option<&str>, _options: &PubSubSubscriptionOptions)
             -> SubscriptionOptionsOutcome;
@@ -149,8 +203,6 @@ impl PubSubSubscriptionMutationRepository for PublishRepository {
             -> SubscribeOutcome;
         fn unsubscribe_checked(_node_id: Uuid, _requester: &str, _subscriber: &str, _subid: &str)
             -> UnsubscribeOutcome;
-        fn set_subscriptions(_node_id: Uuid, _requester: &str, _changes: &[(String, String, Option<String>)])
-            -> SetSubscriptionsOutcome;
         fn resolve_pending_subscription(_node_id: Uuid, _requester: &str, _subscriber: &str, _subid: &str, _allow: bool)
             -> SubscriptionAuthorizationOutcome;
     }
@@ -165,9 +217,16 @@ impl PubSubAffiliationQueryRepository for PublishRepository {
 }
 
 impl PubSubAffiliationMutationRepository for PublishRepository {
-    unexpected_calls! {
-        fn set_affiliations(_node_id: Uuid, _requester: &str, _changes: &[(String, String)])
-            -> SetAffiliationsOutcome;
+    async fn set_affiliations(
+        &self,
+        node_id: Uuid,
+        requester: &str,
+        changes: &[(String, String)],
+    ) -> Result<SetAffiliationsOutcome> {
+        self.record_owner_write("affiliations", node_id, requester);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].1, "publisher");
+        Ok(SetAffiliationsOutcome::NotFound)
     }
 }
 
@@ -322,4 +381,109 @@ async fn auto_create_racing_node_disappearance_returns_missing_node() {
             ["get_node", "create_node_and_publish_items", "get_node"]
         );
     }
+}
+
+#[tokio::test]
+async fn owner_commands_use_preflight_identity_without_a_second_lookup() {
+    let node = renderer_node(Uuid::new_v4(), NODE, "leaf");
+    let node_id = PubSubNodeId::new(node.id);
+    let mut repository = PublishRepository::new(AutoCreatePublishOutcome::NodeExists);
+    repository.owner_node_id = Some(node.id);
+    repository.reloaded = Some(renderer_node(Uuid::new_v4(), NODE, "leaf"));
+    let service = PubSubService::new_with_durable_outbox_database_admission(
+        repository,
+        2,
+        northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(2),
+    );
+    let expected = node.config();
+    let config = PubSubNodeConfig {
+        title: Some("edited".to_owned()),
+        ..expected.clone()
+    };
+    let subscriptions = [(
+        "reader@example.test".to_owned(),
+        "none".to_owned(),
+        Some("subid".to_owned()),
+    )];
+    let affiliations = [("reader@example.test".to_owned(), "publisher".to_owned())];
+    let delete = PubSubDeleteNodeWrite {
+        requester: PUBLISHER,
+        node: NODE,
+        node_id,
+        redirect: Some("xmpp:new@example.test"),
+    };
+    let purge = PubSubPurgeNodeWrite {
+        requester: PUBLISHER,
+        node: NODE,
+        node_id,
+        observed_node: &node,
+    };
+    let configure = PubSubConfigureNodeWrite {
+        requester: PUBLISHER,
+        node: &node,
+        expected: &expected,
+        config: &config,
+    };
+    let subscriptions = PubSubSetSubscriptionsWrite {
+        requester: PUBLISHER,
+        node: NODE,
+        node_id,
+        changes: &subscriptions,
+    };
+    let affiliations = PubSubSetAffiliationsWrite {
+        requester: PUBLISHER,
+        node: NODE,
+        node_id,
+        changes: &affiliations,
+    };
+    assert_eq!(
+        service
+            .execute_pubsub_delete_node(delete.into())
+            .await
+            .unwrap()
+            .outcome,
+        OwnerMutationOutcome::NotFound
+    );
+    assert_eq!(
+        service
+            .execute_pubsub_purge_node(purge.into())
+            .await
+            .unwrap()
+            .outcome,
+        OwnerMutationOutcome::NotFound
+    );
+    assert_eq!(
+        service
+            .execute_pubsub_configure_node(configure.into())
+            .await
+            .unwrap()
+            .outcome,
+        PubSubConfigOutcome::Conflict
+    );
+    assert_eq!(
+        service
+            .execute_pubsub_set_subscriptions(subscriptions.into())
+            .await
+            .unwrap()
+            .outcome,
+        SetSubscriptionsOutcome::NotFound
+    );
+    assert_eq!(
+        service
+            .execute_pubsub_set_affiliations(affiliations.into())
+            .await
+            .unwrap()
+            .outcome,
+        SetAffiliationsOutcome::NotFound
+    );
+    assert_eq!(
+        service.repository.calls.into_inner().unwrap(),
+        [
+            "delete",
+            "purge",
+            "configure",
+            "subscriptions",
+            "affiliations"
+        ]
+    );
 }

@@ -7,14 +7,14 @@ use crate::profile::{
 use crate::{
     existing_node_publish_admission_outcome, publish_validation_outcome,
     validate_pubsub_publish_command, validate_pubsub_retract_command, AutoCreatePublishOutcome,
-    PubSubAffiliationMutationRepository, PubSubAffiliationQueryRepository,
+    PubSubAdmissionKey, PubSubAffiliationMutationRepository, PubSubAffiliationQueryRepository,
     PubSubItemMutationRepository, PubSubItemQueryRepository, PubSubNodeMutationRepository,
     PubSubNodeQueryRepository, PubSubPublishCommand, PubSubPublishResult, PubSubRetractCommand,
     PubSubRetractResult, PubSubSubscriptionMutationRepository, PubSubSubscriptionQueryRepository,
 };
 use anyhow::Result;
 use northstar_pubsub_core::{
-    CreateNodeOutcome, PepProfileWrite, PubSubNodeConfig, PubSubPublishOutcome,
+    CreateNodeOutcome, PepProfileWrite, PubSubNodeConfig, PubSubNodeName, PubSubPublishOutcome,
     PubSubRetractOutcome, PublishItemsOutcome, RetractItemsOutcome,
 };
 
@@ -78,6 +78,7 @@ fn publish_result(outcome: PublishItemsOutcome, items: &[(String, String)]) -> P
         PublishItemsOutcome::QuotaExceeded => PubSubPublishOutcome::QuotaExceeded,
         PublishItemsOutcome::Forbidden => PubSubPublishOutcome::Forbidden,
         PublishItemsOutcome::PreconditionFailed => PubSubPublishOutcome::PreconditionNotMet,
+        PublishItemsOutcome::Rejected(rejection) => rejection.into(),
     };
     PubSubPublishResult { outcome }
 }
@@ -118,8 +119,16 @@ impl<
                 return Ok(PubSubPublishResult { outcome });
             }
             let outcome = {
+                let node_name = PubSubNodeName::parse(write.node)?;
                 let _permit = self
-                    .admit_mutation(&[write.publisher_jid, write.node], true)
+                    .mutation_admission
+                    .acquire_keys(
+                        &[
+                            PubSubAdmissionKey::Text(write.publisher_jid),
+                            PubSubAdmissionKey::NodeName(&node_name),
+                        ],
+                        true,
+                    )
                     .await?;
                 self.repository
                     .create_node_and_publish_items(
@@ -167,7 +176,8 @@ impl<
         };
         // This covers a concurrent creator as well as a node that existed at
         // the initial lookup. Both its publish options and payload policy are
-        // private until the requester has passed authorization.
+        // private until the requester has passed authorization. This is an
+        // early rejection only; the transaction's locked decision is authoritative.
         let node_config = node.config();
         let authorized = self.can_publish(&node, write.publisher_jid).await?;
         if let Some(outcome) = existing_node_publish_admission_outcome(
@@ -183,6 +193,7 @@ impl<
                 &node,
                 write.publisher_jid,
                 write.items,
+                write.publish_options,
                 write.max_storage_bytes_per_owner,
             )
             .await?;
@@ -225,10 +236,40 @@ impl<
         let pubsub_outcome = match outcome {
             RetractItemsOutcome::Retracted => PubSubRetractOutcome::Retracted,
             RetractItemsOutcome::NotFound => PubSubRetractOutcome::ItemNotFound,
+            RetractItemsOutcome::NotLeafNode => PubSubRetractOutcome::NotLeafNode,
+            RetractItemsOutcome::NotPersistent => PubSubRetractOutcome::NotPersistent,
             RetractItemsOutcome::Forbidden => PubSubRetractOutcome::Forbidden,
         };
         Ok(PubSubRetractResult {
             outcome: pubsub_outcome,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use northstar_pubsub_core::PublishPolicyRejection;
+
+    #[test]
+    fn publish_result_maps_locked_policy_rejections() {
+        use PubSubPublishOutcome as Outcome;
+        use PublishPolicyRejection as Rejection;
+
+        for (rejection, expected) in [
+            (Rejection::PreconditionNotMet, Outcome::PreconditionNotMet),
+            (Rejection::NotLeafNode, Outcome::NotLeafNode),
+            (Rejection::MaxItemsExceeded, Outcome::MaxItemsExceeded),
+            (Rejection::ItemRequired, Outcome::ItemRequired),
+            (Rejection::ItemForbidden, Outcome::ItemForbidden),
+            (Rejection::PayloadRequired, Outcome::PayloadRequired),
+            (Rejection::PayloadTooBig, Outcome::PayloadTooBig),
+            (Rejection::InvalidPayload, Outcome::InvalidPayload),
+        ] {
+            assert_eq!(
+                publish_result(PublishItemsOutcome::Rejected(rejection), &[]).outcome,
+                expected
+            );
+        }
     }
 }

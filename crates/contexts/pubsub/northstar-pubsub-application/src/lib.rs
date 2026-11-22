@@ -7,6 +7,8 @@ pub mod repository;
 pub use repository::*;
 pub mod item_snapshot;
 pub use item_snapshot::*;
+mod pep_replay;
+pub use pep_replay::*;
 mod pep_snapshot;
 pub use pep_snapshot::*;
 mod presence_replay;

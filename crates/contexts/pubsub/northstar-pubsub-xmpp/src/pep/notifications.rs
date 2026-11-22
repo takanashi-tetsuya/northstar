@@ -1,6 +1,9 @@
 //! Render PEP notifications and prepare or deliver live and last-item events.
 
 use super::*;
+use northstar_pubsub_application::DEFAULT_PEP_REPLAY_LIMIT;
+use northstar_pubsub_core::{PepReplayMode, PreparedEventContext, PubSubAddress};
+use northstar_time::{DateTime, Utc};
 
 pub(super) fn pep_subscription_element(
     node: &str,
@@ -237,48 +240,45 @@ pub(super) fn render_pep_direct_state_messages(
 /// Delivers the last published item on `node` for `owner` to `recipient`.
 pub async fn send_pep_last_item<C: PepLastItemDelivery>(
     context: &C,
-    owner: &northstar_pubsub_core::PubSubAccount,
+    owner: &PubSubAccount,
     node: &str,
     recipient: &str,
     on_presence: bool,
     expected_local_epoch: Option<C::CapsEpoch>,
 ) -> Result<()> {
-    send_pep_last_item_for_owner(
-        context,
-        owner.id,
-        &owner.username,
-        node,
-        recipient,
-        on_presence,
-        expected_local_epoch,
-    )
-    .await
+    let query = PepReplayQuery {
+        requester: PubSubAddress::parse(recipient)?,
+        mode: PepReplayMode::AfterSubscribe {
+            owner: owner.clone(),
+            node: node.to_owned(),
+            on_presence,
+        },
+        local_domain: context.last_item_local_domain().to_owned(),
+        after: None,
+        limit: 1,
+    };
+    deliver_pep_replay(context, query, recipient, expected_local_epoch).await
 }
 
 /// Prepares the send-last outbox entries for a PEP subscription.
 pub fn prepare_pep_last_item_outbox(
     snapshot: &PepSubscribeSnapshot,
+    context: PreparedEventContext,
 ) -> Result<Vec<PubSubOutboxInsert>> {
     let Some(item) = snapshot.last_item.as_ref() else {
         return Ok(Vec::new());
     };
-    let payload = published_event_item(&snapshot.node, &item.item_id, &item.payload)?;
-    let message_id = uuid::Uuid::new_v4();
-    let mut items = XmlElement::new("items").attr("node", &snapshot.node);
-    items.push_validated_fragment(&payload)?;
-    let message = XmlElement::namespaced("message", "jabber:client")
-        .attr("from", &snapshot.owner_bare_jid)
-        .attr("to", &snapshot.subscriber_jid)
-        .attr("type", "headline")
-        .attr("id", message_id)
-        .child(XmlElement::namespaced("event", NS_PUBSUB_EVENT).child(items))
-        .child(
-            XmlElement::namespaced("delay", "urn:xmpp:delay")
-                .attr("stamp", item.updated_at.to_rfc3339()),
-        )
-        .finish();
+    let message = pep_last_item_message(
+        &snapshot.owner_bare_jid,
+        &snapshot.subscriber_jid,
+        &snapshot.node,
+        &item.item_id,
+        &item.payload,
+        item.updated_at,
+        context.id,
+    )?;
     Ok(vec![PubSubOutboxInsert::new_pep_stanza(
-        message_id,
+        context.id,
         snapshot.owner_id,
         &snapshot.owner_bare_jid,
         None,
@@ -289,59 +289,34 @@ pub fn prepare_pep_last_item_outbox(
         message,
         &snapshot.node,
         &snapshot.local_domain,
-        northstar_time::Utc::now(),
+        context.at,
     )?])
 }
 
-pub(super) async fn send_pep_last_item_for_owner<C: PepLastItemDelivery>(
-    context: &C,
-    owner_id: uuid::Uuid,
-    owner_username: &str,
-    node: &str,
+fn pep_last_item_message(
+    owner: &str,
     recipient: &str,
-    on_presence: bool,
-    expected_local_epoch: Option<C::CapsEpoch>,
-) -> Result<()> {
-    let Some(config) = context
-        .last_item_pubsub_service()
-        .pep_node(owner_id, node)
-        .await?
-    else {
-        return Ok(());
-    };
-    if config.send_last_published_item == "never"
-        || on_presence && config.send_last_published_item != "on_sub_and_presence"
-        || !config.deliver_notifications
-    {
-        return Ok(());
-    }
-    let Some(item) = context
-        .last_item_pubsub_service()
-        .pep_items_with_timestamp(owner_id, node, 1)
-        .await?
-        .into_iter()
-        .next()
-    else {
-        return Ok(());
-    };
-    let owner_jid = canonical_account_jid(owner_username, context.last_item_local_domain())?;
-    let payload = published_event_item(node, &item.item_id, &item.payload)?;
-    let mut items = XmlElement::new("items").attr("node", node);
-    items.push_validated_fragment(&payload)?;
-    let message = XmlElement::namespaced("message", "jabber:client")
-        .attr("from", &owner_jid)
+    node: &str,
+    item_id: &str,
+    payload: &str,
+    updated_at: DateTime<Utc>,
+    message_id: uuid::Uuid,
+) -> Result<String> {
+    let payload = published_event_item(node, item_id, payload)?;
+    let items = XmlElement::new("items")
+        .attr("node", node)
+        .validated_fragment(&payload)?;
+    Ok(XmlElement::namespaced("message", "jabber:client")
+        .attr("from", owner)
         .attr("to", recipient)
         .attr("type", "headline")
-        .attr("id", uuid::Uuid::new_v4())
+        .attr("id", message_id)
         .child(XmlElement::namespaced("event", NS_PUBSUB_EVENT).child(items))
         .child(
             XmlElement::namespaced("delay", "urn:xmpp:delay")
-                .attr("stamp", item.updated_at.to_rfc3339()),
+                .attr("stamp", updated_at.to_rfc3339()),
         )
-        .finish();
-    context
-        .last_item_route(&owner_jid, recipient, message, expected_local_epoch)
-        .await
+        .finish())
 }
 
 /// Delivers XEP-0060 send-last events for durable explicit subscriptions.
@@ -352,35 +327,19 @@ pub async fn deliver_explicit_pep_last_items_for_resource<C: PepLastItemDelivery
     full_jid: &str,
     expected_local_epoch: Option<C::CapsEpoch>,
 ) -> Result<()> {
-    let full_jid = northstar_xmpp_types::jid::canonical_session_key(full_jid)?;
-    for subscription in context
-        .last_item_pubsub_service()
-        .pep_subscriptions_for_available_resource(&full_jid)
-        .await?
-    {
-        if pep_access_allowed_for_owner(
-            context.last_item_pubsub_service(),
-            subscription.owner_id,
-            &subscription.owner_username,
-            context.last_item_local_domain(),
-            &subscription.node,
-            &full_jid,
-        )
-        .await?
-        {
-            send_pep_last_item_for_owner(
-                context,
-                subscription.owner_id,
-                &subscription.owner_username,
-                &subscription.node,
-                &full_jid,
-                true,
-                expected_local_epoch,
-            )
-            .await?;
-        }
-    }
-    Ok(())
+    let requester = PubSubAddress::parse(full_jid)?;
+    anyhow::ensure!(
+        requester.has_resource(),
+        "session JID must contain a resourcepart"
+    );
+    let recipient = requester.to_string();
+    deliver_pep_replay(
+        context,
+        presence_query(context, requester, PepReplayMode::Explicit),
+        &recipient,
+        expected_local_epoch,
+    )
+    .await
 }
 
 /// Delivers PEP send-last items for a local resource based on its entity capabilities.
@@ -393,99 +352,12 @@ pub async fn deliver_pep_last_items_for_resource<C: PepLastItemDelivery>(
     if wanted.is_empty() {
         return Ok(());
     }
-    let full = northstar_xmpp_types::jid::CanonicalJid::parse(full_jid)?;
-    let bare = full.bare();
-    let Some(username) = full.localpart() else {
-        return Ok(());
-    };
-    let Some(subscriber) = context
-        .last_item_pubsub_service()
-        .find_enabled_user(username)
-        .await?
-    else {
-        return Ok(());
-    };
-    let explicit = context
-        .last_item_pubsub_service()
-        .pep_subscriptions_for_available_resource(full_jid)
-        .await?
-        .into_iter()
-        .map(|subscription| (subscription.owner_id, subscription.node))
-        .collect::<HashSet<_>>();
-    for node in &wanted {
-        if !explicit.contains(&(subscriber.id, node.clone()))
-            && context
-                .last_item_pubsub_service()
-                .pep_node(subscriber.id, node)
-                .await?
-                .is_some()
-        {
-            send_pep_last_item(
-                context,
-                &subscriber,
-                node,
-                full_jid,
-                true,
-                Some(expected_local_epoch),
-            )
-            .await?;
-        }
-    }
-    for (contact, _, subscription, _) in context
-        .last_item_pubsub_service()
-        .roster(subscriber.id)
-        .await?
-    {
-        if !matches!(subscription.as_str(), "to" | "both") {
-            continue;
-        }
-        let Ok(contact_jid) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&contact) else {
-            continue;
-        };
-        if contact_jid.domainpart() != context.last_item_local_domain() {
-            continue;
-        }
-        let Some(contact_name) = contact_jid.localpart() else {
-            continue;
-        };
-        let Some(owner) = context
-            .last_item_pubsub_service()
-            .find_enabled_user(contact_name)
-            .await?
-        else {
-            continue;
-        };
-        if context
-            .last_item_pubsub_service()
-            .is_blocked(owner.id, &bare)
-            .await?
-        {
-            continue;
-        }
-        for node in &wanted {
-            if !explicit.contains(&(owner.id, node.clone()))
-                && pep_access_allowed(
-                    context.last_item_pubsub_service(),
-                    &owner,
-                    context.last_item_local_domain(),
-                    node,
-                    &bare,
-                )
-                .await?
-            {
-                send_pep_last_item(
-                    context,
-                    &owner,
-                    node,
-                    full_jid,
-                    true,
-                    Some(expected_local_epoch),
-                )
-                .await?;
-            }
-        }
-    }
-    Ok(())
+    let query = presence_query(
+        context,
+        PubSubAddress::parse(full_jid)?,
+        PepReplayMode::LocalCaps { wanted },
+    );
+    deliver_pep_replay(context, query, full_jid, Some(expected_local_epoch)).await
 }
 
 /// Delivers PEP send-last items for a federated resource based on its entity capabilities.
@@ -497,53 +369,56 @@ pub async fn deliver_pep_last_items_for_federated_resource<C: PepLastItemDeliver
     if wanted.is_empty() {
         return Ok(());
     }
-    let remote = northstar_xmpp_types::jid::CanonicalJid::parse(full_jid)?;
-    if remote.resourcepart().is_none() || remote.domainpart() == context.last_item_local_domain() {
-        return Ok(());
+    let query = presence_query(
+        context,
+        PubSubAddress::parse(full_jid)?,
+        PepReplayMode::FederatedCaps { wanted },
+    );
+    deliver_pep_replay(context, query, full_jid, None).await
+}
+
+fn presence_query<C: PepLastItemDelivery>(
+    context: &C,
+    requester: PubSubAddress,
+    mode: PepReplayMode,
+) -> PepReplayQuery {
+    PepReplayQuery {
+        requester,
+        mode,
+        local_domain: context.last_item_local_domain().to_owned(),
+        after: None,
+        limit: DEFAULT_PEP_REPLAY_LIMIT,
     }
-    let bare = remote.bare();
-    let explicit = context
-        .last_item_pubsub_service()
-        .pep_subscriptions_for_available_resource(full_jid)
-        .await?
-        .into_iter()
-        .map(|subscription| (subscription.owner_id, subscription.node))
-        .collect::<HashSet<_>>();
-    for username in context
-        .last_item_pubsub_service()
-        .pep_owner_usernames_for_presence_subscriber(&bare)
-        .await?
-    {
-        let Some(owner) = context
-            .last_item_pubsub_service()
-            .find_enabled_user(&username)
-            .await?
-        else {
-            continue;
+}
+
+async fn deliver_pep_replay<C: PepLastItemDelivery>(
+    context: &C,
+    mut query: PepReplayQuery,
+    recipient: &str,
+    expected_local_epoch: Option<C::CapsEpoch>,
+) -> Result<()> {
+    loop {
+        let page = context.last_item_replay_page(&query).await?;
+        for entry in page.entries {
+            let owner = canonical_account_jid(&entry.owner_username, &query.local_domain)?;
+            let message = pep_last_item_message(
+                &owner,
+                recipient,
+                &entry.node,
+                &entry.item_id,
+                &entry.payload,
+                entry.updated_at,
+                context.last_item_time_sources().new_uuid(),
+            )?;
+            context
+                .last_item_route(&owner, recipient, message, expected_local_epoch)
+                .await?;
+        }
+        let Some(next) = page.next else {
+            return Ok(());
         };
-        if context
-            .last_item_pubsub_service()
-            .is_blocked(owner.id, &bare)
-            .await?
-        {
-            continue;
-        }
-        for node in &wanted {
-            if !explicit.contains(&(owner.id, node.clone()))
-                && pep_access_allowed(
-                    context.last_item_pubsub_service(),
-                    &owner,
-                    context.last_item_local_domain(),
-                    node,
-                    full_jid,
-                )
-                .await?
-            {
-                send_pep_last_item(context, &owner, node, full_jid, true, None).await?;
-            }
-        }
+        query.after = Some(next);
     }
-    Ok(())
 }
 
 pub(super) fn published_event_items(node: &str, items: &[(String, String)]) -> Result<String> {

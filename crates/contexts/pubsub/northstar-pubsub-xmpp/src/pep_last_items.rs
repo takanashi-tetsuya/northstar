@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use northstar_pubsub_application::PubSubService;
+use northstar_pubsub_core::{PepReplayPage, PepReplayQuery, PubSubTimeSources};
 use northstar_session_core::LocalCapsEpoch;
 use northstar_stream::local_routes::session_table::{
     local_caps_route_epoch_matches, session_entries_for_in, LocalSessionTable,
@@ -189,8 +190,12 @@ impl<R: crate::PubSubRepositories, P: PepLastItemsPorts> crate::pep::PepLastItem
 {
     type CapsEpoch = LocalCapsEpoch;
 
-    fn last_item_pubsub_service(&self) -> &PubSubService<impl crate::PubSubRepositories> {
-        self.pubsub_service()
+    async fn last_item_replay_page(&self, query: &PepReplayQuery) -> Result<PepReplayPage> {
+        self.pubsub_service().pep_replay_page(query).await
+    }
+
+    fn last_item_time_sources(&self) -> &PubSubTimeSources {
+        self.pubsub_service().time_sources()
     }
 
     fn last_item_local_domain(&self) -> &str {

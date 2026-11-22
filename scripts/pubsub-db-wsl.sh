@@ -329,6 +329,12 @@ run_exact_ignored \
 run_exact_ignored \
   pubsub::integration::pep_policy_lock::pep_explicit_options_are_checked_against_the_locked_node
 run_exact_ignored \
+  pubsub::integration::pep_replay::pep_replay_page_reads_owner_facts_from_one_snapshot
+run_exact_ignored \
+  pubsub::integration::pep_replay::pep_replay_dedups_explicit_and_automatic_in_one_snapshot
+run_exact_ignored \
+  pubsub::integration::pep_replay::pep_replay_page_succeeds_on_read_only_connections
+run_exact_ignored \
   pubsub::integration::pep_snapshot::item_read_never_combines_revoked_access_with_a_new_publication
 run_exact_ignored \
   pubsub::integration::pep_snapshot::node_discovery_cannot_pair_the_old_open_model_with_a_new_unblock

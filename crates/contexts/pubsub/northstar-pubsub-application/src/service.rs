@@ -52,7 +52,7 @@ use render::{NS_DATA, NS_PUBSUB_EVENT, SUBSCRIBE_AUTH_FORM};
 
 #[derive(Clone)]
 pub struct PubSubService<R> {
-    repository: R,
+    pub(crate) repository: R,
     mutation_admission: Arc<PubSubMutationAdmission>,
     durable_outbox_database_admission:
         northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,

@@ -26,8 +26,26 @@ pub async fn roster(
     pool: &PgPool,
     owner_id: Uuid,
 ) -> Result<Vec<(String, Option<String>, String, Option<String>)>> {
-    let rows = sqlx::query("SELECT contact_jid, display_name, subscription, ask FROM roster_items WHERE owner_id = $1 ORDER BY contact_jid")
-        .bind(owner_id).fetch_all(pool).await?;
+    roster_page_after(pool, owner_id, None, i64::MAX).await
+}
+
+/// Lists roster entries in contact order on the supplied read connection.
+pub async fn roster_page_after<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    owner_id: Uuid,
+    after: Option<&str>,
+    limit: i64,
+) -> Result<Vec<(String, Option<String>, String, Option<String>)>> {
+    let rows = sqlx::query(
+        "SELECT contact_jid, display_name, subscription, ask FROM roster_items
+         WHERE owner_id = $1 AND ($2::text IS NULL OR contact_jid > $2)
+         ORDER BY contact_jid LIMIT $3",
+    )
+    .bind(owner_id)
+    .bind(after)
+    .bind(limit)
+    .fetch_all(executor)
+    .await?;
     Ok(rows
         .iter()
         .map(|r| {

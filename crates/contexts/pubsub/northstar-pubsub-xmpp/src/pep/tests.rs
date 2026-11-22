@@ -2,6 +2,194 @@ use super::*;
 use northstar_pubsub_core::pep_nodes::{CONTACTS, OMEMO_BUNDLES, OMEMO_DEVICES};
 use roxmltree::Document;
 
+#[tokio::test]
+async fn pep_replay_modes_keep_exact_message_bytes_and_route_epochs() {
+    use northstar_pubsub_core::{
+        FixedPubSubClock, PepReplayCursor, PepReplayEntry, PepReplayMode, PepReplayOrigin,
+        SequentialPubSubIds,
+    };
+    use northstar_time::{DateTime, Utc};
+    use std::sync::{Arc, Mutex};
+
+    const NODE: &str = "urn:test:pep:news";
+    const OWNER: &str = "owner@example.test";
+    const LOCAL: &str = "reader@example.test/Desk";
+    const REMOTE: &str = "reader@remote.test/Desk";
+
+    struct ReplayDelivery {
+        time: PubSubTimeSources,
+        routed: Mutex<Vec<(String, String, Option<u64>)>>,
+    }
+
+    impl PepLastItemDelivery for ReplayDelivery {
+        type CapsEpoch = u64;
+
+        async fn last_item_replay_page(&self, query: &PepReplayQuery) -> Result<PepReplayPage> {
+            assert_eq!(query.local_domain, "example.test");
+            assert_eq!(query.limit, 100);
+            let (item_id, origin) = match &query.mode {
+                PepReplayMode::Explicit => {
+                    assert_eq!(query.requester.to_string(), LOCAL);
+                    let next = PepReplayCursor::Explicit(uuid::Uuid::nil());
+                    if query.after.is_none() {
+                        return Ok(PepReplayPage {
+                            entries: Vec::new(),
+                            next: Some(next),
+                            scanned: 100,
+                        });
+                    }
+                    assert_eq!(query.after, Some(next));
+                    ("explicit", PepReplayOrigin::Explicit)
+                }
+                PepReplayMode::LocalCaps { wanted } => {
+                    assert_eq!(query.requester.to_string(), LOCAL);
+                    assert_eq!(wanted.as_slice(), &[NODE]);
+                    assert!(query.after.is_none());
+                    ("local", PepReplayOrigin::Automatic)
+                }
+                PepReplayMode::FederatedCaps { wanted } => {
+                    assert_eq!(query.requester.to_string(), REMOTE);
+                    assert_eq!(wanted.as_slice(), &[NODE]);
+                    assert!(query.after.is_none());
+                    ("federated", PepReplayOrigin::Automatic)
+                }
+                PepReplayMode::AfterSubscribe { .. } => panic!("unexpected direct replay"),
+            };
+            Ok(PepReplayPage {
+                entries: vec![PepReplayEntry {
+                    owner_id: uuid::Uuid::from_u128(1),
+                    owner_username: "owner".to_owned(),
+                    node: NODE.to_owned(),
+                    item_id: item_id.to_owned(),
+                    payload: format!(
+                        "<item xmlns='{NS_PUBSUB}' id='{item_id}'><value xmlns='urn:test:payload'/></item>"
+                    ),
+                    updated_at: "2025-04-03T02:01:00Z".parse::<DateTime<Utc>>().unwrap(),
+                    origin,
+                }],
+                next: None,
+                scanned: 1,
+            })
+        }
+
+        fn last_item_time_sources(&self) -> &PubSubTimeSources {
+            &self.time
+        }
+
+        fn last_item_local_domain(&self) -> &str {
+            "example.test"
+        }
+
+        fn last_item_notify_nodes(&self, _: &str) -> Vec<String> {
+            vec![NODE.to_owned()]
+        }
+
+        async fn last_item_route(
+            &self,
+            sender_bare_jid: &str,
+            recipient: &str,
+            message: String,
+            epoch: Option<u64>,
+        ) -> Result<()> {
+            assert_eq!(sender_bare_jid, OWNER);
+            self.routed
+                .lock()
+                .unwrap()
+                .push((recipient.to_owned(), message, epoch));
+            Ok(())
+        }
+    }
+
+    let delivery = ReplayDelivery {
+        time: PubSubTimeSources::new(
+            Arc::new(FixedPubSubClock("2026-01-01T00:00:00Z".parse().unwrap())),
+            Arc::new(SequentialPubSubIds::default()),
+        ),
+        routed: Mutex::default(),
+    };
+    deliver_explicit_pep_last_items_for_resource(&delivery, "READER@Example.Test/Desk", Some(41))
+        .await
+        .unwrap();
+    deliver_pep_last_items_for_resource(&delivery, LOCAL, 42)
+        .await
+        .unwrap();
+    deliver_pep_last_items_for_federated_resource(&delivery, REMOTE)
+        .await
+        .unwrap();
+
+    let routed = delivery.routed.into_inner().unwrap();
+    assert_eq!(routed.len(), 3);
+    for ((recipient, message, epoch), (to, id, item, expected_epoch)) in routed.into_iter().zip([
+        (LOCAL, 1, "explicit", Some(41)),
+        (LOCAL, 2, "local", Some(42)),
+        (REMOTE, 3, "federated", None),
+    ]) {
+        assert_eq!(recipient, to);
+        assert_eq!(epoch, expected_epoch);
+        assert_eq!(
+            message,
+            format!(
+                concat!(
+                    "<message xmlns='jabber:client' from='{owner}' to='{to}' type='headline' ",
+                    "id='00000000-0000-0000-0000-00000000000{id}'>",
+                    "<event xmlns='http://jabber.org/protocol/pubsub#event'><items node='{node}'>",
+                    "<item id='{item}'><value xmlns='urn:test:payload'/></item></items></event>",
+                    "<delay xmlns='urn:xmpp:delay' stamp='2025-04-03T02:01:00+00:00'/></message>"
+                ),
+                owner = OWNER,
+                to = to,
+                id = id,
+                node = NODE,
+                item = item,
+            ),
+        );
+    }
+}
+
+#[test]
+fn pep_send_last_outbox_uses_the_prepared_id_and_expiry_origin() {
+    use northstar_pubsub_core::{PepItem, PreparedEventContext, PUBSUB_OUTBOX_DEFAULT_TTL_SECONDS};
+    use northstar_time::Duration;
+    use uuid::Uuid;
+
+    let context = PreparedEventContext {
+        id: Uuid::from_u128(7),
+        at: "2026-01-01T00:00:00Z".parse().unwrap(),
+    };
+    let snapshot = PepSubscribeSnapshot {
+        owner_id: Uuid::from_u128(5),
+        owner_bare_jid: "owner@example.test".to_owned(),
+        node: "urn:test:pep:news".to_owned(),
+        subscriber_jid: "reader@remote.test/Desk".to_owned(),
+        subscriber_account_id: None,
+        local_domain: "example.test".to_owned(),
+        last_item: Some(PepItem {
+            item_id: "latest".to_owned(),
+            payload: "<item id='latest'/>".to_owned(),
+            updated_at: "2025-04-03T02:01:00Z".parse().unwrap(),
+        }),
+    };
+    let rows = prepare_pep_last_item_outbox(&snapshot, context).unwrap();
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row.event_id, context.id);
+    assert_eq!(
+        row.expires_at,
+        context.at + Duration::seconds(PUBSUB_OUTBOX_DEFAULT_TTL_SECONDS),
+    );
+    let doc = Document::parse(&row.payload_xml).unwrap();
+    assert_eq!(
+        doc.root_element().attribute("id"),
+        Some("00000000-0000-0000-0000-000000000007"),
+    );
+    let delay = doc
+        .root_element()
+        .children()
+        .find(|child| child.has_tag_name(("urn:xmpp:delay", "delay")))
+        .unwrap();
+    assert_eq!(delay.attribute("stamp"), Some("2025-04-03T02:01:00+00:00"));
+}
+
 #[test]
 fn bookmarks_event_contains_only_the_locked_changed_items() {
     let changed = "<item id='changed@conference.example.test'><conference xmlns='urn:xmpp:bookmarks:1' name='new'/></item>";

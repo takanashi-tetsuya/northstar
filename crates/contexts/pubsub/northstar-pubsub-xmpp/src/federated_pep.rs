@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use northstar_federation_core::wire::{s2s_iq_error, s2s_iq_result};
 use northstar_pubsub_application::{PepItemQuery, PepItemRead, PepItemSelection};
+use northstar_pubsub_core::PepSubscribeSnapshot;
 use roxmltree::Node;
 
 use crate::pep::parse_pep_item_selection;
@@ -138,8 +139,9 @@ pub async fn federated_pep_subscription<H: PubSubHost>(
     };
     if operation.tag_name().name() == "subscribe" {
         let requested_subid = uuid::Uuid::new_v4().to_string();
-        let outcome = match host
-            .pubsub_application_service()
+        let service = host.pubsub_application_service();
+        let context = service.time_sources().prepare_event();
+        let outcome = match service
             .subscribe_pep_node(
                 northstar_pubsub_application::PepSubscribeCommand::from(
                     northstar_pubsub_core::PepSubscribeWrite {
@@ -154,7 +156,9 @@ pub async fn federated_pep_subscription<H: PubSubHost>(
                         requested_subid: &requested_subid,
                     },
                 ),
-                &crate::pep::prepare_pep_last_item_outbox,
+                &move |snapshot: &PepSubscribeSnapshot| {
+                    crate::pep::prepare_pep_last_item_outbox(snapshot, context)
+                },
             )
             .await
         {

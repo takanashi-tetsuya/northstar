@@ -39,6 +39,7 @@ mod discovery_snapshot_port;
 mod item_snapshot_port;
 mod owner_preflight_port;
 mod pep_ports;
+mod pep_replay_port;
 mod pep_snapshot_port;
 mod presence_replay_port;
 mod pubsub_outbox;

@@ -162,7 +162,7 @@ enum PepNodeView {
 }
 
 impl PostgresPubSubRepository {
-    fn pep_owner_jid(&self, username: &str) -> Result<CanonicalJid> {
+    pub(super) fn pep_owner_jid(&self, username: &str) -> Result<CanonicalJid> {
         CanonicalJid::parse_bare(&format!("{username}@{}", self.domain))
     }
 
@@ -192,7 +192,7 @@ impl PostgresPubSubRepository {
     }
 }
 
-enum SnapshotRequester {
+pub(super) enum SnapshotRequester {
     Owner,
     Other {
         bare_jid: String,
@@ -202,7 +202,7 @@ enum SnapshotRequester {
     Invalid,
 }
 
-async fn read_requester(
+pub(super) async fn read_requester(
     tx: &mut Transaction<'_, Postgres>,
     owner_id: Uuid,
     owner_jid: &CanonicalJid,
@@ -240,7 +240,7 @@ async fn read_requester(
     })
 }
 
-async fn node_access(
+pub(super) async fn node_access(
     tx: &mut Transaction<'_, Postgres>,
     owner_id: Uuid,
     requester: &SnapshotRequester,

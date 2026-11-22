@@ -17,13 +17,13 @@ use northstar_pubsub_application::{
 };
 use northstar_pubsub_core::pep_nodes::{BOOKMARKS2, VCARD4};
 use northstar_pubsub_core::{
-    pep_read_access, PepAccessDenial, PepAccessFacts, PepAudienceSnapshot, PepBlockFacts,
-    PepConfigureNodeWrite, PepCreateOutcome, PepDeleteNodeWrite, PepDirectStateSnapshot,
-    PepDirectStateTransition, PepNodeConfig, PepOutboxAuthorizationMode, PepOutboxEventKind,
-    PepOutboxFactory, PepOwnerMutationOutcome, PepProfileWrite, PepPublishOutcome, PepPublishWrite,
-    PepPurgeNodeWrite, PepQuotas, PepRequesterRelation, PepRetractWrite, PepSetAffiliationsWrite,
-    PepSubscribeOutcome, PepSubscribeSnapshot, PepSubscribeWrite, PepSubscriptionActor,
-    PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount, PubSubOutboxInsert, PEP_MAX_ITEMS,
+    PepAccessDenial, PepAudienceSnapshot, PepConfigureNodeWrite, PepCreateOutcome,
+    PepDeleteNodeWrite, PepDirectStateSnapshot, PepDirectStateTransition, PepNodeConfig,
+    PepOutboxAuthorizationMode, PepOutboxEventKind, PepOutboxFactory, PepOwnerMutationOutcome,
+    PepProfileWrite, PepPublishOutcome, PepPublishWrite, PepPurgeNodeWrite, PepQuotas,
+    PepReplayPage, PepReplayQuery, PepRetractWrite, PepSetAffiliationsWrite, PepSubscribeOutcome,
+    PepSubscribeSnapshot, PepSubscribeWrite, PepSubscriptionActor, PepUnsubscribeOutcome,
+    PepUnsubscribeWrite, PubSubAccount, PubSubOutboxInsert, PubSubTimeSources, PEP_MAX_ITEMS,
 };
 use northstar_xml_builder::rewrite::set_root_attribute;
 use northstar_xml_builder::stanza::{
@@ -59,7 +59,7 @@ pub use self::node_management::{pep_owner_get, pep_owner_set};
 pub use self::notifications::{
     deliver_explicit_pep_last_items_for_resource, deliver_pep_last_items_for_federated_resource,
     deliver_pep_last_items_for_resource, pep_audience_messages, prepare_pep_last_item_outbox,
-    profile_audience_messages,
+    profile_audience_messages, send_pep_last_item,
 };
 pub use self::publishing::{bookmarks2_items_event, pep_publish};
 
@@ -114,8 +114,13 @@ pub trait PepLastItemDelivery: Sync {
     /// The epoch of a local session's entity capabilities, checked again when a send-last message
     /// is routed.
     type CapsEpoch: Copy + Send + Sync;
-    /// The PubSub service, over the repository the composition root binds.
-    fn last_item_pubsub_service(&self) -> &PubSubService<impl crate::PubSubRepositories>;
+    /// Read the next authorized page through the PubSub service.
+    fn last_item_replay_page(
+        &self,
+        query: &PepReplayQuery,
+    ) -> impl std::future::Future<Output = Result<PepReplayPage>> + Send;
+    /// The PubSub service's clock and ID source.
+    fn last_item_time_sources(&self) -> &PubSubTimeSources;
     /// The server's local domain.
     fn last_item_local_domain(&self) -> &str;
     /// The nodes the current entity capabilities of `full_jid` ask notifications for.
@@ -189,8 +194,9 @@ async fn pep_subscribe<S: PepSession>(
                 .expect("authenticated account must form a canonical JID")
         });
     let requested_subid = uuid::Uuid::new_v4().to_string();
-    let outcome = session
-        .pep_pubsub_service()
+    let service = session.pep_pubsub_service();
+    let context = service.time_sources().prepare_event();
+    let outcome = service
         .subscribe_pep_node(
             northstar_pubsub_application::PepSubscribeCommand::from(PepSubscribeWrite {
                 owner: &owner,
@@ -203,7 +209,7 @@ async fn pep_subscribe<S: PepSession>(
                 max_subscriptions: 1_000,
                 requested_subid: &requested_subid,
             }),
-            &prepare_pep_last_item_outbox,
+            &move |snapshot: &PepSubscribeSnapshot| prepare_pep_last_item_outbox(snapshot, context),
         )
         .await?;
     let subscription = match outcome.outcome {
@@ -552,81 +558,6 @@ fn xdata_field<'a, 'input>(form: Node<'a, 'input>, name: &str) -> Option<&'a str
                 && node.attribute("var") == Some(name)
         })
         .and_then(|node| child_text(node, "value"))
-}
-
-// Send-last replay still gathers its own facts. Its policy is shared with IQ reads.
-async fn pep_access_allowed(
-    service: &PubSubService<impl northstar_pubsub_application::PepNodeQueryRepository>,
-    owner: &northstar_pubsub_core::PubSubAccount,
-    domain: &str,
-    node: &str,
-    requester_jid: &str,
-) -> Result<bool> {
-    pep_access_allowed_for_owner(
-        service,
-        owner.id,
-        &owner.username,
-        domain,
-        node,
-        requester_jid,
-    )
-    .await
-}
-
-async fn pep_access_allowed_for_owner(
-    service: &PubSubService<impl northstar_pubsub_application::PepNodeQueryRepository>,
-    owner_id: uuid::Uuid,
-    owner_username: &str,
-    domain: &str,
-    node: &str,
-    requester_jid: &str,
-) -> Result<bool> {
-    let owner_jid = canonical_account_jid(owner_username, domain)?;
-    let requester_bare = northstar_xmpp_types::jid::canonical_bare_key(requester_jid).ok();
-    let requester = match requester_bare.as_deref() {
-        Some(bare) if bare == owner_jid => PepRequesterRelation::Owner,
-        Some(bare) => PepRequesterRelation::Other(bare),
-        None => PepRequesterRelation::Invalid,
-    };
-    let config = if matches!(requester, PepRequesterRelation::Other(_)) {
-        service.pep_node(owner_id, node).await?
-    } else {
-        None
-    };
-    let mut blocks = PepBlockFacts::default();
-    let mut subscription = None;
-    let mut groups = Vec::new();
-    if let (PepRequesterRelation::Other(bare), Some(config)) = (requester, config.as_ref()) {
-        blocks.owner_blocks_requester = service.is_blocked(owner_id, bare).await?;
-        if !blocks.owner_blocks_requester {
-            match config.access_model.as_str() {
-                "presence" => {
-                    subscription = service
-                        .roster_item(owner_id, bare)
-                        .await?
-                        .map(|(_, _, subscription, _)| subscription);
-                }
-                "roster" => {
-                    groups = service
-                        .roster_matching_groups(
-                            owner_id,
-                            requester_jid,
-                            &config.roster_groups_allowed,
-                        )
-                        .await?;
-                }
-                _ => {}
-            }
-        }
-    }
-    Ok(pep_read_access(&PepAccessFacts {
-        requester,
-        blocks,
-        roster_subscription: subscription.as_deref(),
-        roster_groups: &groups,
-        config: config.as_ref(),
-    })
-    .is_ok())
 }
 
 /// Discovers identity, features, and node metadata for federated PEP queries.

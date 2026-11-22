@@ -35,6 +35,8 @@ mod lock_measure;
 mod mutation_transaction;
 #[path = "integration/pep_policy_lock_tests.rs"]
 mod pep_policy_lock;
+#[path = "integration/pep_replay_tests.rs"]
+mod pep_replay;
 #[path = "integration/pep_snapshot_tests.rs"]
 mod pep_snapshot;
 #[path = "integration/presence_replay_tests.rs"]

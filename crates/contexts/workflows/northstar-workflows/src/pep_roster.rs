@@ -2,7 +2,7 @@
 //! subscriber presence. They stay in the workflows until the roster context provides them through a port.
 
 use anyhow::Result;
-use sqlx::{Executor, PgPool, Postgres, Row};
+use sqlx::{Executor, PgPool, Postgres};
 use uuid::Uuid;
 
 pub(crate) async fn roster_matching_groups<'e>(
@@ -30,14 +30,28 @@ pub async fn pep_owner_usernames_for_presence_subscriber(
     pool: &PgPool,
     subscriber_bare: &str,
 ) -> Result<Vec<String>> {
+    pep_presence_owner_page(pool, subscriber_bare, None, i64::MAX).await
+}
+
+pub(crate) async fn pep_presence_owner_page<'e>(
+    executor: impl Executor<'e, Database = Postgres>,
+    subscriber_bare: &str,
+    after: Option<&str>,
+    limit: i64,
+) -> Result<Vec<String>> {
     let subscriber_bare = northstar_xmpp_types::jid::canonical_bare_key(subscriber_bare)?;
-    let rows = sqlx::query(
-        "SELECT u.username FROM roster_items r JOIN users u ON u.id=r.owner_id WHERE r.contact_jid=$1 AND r.subscription IN ('from','both') ORDER BY u.username LIMIT 10000",
+    Ok(sqlx::query_scalar(
+        "SELECT username FROM (
+             SELECT u.username FROM roster_items r JOIN users u ON u.id=r.owner_id WHERE r.contact_jid=$1 AND r.subscription IN ('from','both') ORDER BY u.username LIMIT 10000
+         ) owners
+         WHERE $2::text IS NULL OR username > $2
+         ORDER BY username LIMIT $3",
     )
     .bind(&subscriber_bare)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows.iter().map(|row| row.get("username")).collect())
+    .bind(after)
+    .bind(limit)
+    .fetch_all(executor)
+    .await?)
 }
 
 #[cfg(test)]

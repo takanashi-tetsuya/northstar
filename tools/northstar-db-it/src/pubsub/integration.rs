@@ -29,6 +29,8 @@ mod digest_lease;
 mod discovery_snapshot;
 #[path = "integration/item_snapshot_tests.rs"]
 mod item_snapshot;
+#[path = "integration/lock_measure_tests.rs"]
+mod lock_measure;
 #[path = "integration/mutation_transaction_tests.rs"]
 mod mutation_transaction;
 #[path = "integration/pep_snapshot_tests.rs"]

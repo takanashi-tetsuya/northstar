@@ -318,6 +318,24 @@ mod mix {
             fn issue_mix_invitation(&self, channel_id: Uuid, inviter: &str, invitee: &str, token: &str, lifetime: northstar_time::Duration, federated: Option<&FederatedMixMutation>) -> Result<bool>;
             fn mix_private_message_recipient(&self, channel_id: Uuid, sender: &str, recipient_id: Uuid) -> Result<Option<(MixParticipant, MixParticipant)>>;
             fn retract_mix_message(&self, request: RetractMixMessageRequest<'_>, authenticators: Option<&ContentIdentityAuthenticators>) -> Result<RetractMixMessageAdmission>;
+            fn find_enabled_user(&self, username: &str) -> Result<Option<MixAccount>>;
+            fn find_enabled_user_by_id(&self, user_id: Uuid) -> Result<Option<MixAccount>>;
+            fn is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool>;
+            fn relay_profile_snapshot(&self, query: MixRelayProfileQuery) -> Result<MixRelayProfileResult>;
+            fn latest_roster_change_for_contact(&self, user_id: Uuid, contact_jid: &str) -> Result<Option<northstar_roster_core::RosterChange>>;
+            fn mix_muc_mirror_for_mix(&self, mix_channel_id: Uuid) -> Result<Option<MixMucMirror>>;
+            fn mix_muc_mirror_for_muc(&self, muc_room_id: Uuid) -> Result<Option<MixMucMirror>>;
+            fn mix_muc_mirror_service_complete(&self, mix_domain: &str) -> Result<bool>;
+            fn enqueue_s2s_response_batch(&self, target_domain: &str, responses: &[String], policy: S2sOutboxPolicy) -> Result<()>;
+            fn federated_mix_iq_replay(&self, authenticated_domain: &str, actor_jid: &str, request_id: &str, request_digest: &[u8; 32]) -> Result<FederatedMixIqReplay>;
+            fn admit_federated_mix_iq_result(&self, authenticated_domain: &str, actor_jid: &str, request_id: &str, request_digest: &[u8; 32], response: &str, policy: S2sOutboxPolicy) -> Result<FederatedMixIqReplay>;
+            fn prune_expired_business_intents(&self, limit: i64) -> Result<u64>;
+            fn prune_expired_federated_iq_results(&self, limit: i64) -> Result<u64>;
+        }
+    }
+
+    impl MixPamRepository for UnusedMix {
+        unused_async! {
             fn begin_remote_pam_join(&self, request: BeginRemotePamJoin) -> Result<PamOperationReplay>;
             fn lookup_remote_pam_operation(&self, user_id: Uuid, requester_full_jid: &str, client_request_id: &str, request_digest: &[u8; 32]) -> Result<PamOperationReplay>;
             fn begin_remote_pam_leave(&self, request: BeginRemotePamLeave) -> Result<PamOperationReplay>;
@@ -333,26 +351,18 @@ mod mix {
             fn defer_pam_result(&self, operation_id: Uuid, lease_token: Uuid, delay_seconds: i64) -> Result<bool>;
             fn retry_pam_result(&self, operation_id: Uuid, lease_token: Uuid, attempt_count: i32, error: &str) -> Result<bool>;
             fn prune_expired_pam_results(&self, limit: i64) -> Result<u64>;
-            fn find_enabled_user(&self, username: &str) -> Result<Option<MixAccount>>;
-            fn find_enabled_user_by_id(&self, user_id: Uuid) -> Result<Option<MixAccount>>;
-            fn is_blocked(&self, owner_id: Uuid, candidate: &str) -> Result<bool>;
-            fn relay_profile_snapshot(&self, query: MixRelayProfileQuery) -> Result<MixRelayProfileResult>;
-            fn latest_roster_change_for_contact(&self, user_id: Uuid, contact_jid: &str) -> Result<Option<northstar_roster_core::RosterChange>>;
-            fn mix_muc_mirror_for_mix(&self, mix_channel_id: Uuid) -> Result<Option<MixMucMirror>>;
-            fn mix_muc_mirror_for_muc(&self, muc_room_id: Uuid) -> Result<Option<MixMucMirror>>;
-            fn mix_muc_mirror_service_complete(&self, mix_domain: &str) -> Result<bool>;
+        }
+    }
+
+    impl MixDeliveryRepository for UnusedMix {
+        unused_async! {
             fn archive_mix_message_once(&self, personal_archive_id: Uuid, owner_id: Uuid, channel_jid: &str, authoritative_stanza_id: Uuid, stanza: &str, encrypted: bool, client_stanza_id: Option<&str>) -> Result<SourceArchiveAdmission>;
-            fn enqueue_s2s_response_batch(&self, target_domain: &str, responses: &[String], policy: S2sOutboxPolicy) -> Result<()>;
-            fn federated_mix_iq_replay(&self, authenticated_domain: &str, actor_jid: &str, request_id: &str, request_digest: &[u8; 32]) -> Result<FederatedMixIqReplay>;
-            fn admit_federated_mix_iq_result(&self, authenticated_domain: &str, actor_jid: &str, request_id: &str, request_digest: &[u8; 32], response: &str, policy: S2sOutboxPolicy) -> Result<FederatedMixIqReplay>;
             fn claim_mix_deliveries(&self, limit: i64, max_bytes: i64) -> Result<Vec<ClaimedMixDelivery>>;
             fn claim_mix_deliveries_observed(&self, request: &outbox::core::ClaimRequest) -> Result<outbox::core::Rows>;
             fn archive_mix_message_once_observed(&self, request: &outbox::core::ArchiveRequest) -> Result<outbox::core::ArchiveResult>;
             fn renew_mix_delivery_lease_observed(&self, request: &outbox::core::RenewalRequest) -> Result<bool>;
             fn settle_mix_delivery_observed(&self, request: &outbox::core::SettlementRequest) -> Result<outbox::core::SettlementResult>;
             fn maintain_mix_delivery_retention(&self) -> Result<()>;
-            fn prune_expired_business_intents(&self, limit: i64) -> Result<u64>;
-            fn prune_expired_federated_iq_results(&self, limit: i64) -> Result<u64>;
             fn acknowledge_mix_delivery(&self, delivery_id: Uuid, lease_token: Uuid, observation: Option<&northstar_delivery_core::native_write::AckRequest>) -> Result<bool>;
             fn fence_mix_socket_write(&self, source: northstar_delivery_core::MixDelivery) -> Result<northstar_delivery_core::MixDelivery>;
             fn transfer_mix_delivery_to_cluster(&self, source: northstar_delivery_core::MixDelivery, node_id: &str, request_id: Uuid, ttl_seconds: u64) -> Result<northstar_delivery_core::MixDelivery>;

@@ -347,6 +347,89 @@ mod mix {
             panic!("unused MixRepository::retract_mix_message port");
         }
 
+        async fn find_enabled_user(&self, _username: &str) -> Result<Option<MixAccount>> {
+            panic!("unused MixRepository::find_enabled_user port");
+        }
+
+        async fn find_enabled_user_by_id(&self, _user_id: Uuid) -> Result<Option<MixAccount>> {
+            panic!("unused MixRepository::find_enabled_user_by_id port");
+        }
+
+        async fn is_blocked(&self, _owner_id: Uuid, _candidate: &str) -> Result<bool> {
+            panic!("unused MixRepository::is_blocked port");
+        }
+
+        async fn relay_profile_snapshot(
+            &self,
+            _query: MixRelayProfileQuery,
+        ) -> Result<MixRelayProfileResult> {
+            panic!("unused MixRepository::relay_profile_snapshot port");
+        }
+
+        async fn latest_roster_change_for_contact(
+            &self,
+            _user_id: Uuid,
+            _contact_jid: &str,
+        ) -> Result<Option<northstar_roster_core::RosterChange>> {
+            panic!("unused MixRepository::latest_roster_change_for_contact port");
+        }
+
+        async fn mix_muc_mirror_for_mix(
+            &self,
+            _mix_channel_id: Uuid,
+        ) -> Result<Option<MixMucMirror>> {
+            panic!("unused MixRepository::mix_muc_mirror_for_mix port");
+        }
+
+        async fn mix_muc_mirror_for_muc(&self, _muc_room_id: Uuid) -> Result<Option<MixMucMirror>> {
+            panic!("unused MixRepository::mix_muc_mirror_for_muc port");
+        }
+
+        async fn mix_muc_mirror_service_complete(&self, _mix_domain: &str) -> Result<bool> {
+            panic!("unused MixRepository::mix_muc_mirror_service_complete port");
+        }
+
+        async fn enqueue_s2s_response_batch(
+            &self,
+            _target_domain: &str,
+            _responses: &[String],
+            _policy: S2sOutboxPolicy,
+        ) -> Result<()> {
+            panic!("unused MixRepository::enqueue_s port");
+        }
+
+        async fn federated_mix_iq_replay(
+            &self,
+            _authenticated_domain: &str,
+            _actor_jid: &str,
+            _request_id: &str,
+            _request_digest: &[u8; 32],
+        ) -> Result<FederatedMixIqReplay> {
+            panic!("unused MixRepository::federated_mix_iq_replay port");
+        }
+
+        async fn admit_federated_mix_iq_result(
+            &self,
+            _authenticated_domain: &str,
+            _actor_jid: &str,
+            _request_id: &str,
+            _request_digest: &[u8; 32],
+            _response: &str,
+            _policy: S2sOutboxPolicy,
+        ) -> Result<FederatedMixIqReplay> {
+            panic!("unused MixRepository::admit_federated_mix_iq_result port");
+        }
+
+        async fn prune_expired_business_intents(&self, _limit: i64) -> Result<u64> {
+            panic!("unused MixRepository::prune_expired_business_intents port");
+        }
+
+        async fn prune_expired_federated_iq_results(&self, _limit: i64) -> Result<u64> {
+            panic!("unused MixRepository::prune_expired_federated_iq_results port");
+        }
+    }
+
+    impl MixPamRepository for UnusedPorts {
         async fn begin_remote_pam_join(
             &self,
             _request: BeginRemotePamJoin,
@@ -458,49 +541,9 @@ mod mix {
         async fn prune_expired_pam_results(&self, _limit: i64) -> Result<u64> {
             panic!("unused MixRepository::prune_expired_pam_results port");
         }
+    }
 
-        async fn find_enabled_user(&self, _username: &str) -> Result<Option<MixAccount>> {
-            panic!("unused MixRepository::find_enabled_user port");
-        }
-
-        async fn find_enabled_user_by_id(&self, _user_id: Uuid) -> Result<Option<MixAccount>> {
-            panic!("unused MixRepository::find_enabled_user_by_id port");
-        }
-
-        async fn is_blocked(&self, _owner_id: Uuid, _candidate: &str) -> Result<bool> {
-            panic!("unused MixRepository::is_blocked port");
-        }
-
-        async fn relay_profile_snapshot(
-            &self,
-            _query: MixRelayProfileQuery,
-        ) -> Result<MixRelayProfileResult> {
-            panic!("unused MixRepository::relay_profile_snapshot port");
-        }
-
-        async fn latest_roster_change_for_contact(
-            &self,
-            _user_id: Uuid,
-            _contact_jid: &str,
-        ) -> Result<Option<northstar_roster_core::RosterChange>> {
-            panic!("unused MixRepository::latest_roster_change_for_contact port");
-        }
-
-        async fn mix_muc_mirror_for_mix(
-            &self,
-            _mix_channel_id: Uuid,
-        ) -> Result<Option<MixMucMirror>> {
-            panic!("unused MixRepository::mix_muc_mirror_for_mix port");
-        }
-
-        async fn mix_muc_mirror_for_muc(&self, _muc_room_id: Uuid) -> Result<Option<MixMucMirror>> {
-            panic!("unused MixRepository::mix_muc_mirror_for_muc port");
-        }
-
-        async fn mix_muc_mirror_service_complete(&self, _mix_domain: &str) -> Result<bool> {
-            panic!("unused MixRepository::mix_muc_mirror_service_complete port");
-        }
-
+    impl MixDeliveryRepository for UnusedPorts {
         async fn archive_mix_message_once(
             &self,
             _personal_archive_id: Uuid,
@@ -512,37 +555,6 @@ mod mix {
             _client_stanza_id: Option<&str>,
         ) -> Result<SourceArchiveAdmission> {
             panic!("unused MixRepository::archive_mix_message_once port");
-        }
-
-        async fn enqueue_s2s_response_batch(
-            &self,
-            _target_domain: &str,
-            _responses: &[String],
-            _policy: S2sOutboxPolicy,
-        ) -> Result<()> {
-            panic!("unused MixRepository::enqueue_s port");
-        }
-
-        async fn federated_mix_iq_replay(
-            &self,
-            _authenticated_domain: &str,
-            _actor_jid: &str,
-            _request_id: &str,
-            _request_digest: &[u8; 32],
-        ) -> Result<FederatedMixIqReplay> {
-            panic!("unused MixRepository::federated_mix_iq_replay port");
-        }
-
-        async fn admit_federated_mix_iq_result(
-            &self,
-            _authenticated_domain: &str,
-            _actor_jid: &str,
-            _request_id: &str,
-            _request_digest: &[u8; 32],
-            _response: &str,
-            _policy: S2sOutboxPolicy,
-        ) -> Result<FederatedMixIqReplay> {
-            panic!("unused MixRepository::admit_federated_mix_iq_result port");
         }
 
         async fn claim_mix_deliveries(
@@ -583,14 +595,6 @@ mod mix {
 
         async fn maintain_mix_delivery_retention(&self) -> Result<()> {
             panic!("unused MixRepository::maintain_mix_delivery_retention port");
-        }
-
-        async fn prune_expired_business_intents(&self, _limit: i64) -> Result<u64> {
-            panic!("unused MixRepository::prune_expired_business_intents port");
-        }
-
-        async fn prune_expired_federated_iq_results(&self, _limit: i64) -> Result<u64> {
-            panic!("unused MixRepository::prune_expired_federated_iq_results port");
         }
 
         async fn acknowledge_mix_delivery(

@@ -330,6 +330,199 @@ impl MixRepository for ControlledRepository {
     ) -> impl std::future::Future<Output = Result<RetractMixMessageAdmission>> + Send {
         std::future::ready(Err(self.unused("retract_mix_message")))
     }
+    fn find_enabled_user_by_id(
+        &self,
+        user_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Option<MixAccount>>> + Send {
+        std::future::ready(Err(self.unused("find_enabled_user_by_id")))
+    }
+    fn relay_profile_snapshot(
+        &self,
+        query: MixRelayProfileQuery,
+    ) -> impl std::future::Future<Output = Result<MixRelayProfileResult>> + Send {
+        std::future::ready(Err(self.unused("relay_profile_snapshot")))
+    }
+    fn latest_roster_change_for_contact(
+        &self,
+        user_id: Uuid,
+        contact_jid: &str,
+    ) -> impl std::future::Future<Output = Result<Option<northstar_roster_core::RosterChange>>> + Send
+    {
+        std::future::ready(Err(self.unused("latest_roster_change_for_contact")))
+    }
+    fn mix_muc_mirror_for_mix(
+        &self,
+        mix_channel_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Option<MixMucMirror>>> + Send {
+        std::future::ready(Err(self.unused("mix_muc_mirror_for_mix")))
+    }
+    fn mix_muc_mirror_for_muc(
+        &self,
+        muc_room_id: Uuid,
+    ) -> impl std::future::Future<Output = Result<Option<MixMucMirror>>> + Send {
+        std::future::ready(Err(self.unused("mix_muc_mirror_for_muc")))
+    }
+    fn mix_muc_mirror_service_complete(
+        &self,
+        mix_domain: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send {
+        std::future::ready(Err(self.unused("mix_muc_mirror_service_complete")))
+    }
+    fn enqueue_s2s_response_batch(
+        &self,
+        target_domain: &str,
+        responses: &[String],
+        policy: S2sOutboxPolicy,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        std::future::ready(Err(self.unused("enqueue_s2s_response_batch")))
+    }
+    fn federated_mix_iq_replay(
+        &self,
+        authenticated_domain: &str,
+        actor_jid: &str,
+        request_id: &str,
+        request_digest: &[u8; 32],
+    ) -> impl std::future::Future<Output = Result<FederatedMixIqReplay>> + Send {
+        std::future::ready(Err(self.unused("federated_mix_iq_replay")))
+    }
+    fn admit_federated_mix_iq_result(
+        &self,
+        authenticated_domain: &str,
+        actor_jid: &str,
+        request_id: &str,
+        request_digest: &[u8; 32],
+        response: &str,
+        policy: S2sOutboxPolicy,
+    ) -> impl std::future::Future<Output = Result<FederatedMixIqReplay>> + Send {
+        std::future::ready(Err(self.unused("admit_federated_mix_iq_result")))
+    }
+    fn prune_expired_business_intents(
+        &self,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<u64>> + Send {
+        std::future::ready(Err(self.unused("prune_expired_business_intents")))
+    }
+    fn prune_expired_federated_iq_results(
+        &self,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<u64>> + Send {
+        std::future::ready(Err(self.unused("prune_expired_federated_iq_results")))
+    }
+    async fn store_mix_message_observed(
+        &self,
+        request: &foreground::StoreRequest,
+        _authenticators: Option<&northstar_abuse_policy::ContentIdentityAuthenticators>,
+    ) -> Result<StoreMixMessageAdmission> {
+        let ((stored, cut), capture) = {
+            let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                state
+                    .fresh
+                    .take()
+                    .ok_or_else(|| self.unused("store_mix_message_observed"))?,
+                state.foreground.clone(),
+            )
+        };
+        let admission = room::Admission {
+            outcome: room::Outcome::Stored(stored.authoritative_id),
+            recipients: stored.projection.as_ref().map_or_else(Vec::new, |p| {
+                p.recipients.iter().map(|r| r.participant.clone()).collect()
+            }),
+        };
+        foreground_core::commit_observed(
+            async {
+                if let Some(capture) = &capture {
+                    capture.snapshot(wire::Cut::PortEntry);
+                } else {
+                    missing(&self.1);
+                }
+                supplied_commit(cut).await
+            },
+            request,
+            stored,
+        )
+        .await
+        .map_err(|e| match e {
+            foreground_core::CommitError::Observation(e) => anyhow::Error::from(e),
+            foreground_core::CommitError::Commit(e) => e,
+        })?;
+        if let Some(capture) = &capture {
+            capture.snapshot(wire::Cut::PortReturn);
+        } else {
+            missing(&self.1);
+        }
+        Ok(admission)
+    }
+    async fn lookup_mix_message_replay_observed(
+        &self,
+        request: &foreground::ReplayRequest,
+        authenticators: &northstar_abuse_policy::ContentIdentityAuthenticators,
+    ) -> Result<MixBusinessReplay> {
+        let (raw, capture) = {
+            let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            (
+                state
+                    .replay
+                    .take()
+                    .ok_or_else(|| self.unused("lookup_mix_message_replay_observed"))?,
+                state.foreground.clone(),
+            )
+        };
+        let Some(raw) = raw else {
+            request.observed_miss()?;
+            if let Some(capture) = &capture {
+                capture.snapshot(wire::Cut::PortReturn);
+            } else {
+                missing(&self.1);
+            }
+            return Ok(MixBusinessReplay::Miss);
+        };
+        request.observed_existing(raw.clone())?;
+        if let Some(capture) = &capture {
+            capture.snapshot(wire::Cut::PortEntry);
+        } else {
+            missing(&self.1);
+        }
+        let replay = if raw.target_id.is_none()
+            && authenticators.verifies(&raw.semantic_key_id, &raw.semantic_mac)
+        {
+            MixBusinessReplay::Replay(raw.authoritative_id)
+        } else {
+            MixBusinessReplay::Conflict
+        };
+        request.authenticated(&raw, replay)?;
+        if let Some(capture) = &capture {
+            capture.snapshot(wire::Cut::PortReturn);
+        } else {
+            missing(&self.1);
+        }
+        Ok(replay)
+    }
+    async fn find_enabled_user(&self, username: &str) -> Result<Option<MixAccount>> {
+        let id = self
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .account
+            .take()
+            .ok_or_else(|| self.unused("find_enabled_user"))?;
+        Ok(Some(MixAccount {
+            id,
+            username: username.to_owned(),
+        }))
+    }
+    async fn is_blocked(&self, _owner_id: Uuid, _candidate: &str) -> Result<bool> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .privacy
+            .take()
+            .ok_or_else(|| self.unused("is_blocked"))
+    }
+}
+
+#[allow(unused_variables)]
+impl MixPamRepository for ControlledRepository {
     fn begin_remote_pam_join(
         &self,
         request: BeginRemotePamJoin,
@@ -443,44 +636,10 @@ impl MixRepository for ControlledRepository {
     ) -> impl std::future::Future<Output = Result<u64>> + Send {
         std::future::ready(Err(self.unused("prune_expired_pam_results")))
     }
-    fn find_enabled_user_by_id(
-        &self,
-        user_id: Uuid,
-    ) -> impl std::future::Future<Output = Result<Option<MixAccount>>> + Send {
-        std::future::ready(Err(self.unused("find_enabled_user_by_id")))
-    }
-    fn relay_profile_snapshot(
-        &self,
-        query: MixRelayProfileQuery,
-    ) -> impl std::future::Future<Output = Result<MixRelayProfileResult>> + Send {
-        std::future::ready(Err(self.unused("relay_profile_snapshot")))
-    }
-    fn latest_roster_change_for_contact(
-        &self,
-        user_id: Uuid,
-        contact_jid: &str,
-    ) -> impl std::future::Future<Output = Result<Option<northstar_roster_core::RosterChange>>> + Send
-    {
-        std::future::ready(Err(self.unused("latest_roster_change_for_contact")))
-    }
-    fn mix_muc_mirror_for_mix(
-        &self,
-        mix_channel_id: Uuid,
-    ) -> impl std::future::Future<Output = Result<Option<MixMucMirror>>> + Send {
-        std::future::ready(Err(self.unused("mix_muc_mirror_for_mix")))
-    }
-    fn mix_muc_mirror_for_muc(
-        &self,
-        muc_room_id: Uuid,
-    ) -> impl std::future::Future<Output = Result<Option<MixMucMirror>>> + Send {
-        std::future::ready(Err(self.unused("mix_muc_mirror_for_muc")))
-    }
-    fn mix_muc_mirror_service_complete(
-        &self,
-        mix_domain: &str,
-    ) -> impl std::future::Future<Output = Result<bool>> + Send {
-        std::future::ready(Err(self.unused("mix_muc_mirror_service_complete")))
-    }
+}
+
+#[allow(unused_variables)]
+impl MixDeliveryRepository for ControlledRepository {
     #[allow(clippy::too_many_arguments)]
     fn archive_mix_message_once(
         &self,
@@ -494,34 +653,6 @@ impl MixRepository for ControlledRepository {
     ) -> impl std::future::Future<Output = Result<SourceArchiveAdmission>> + Send {
         std::future::ready(Err(self.unused("archive_mix_message_once")))
     }
-    fn enqueue_s2s_response_batch(
-        &self,
-        target_domain: &str,
-        responses: &[String],
-        policy: S2sOutboxPolicy,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        std::future::ready(Err(self.unused("enqueue_s2s_response_batch")))
-    }
-    fn federated_mix_iq_replay(
-        &self,
-        authenticated_domain: &str,
-        actor_jid: &str,
-        request_id: &str,
-        request_digest: &[u8; 32],
-    ) -> impl std::future::Future<Output = Result<FederatedMixIqReplay>> + Send {
-        std::future::ready(Err(self.unused("federated_mix_iq_replay")))
-    }
-    fn admit_federated_mix_iq_result(
-        &self,
-        authenticated_domain: &str,
-        actor_jid: &str,
-        request_id: &str,
-        request_digest: &[u8; 32],
-        response: &str,
-        policy: S2sOutboxPolicy,
-    ) -> impl std::future::Future<Output = Result<FederatedMixIqReplay>> + Send {
-        std::future::ready(Err(self.unused("admit_federated_mix_iq_result")))
-    }
     fn claim_mix_deliveries(
         &self,
         limit: i64,
@@ -533,18 +664,6 @@ impl MixRepository for ControlledRepository {
         &self,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         std::future::ready(Err(self.unused("maintain_mix_delivery_retention")))
-    }
-    fn prune_expired_business_intents(
-        &self,
-        limit: i64,
-    ) -> impl std::future::Future<Output = Result<u64>> + Send {
-        std::future::ready(Err(self.unused("prune_expired_business_intents")))
-    }
-    fn prune_expired_federated_iq_results(
-        &self,
-        limit: i64,
-    ) -> impl std::future::Future<Output = Result<u64>> + Send {
-        std::future::ready(Err(self.unused("prune_expired_federated_iq_results")))
     }
     fn transfer_mix_delivery_to_cluster(
         &self,
@@ -619,117 +738,6 @@ impl MixRepository for ControlledRepository {
         dead_letter_id: Uuid,
     ) -> impl std::future::Future<Output = Result<bool>> + Send {
         std::future::ready(Err(self.unused("requeue_mix_delivery_dead_letter")))
-    }
-    async fn store_mix_message_observed(
-        &self,
-        request: &foreground::StoreRequest,
-        _authenticators: Option<&northstar_abuse_policy::ContentIdentityAuthenticators>,
-    ) -> Result<StoreMixMessageAdmission> {
-        let ((stored, cut), capture) = {
-            let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-            (
-                state
-                    .fresh
-                    .take()
-                    .ok_or_else(|| self.unused("store_mix_message_observed"))?,
-                state.foreground.clone(),
-            )
-        };
-        let admission = room::Admission {
-            outcome: room::Outcome::Stored(stored.authoritative_id),
-            recipients: stored.projection.as_ref().map_or_else(Vec::new, |p| {
-                p.recipients.iter().map(|r| r.participant.clone()).collect()
-            }),
-        };
-        foreground_core::commit_observed(
-            async {
-                if let Some(capture) = &capture {
-                    capture.snapshot(wire::Cut::PortEntry);
-                } else {
-                    missing(&self.1);
-                }
-                supplied_commit(cut).await
-            },
-            request,
-            stored,
-        )
-        .await
-        .map_err(|e| match e {
-            foreground_core::CommitError::Observation(e) => anyhow::Error::from(e),
-            foreground_core::CommitError::Commit(e) => e,
-        })?;
-        if let Some(capture) = &capture {
-            capture.snapshot(wire::Cut::PortReturn);
-        } else {
-            missing(&self.1);
-        }
-        Ok(admission)
-    }
-    async fn lookup_mix_message_replay_observed(
-        &self,
-        request: &foreground::ReplayRequest,
-        authenticators: &northstar_abuse_policy::ContentIdentityAuthenticators,
-    ) -> Result<MixBusinessReplay> {
-        let (raw, capture) = {
-            let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-            (
-                state
-                    .replay
-                    .take()
-                    .ok_or_else(|| self.unused("lookup_mix_message_replay_observed"))?,
-                state.foreground.clone(),
-            )
-        };
-        let Some(raw) = raw else {
-            request.observed_miss()?;
-            if let Some(capture) = &capture {
-                capture.snapshot(wire::Cut::PortReturn);
-            } else {
-                missing(&self.1);
-            }
-            return Ok(MixBusinessReplay::Miss);
-        };
-        request.observed_existing(raw.clone())?;
-        if let Some(capture) = &capture {
-            capture.snapshot(wire::Cut::PortEntry);
-        } else {
-            missing(&self.1);
-        }
-        let replay = if raw.target_id.is_none()
-            && authenticators.verifies(&raw.semantic_key_id, &raw.semantic_mac)
-        {
-            MixBusinessReplay::Replay(raw.authoritative_id)
-        } else {
-            MixBusinessReplay::Conflict
-        };
-        request.authenticated(&raw, replay)?;
-        if let Some(capture) = &capture {
-            capture.snapshot(wire::Cut::PortReturn);
-        } else {
-            missing(&self.1);
-        }
-        Ok(replay)
-    }
-    async fn find_enabled_user(&self, username: &str) -> Result<Option<MixAccount>> {
-        let id = self
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .account
-            .take()
-            .ok_or_else(|| self.unused("find_enabled_user"))?;
-        Ok(Some(MixAccount {
-            id,
-            username: username.to_owned(),
-        }))
-    }
-    async fn is_blocked(&self, _owner_id: Uuid, _candidate: &str) -> Result<bool> {
-        self.0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .privacy
-            .take()
-            .ok_or_else(|| self.unused("is_blocked"))
     }
     async fn claim_mix_deliveries_observed(
         &self,

@@ -185,30 +185,6 @@ impl MixRepository for Repository {
         })
     }
 
-    async fn claim_mix_deliveries_observed(
-        &self,
-        request: &mix_worker::ClaimRequest,
-    ) -> Result<mix_worker::Rows> {
-        let _drop = DropFlag(self.0.claim_dropped.clone());
-        self.0.record(Call::Claim(request.command()));
-        let rows = self
-            .0
-            .rows
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or_else(|| Vec::new().into());
-        let entered = request.enter_statement()?;
-        request.received(entered, rows.clone())?;
-        wait_gate(&self.0.claim_gate).await;
-        Ok(rows)
-    }
-
-    async fn claim_pam_results(&self, limit: i64) -> Result<Vec<ClaimedPamResult>> {
-        self.0.record(Call::PamClaim(limit));
-        Ok(self.0.pam.lock().unwrap().pop_front().unwrap_or_default())
-    }
-
     async fn find_enabled_user(&self, username: &str) -> Result<Option<MixAccount>> {
         self.0.record(Call::User(
             username.into(),
@@ -229,100 +205,6 @@ impl MixRepository for Repository {
         Ok(false)
     }
 
-    async fn archive_mix_message_once_observed(
-        &self,
-        request: &mix_worker::ArchiveRequest,
-    ) -> Result<mix_worker::ArchiveResult> {
-        self.0.record(Call::Archive(
-            request.command().clone(),
-            self.0.admission.available_permits(),
-        ));
-        let result = if self.0.archive_replay.load(Ordering::SeqCst) {
-            mix_worker::ArchiveResult::Replay(Uuid::from_u128(82))
-        } else {
-            mix_worker::ArchiveResult::Stored(request.command().personal_archive_id)
-        };
-        let entered = request.enter_commit(result)?;
-        request.received(entered)?;
-        Ok(if self.0.archive_mismatch.load(Ordering::SeqCst) {
-            mix_worker::ArchiveResult::Replay(Uuid::from_u128(83))
-        } else {
-            result
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn archive_mix_message_once(
-        &self,
-        personal_archive_id: Uuid,
-        owner_id: Uuid,
-        channel_jid: &str,
-        authoritative_stanza_id: Uuid,
-        stanza: &str,
-        encrypted: bool,
-        client_stanza_id: Option<&str>,
-    ) -> Result<SourceArchiveAdmission> {
-        self.0.record(Call::Archive(
-            mix_worker::ArchiveCommand {
-                personal_archive_id,
-                owner_id,
-                channel_jid: channel_jid.into(),
-                authoritative_stanza_id,
-                stanza: stanza.into(),
-                encrypted,
-                client_stanza_id: client_stanza_id.map(str::to_owned),
-            },
-            self.0.admission.available_permits(),
-        ));
-        Ok(SourceArchiveAdmission::Stored(personal_archive_id))
-    }
-
-    async fn renew_mix_delivery_lease_observed(
-        &self,
-        request: &mix_worker::RenewalRequest,
-    ) -> Result<bool> {
-        self.0.record(Call::Renew(request.source()));
-        let entered = request.enter_statement()?;
-        request.received(entered, true)?;
-        Ok(true)
-    }
-
-    async fn settle_mix_delivery_observed(
-        &self,
-        request: &mix_worker::SettlementRequest,
-    ) -> Result<mix_worker::SettlementResult> {
-        self.0.record(Call::Settle(
-            request.source(),
-            request.route_wake_generation(),
-            request.command().clone(),
-        ));
-        let result = settlement_result(request.command(), true);
-        settlement_receipt(request, result)?;
-        Ok(result)
-    }
-
-    async fn defer_pam_result(
-        &self,
-        operation_id: Uuid,
-        lease_token: Uuid,
-        delay_seconds: i64,
-    ) -> Result<bool> {
-        self.0
-            .record(Call::PamDefer(operation_id, lease_token, delay_seconds));
-        Ok(true)
-    }
-    async fn acknowledge_pam_result(&self, operation_id: Uuid, lease_token: Uuid) -> Result<bool> {
-        self.0.record(Call::PamAck(operation_id, lease_token));
-        Ok(true)
-    }
-
-    async fn maintain_mix_delivery_retention(&self) -> Result<()> {
-        let _drop = DropFlag(self.0.maintenance_dropped.clone());
-        self.0.record(Call::Maintenance("retention", 0));
-        wait_gate(&self.0.maintenance_gate).await;
-        Ok(())
-    }
-
     async fn prune_expired_business_intents(&self, limit: i64) -> Result<u64> {
         self.0.record(Call::Maintenance("business", limit));
         Ok(0)
@@ -331,15 +213,6 @@ impl MixRepository for Repository {
         self.0.record(Call::Maintenance("iq", limit));
         Ok(0)
     }
-    async fn reconcile_expired_remote_pam(&self, limit: i64) -> Result<u64> {
-        self.0.record(Call::Maintenance("remote-pam", limit));
-        Ok(0)
-    }
-    async fn prune_expired_pam_results(&self, limit: i64) -> Result<u64> {
-        self.0.record(Call::Maintenance("pam", limit));
-        Ok(0)
-    }
-
     async fn mix_channel(
         &self,
         service_domain: &str,
@@ -516,6 +389,48 @@ impl MixRepository for Repository {
         authorized_mix_jid_map_entries(channel_id: Uuid, actor: &str, limit: i64) -> MixReadOutcome<Vec<(String, String)>>;
         issue_mix_invitation(channel_id: Uuid, inviter: &str, invitee: &str, token: &str, lifetime: northstar_time::Duration, federated: Option<&FederatedMixMutation>) -> bool;
         mix_private_message_recipient(channel_id: Uuid, sender: &str, recipient_id: Uuid) -> Option<(MixParticipant, MixParticipant)>;
+        find_enabled_user_by_id(user_id: Uuid) -> Option<MixAccount>;
+        relay_profile_snapshot(query: MixRelayProfileQuery) -> MixRelayProfileResult;
+        latest_roster_change_for_contact(user_id: Uuid, contact_jid: &str) -> Option<northstar_roster_core::RosterChange>;
+        mix_muc_mirror_for_mix(mix_channel_id: Uuid) -> Option<MixMucMirror>;
+        mix_muc_mirror_for_muc(muc_room_id: Uuid) -> Option<MixMucMirror>;
+        mix_muc_mirror_service_complete(mix_domain: &str) -> bool;
+        enqueue_s2s_response_batch(target_domain: &str, responses: &[String], policy: S2sOutboxPolicy) -> ();
+        admit_federated_mix_iq_result(authenticated_domain: &str, actor_jid: &str, request_id: &str, request_digest: &[u8; 32], response: &str, policy: S2sOutboxPolicy) -> FederatedMixIqReplay;
+    }
+}
+
+impl MixPamRepository for Repository {
+    async fn claim_pam_results(&self, limit: i64) -> Result<Vec<ClaimedPamResult>> {
+        self.0.record(Call::PamClaim(limit));
+        Ok(self.0.pam.lock().unwrap().pop_front().unwrap_or_default())
+    }
+
+    async fn defer_pam_result(
+        &self,
+        operation_id: Uuid,
+        lease_token: Uuid,
+        delay_seconds: i64,
+    ) -> Result<bool> {
+        self.0
+            .record(Call::PamDefer(operation_id, lease_token, delay_seconds));
+        Ok(true)
+    }
+    async fn acknowledge_pam_result(&self, operation_id: Uuid, lease_token: Uuid) -> Result<bool> {
+        self.0.record(Call::PamAck(operation_id, lease_token));
+        Ok(true)
+    }
+
+    async fn reconcile_expired_remote_pam(&self, limit: i64) -> Result<u64> {
+        self.0.record(Call::Maintenance("remote-pam", limit));
+        Ok(0)
+    }
+    async fn prune_expired_pam_results(&self, limit: i64) -> Result<u64> {
+        self.0.record(Call::Maintenance("pam", limit));
+        Ok(0)
+    }
+
+    unused_repository_methods! {
         begin_remote_pam_join(request: BeginRemotePamJoin) -> PamOperationReplay;
         lookup_remote_pam_operation(user_id: Uuid, requester_full_jid: &str, client_request_id: &str, request_digest: &[u8; 32]) -> PamOperationReplay;
         begin_remote_pam_leave(request: BeginRemotePamLeave) -> PamOperationReplay;
@@ -526,14 +441,109 @@ impl MixRepository for Repository {
         local_pam_users_for_channel(channel_jid: &str) -> Vec<Uuid>;
         renew_pam_result_lease(operation_id: Uuid, lease_token: Uuid) -> bool;
         retry_pam_result(operation_id: Uuid, lease_token: Uuid, attempt_count: i32, error: &str) -> bool;
-        find_enabled_user_by_id(user_id: Uuid) -> Option<MixAccount>;
-        relay_profile_snapshot(query: MixRelayProfileQuery) -> MixRelayProfileResult;
-        latest_roster_change_for_contact(user_id: Uuid, contact_jid: &str) -> Option<northstar_roster_core::RosterChange>;
-        mix_muc_mirror_for_mix(mix_channel_id: Uuid) -> Option<MixMucMirror>;
-        mix_muc_mirror_for_muc(muc_room_id: Uuid) -> Option<MixMucMirror>;
-        mix_muc_mirror_service_complete(mix_domain: &str) -> bool;
-        enqueue_s2s_response_batch(target_domain: &str, responses: &[String], policy: S2sOutboxPolicy) -> ();
-        admit_federated_mix_iq_result(authenticated_domain: &str, actor_jid: &str, request_id: &str, request_digest: &[u8; 32], response: &str, policy: S2sOutboxPolicy) -> FederatedMixIqReplay;
+    }
+}
+
+impl MixDeliveryRepository for Repository {
+    async fn claim_mix_deliveries_observed(
+        &self,
+        request: &mix_worker::ClaimRequest,
+    ) -> Result<mix_worker::Rows> {
+        let _drop = DropFlag(self.0.claim_dropped.clone());
+        self.0.record(Call::Claim(request.command()));
+        let rows = self
+            .0
+            .rows
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| Vec::new().into());
+        let entered = request.enter_statement()?;
+        request.received(entered, rows.clone())?;
+        wait_gate(&self.0.claim_gate).await;
+        Ok(rows)
+    }
+
+    async fn archive_mix_message_once_observed(
+        &self,
+        request: &mix_worker::ArchiveRequest,
+    ) -> Result<mix_worker::ArchiveResult> {
+        self.0.record(Call::Archive(
+            request.command().clone(),
+            self.0.admission.available_permits(),
+        ));
+        let result = if self.0.archive_replay.load(Ordering::SeqCst) {
+            mix_worker::ArchiveResult::Replay(Uuid::from_u128(82))
+        } else {
+            mix_worker::ArchiveResult::Stored(request.command().personal_archive_id)
+        };
+        let entered = request.enter_commit(result)?;
+        request.received(entered)?;
+        Ok(if self.0.archive_mismatch.load(Ordering::SeqCst) {
+            mix_worker::ArchiveResult::Replay(Uuid::from_u128(83))
+        } else {
+            result
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn archive_mix_message_once(
+        &self,
+        personal_archive_id: Uuid,
+        owner_id: Uuid,
+        channel_jid: &str,
+        authoritative_stanza_id: Uuid,
+        stanza: &str,
+        encrypted: bool,
+        client_stanza_id: Option<&str>,
+    ) -> Result<SourceArchiveAdmission> {
+        self.0.record(Call::Archive(
+            mix_worker::ArchiveCommand {
+                personal_archive_id,
+                owner_id,
+                channel_jid: channel_jid.into(),
+                authoritative_stanza_id,
+                stanza: stanza.into(),
+                encrypted,
+                client_stanza_id: client_stanza_id.map(str::to_owned),
+            },
+            self.0.admission.available_permits(),
+        ));
+        Ok(SourceArchiveAdmission::Stored(personal_archive_id))
+    }
+
+    async fn renew_mix_delivery_lease_observed(
+        &self,
+        request: &mix_worker::RenewalRequest,
+    ) -> Result<bool> {
+        self.0.record(Call::Renew(request.source()));
+        let entered = request.enter_statement()?;
+        request.received(entered, true)?;
+        Ok(true)
+    }
+
+    async fn settle_mix_delivery_observed(
+        &self,
+        request: &mix_worker::SettlementRequest,
+    ) -> Result<mix_worker::SettlementResult> {
+        self.0.record(Call::Settle(
+            request.source(),
+            request.route_wake_generation(),
+            request.command().clone(),
+        ));
+        let result = settlement_result(request.command(), true);
+        settlement_receipt(request, result)?;
+        Ok(result)
+    }
+
+    async fn maintain_mix_delivery_retention(&self) -> Result<()> {
+        let _drop = DropFlag(self.0.maintenance_dropped.clone());
+        self.0.record(Call::Maintenance("retention", 0));
+        wait_gate(&self.0.maintenance_gate).await;
+        Ok(())
+    }
+
+    unused_repository_methods! {
         claim_mix_deliveries(limit: i64, max_bytes: i64) -> Vec<ClaimedMixDelivery>;
         acknowledge_mix_delivery(delivery_id: Uuid, lease_token: Uuid, observation: Option<&northstar_delivery_core::native_write::AckRequest>) -> bool;
         fence_mix_socket_write(source: MixDelivery) -> MixDelivery;

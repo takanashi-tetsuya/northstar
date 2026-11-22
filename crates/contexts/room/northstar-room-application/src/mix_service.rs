@@ -15,9 +15,11 @@ use tokio::sync::{watch, Mutex, MutexGuard, OwnedSemaphorePermit};
 use uuid::Uuid;
 
 mod contracts;
+mod delivery_repository;
 mod identity_policy;
 mod mam_read;
 mod operations;
+mod pam_repository;
 mod payloads;
 mod wake;
 
@@ -35,6 +37,7 @@ pub use self::contracts::{
     RetractMixMessageOutcome, RetractMixMessageRequest, SetNickError, SourceArchiveAdmission,
     StoreMixMessageRequest, UpdateSubscriptionsOutcome,
 };
+pub use self::delivery_repository::MixDeliveryRepository;
 pub use self::identity_policy::MixPublisherIdentity;
 pub use self::mam_read::{
     MixMamAdmissionOutcome, MixMamReadActor, MixMamReadCommand, MixMamReadOperation,
@@ -46,6 +49,7 @@ pub use self::operations::{
     MixClusterRouteLookup, MixDiscoPage, MixEvent, MixEventPage, MixMamPage, MixMucMirror,
     MixPresenceItem, MixPresenceProbeTarget, MixReadOutcome,
 };
+pub use self::pam_repository::MixPamRepository;
 #[cfg(test)]
 use self::payloads::{
     render_access_payload, render_config_payload, render_info_payload, render_participant_payload,

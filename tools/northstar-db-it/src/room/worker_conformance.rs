@@ -1,4 +1,4 @@
-use northstar_room_application::mix_service::{outbox::core::*, MixRepository};
+use northstar_room_application::mix_service::{outbox::core::*, MixDeliveryRepository};
 use northstar_room_postgres::mix as db;
 use northstar_workflows::room_effects::PostgresMixRepository;
 use sqlx::PgPool;

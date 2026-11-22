@@ -394,6 +394,98 @@ impl MixRepository for MixStore {
     }
 
     #[allow(clippy::too_many_arguments)]
+    async fn find_enabled_user(&self, _username: &str) -> Result<Option<MixAccount>> {
+        panic!("unexpected port call: find_enabled_user")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn find_enabled_user_by_id(&self, _user_id: Uuid) -> Result<Option<MixAccount>> {
+        panic!("unexpected port call: find_enabled_user_by_id")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn is_blocked(&self, _owner_id: Uuid, _candidate: &str) -> Result<bool> {
+        panic!("unexpected port call: is_blocked")
+    }
+
+    async fn relay_profile_snapshot(
+        &self,
+        _query: MixRelayProfileQuery,
+    ) -> Result<MixRelayProfileResult> {
+        panic!("unexpected port call: relay_profile_snapshot");
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn latest_roster_change_for_contact(
+        &self,
+        _user_id: Uuid,
+        _contact_jid: &str,
+    ) -> Result<Option<northstar_roster_core::RosterChange>> {
+        panic!("unexpected port call: latest_roster_change_for_contact")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn mix_muc_mirror_for_mix(&self, _mix_channel_id: Uuid) -> Result<Option<MixMucMirror>> {
+        panic!("unexpected port call: mix_muc_mirror_for_mix")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn mix_muc_mirror_for_muc(&self, _muc_room_id: Uuid) -> Result<Option<MixMucMirror>> {
+        panic!("unexpected port call: mix_muc_mirror_for_muc")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn mix_muc_mirror_service_complete(&self, _mix_domain: &str) -> Result<bool> {
+        panic!("unexpected port call: mix_muc_mirror_service_complete")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn enqueue_s2s_response_batch(
+        &self,
+        _target_domain: &str,
+        _responses: &[String],
+        _policy: S2sOutboxPolicy,
+    ) -> Result<()> {
+        panic!("unexpected port call: enqueue_s2s_response_batch")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn federated_mix_iq_replay(
+        &self,
+        _authenticated_domain: &str,
+        _actor_jid: &str,
+        _request_id: &str,
+        _request_digest: &[u8; 32],
+    ) -> Result<FederatedMixIqReplay> {
+        panic!("unexpected port call: federated_mix_iq_replay")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn admit_federated_mix_iq_result(
+        &self,
+        _authenticated_domain: &str,
+        _actor_jid: &str,
+        _request_id: &str,
+        _request_digest: &[u8; 32],
+        _response: &str,
+        _policy: S2sOutboxPolicy,
+    ) -> Result<FederatedMixIqReplay> {
+        panic!("unexpected port call: admit_federated_mix_iq_result")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn prune_expired_business_intents(&self, _limit: i64) -> Result<u64> {
+        panic!("unexpected port call: prune_expired_business_intents")
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn prune_expired_federated_iq_results(&self, _limit: i64) -> Result<u64> {
+        panic!("unexpected port call: prune_expired_federated_iq_results")
+    }
+}
+
+impl MixPamRepository for MixStore {
+    #[allow(clippy::too_many_arguments)]
     async fn begin_remote_pam_join(
         &self,
         _request: BeginRemotePamJoin,
@@ -519,53 +611,9 @@ impl MixRepository for MixStore {
     async fn prune_expired_pam_results(&self, _limit: i64) -> Result<u64> {
         panic!("unexpected port call: prune_expired_pam_results")
     }
+}
 
-    #[allow(clippy::too_many_arguments)]
-    async fn find_enabled_user(&self, _username: &str) -> Result<Option<MixAccount>> {
-        panic!("unexpected port call: find_enabled_user")
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn find_enabled_user_by_id(&self, _user_id: Uuid) -> Result<Option<MixAccount>> {
-        panic!("unexpected port call: find_enabled_user_by_id")
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn is_blocked(&self, _owner_id: Uuid, _candidate: &str) -> Result<bool> {
-        panic!("unexpected port call: is_blocked")
-    }
-
-    async fn relay_profile_snapshot(
-        &self,
-        _query: MixRelayProfileQuery,
-    ) -> Result<MixRelayProfileResult> {
-        panic!("unexpected port call: relay_profile_snapshot");
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn latest_roster_change_for_contact(
-        &self,
-        _user_id: Uuid,
-        _contact_jid: &str,
-    ) -> Result<Option<northstar_roster_core::RosterChange>> {
-        panic!("unexpected port call: latest_roster_change_for_contact")
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn mix_muc_mirror_for_mix(&self, _mix_channel_id: Uuid) -> Result<Option<MixMucMirror>> {
-        panic!("unexpected port call: mix_muc_mirror_for_mix")
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn mix_muc_mirror_for_muc(&self, _muc_room_id: Uuid) -> Result<Option<MixMucMirror>> {
-        panic!("unexpected port call: mix_muc_mirror_for_muc")
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn mix_muc_mirror_service_complete(&self, _mix_domain: &str) -> Result<bool> {
-        panic!("unexpected port call: mix_muc_mirror_service_complete")
-    }
-
+impl MixDeliveryRepository for MixStore {
     #[allow(clippy::too_many_arguments)]
     async fn archive_mix_message_once(
         &self,
@@ -578,40 +626,6 @@ impl MixRepository for MixStore {
         _client_stanza_id: Option<&str>,
     ) -> Result<SourceArchiveAdmission> {
         panic!("unexpected port call: archive_mix_message_once")
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn enqueue_s2s_response_batch(
-        &self,
-        _target_domain: &str,
-        _responses: &[String],
-        _policy: S2sOutboxPolicy,
-    ) -> Result<()> {
-        panic!("unexpected port call: enqueue_s2s_response_batch")
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn federated_mix_iq_replay(
-        &self,
-        _authenticated_domain: &str,
-        _actor_jid: &str,
-        _request_id: &str,
-        _request_digest: &[u8; 32],
-    ) -> Result<FederatedMixIqReplay> {
-        panic!("unexpected port call: federated_mix_iq_replay")
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn admit_federated_mix_iq_result(
-        &self,
-        _authenticated_domain: &str,
-        _actor_jid: &str,
-        _request_id: &str,
-        _request_digest: &[u8; 32],
-        _response: &str,
-        _policy: S2sOutboxPolicy,
-    ) -> Result<FederatedMixIqReplay> {
-        panic!("unexpected port call: admit_federated_mix_iq_result")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -658,16 +672,6 @@ impl MixRepository for MixStore {
     #[allow(clippy::too_many_arguments)]
     async fn maintain_mix_delivery_retention(&self) -> Result<()> {
         panic!("unexpected port call: maintain_mix_delivery_retention")
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn prune_expired_business_intents(&self, _limit: i64) -> Result<u64> {
-        panic!("unexpected port call: prune_expired_business_intents")
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn prune_expired_federated_iq_results(&self, _limit: i64) -> Result<u64> {
-        panic!("unexpected port call: prune_expired_federated_iq_results")
     }
 
     #[allow(clippy::too_many_arguments)]

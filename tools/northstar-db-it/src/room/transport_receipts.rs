@@ -4,7 +4,7 @@ use northstar_delivery_core::{
     native_write::{AckDisposition, AckFact, AckKnowledge},
     MixDelivery, TransportOwnershipSource as Source,
 };
-use northstar_room_application::mix_service::MixRepository;
+use northstar_room_application::mix_service::MixDeliveryRepository;
 use northstar_room_postgres::mix as db;
 use northstar_time::{DateTime, TimeDelta, Utc};
 use northstar_workflows::room_effects::PostgresMixRepository;

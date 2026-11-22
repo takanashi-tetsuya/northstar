@@ -104,10 +104,6 @@ impl MixRepository for Repository {
         set_mix_access_entry(update: MixAccessEntryUpdate<'_>, federated: Option<&FederatedMixMutation>) -> Option<AccessChangeOutcome>;
         register_mix_nick(service_domain: &str, actor: &str, nick: &str, federated: Option<&FederatedMixMutation>) -> RegisterMixNickOutcome;
         update_mix_participant_preference(channel_id: Uuid, actor: &str, preference: &MixParticipantPreference, federated: Option<&FederatedMixMutation>) -> Option<MixParticipantPreferenceUpdateOutcome>;
-        begin_remote_pam_join(request: BeginRemotePamJoin) -> PamOperationReplay;
-        begin_remote_pam_leave(request: BeginRemotePamLeave) -> PamOperationReplay;
-        prune_expired_pam_results(limit: i64) -> u64;
-        requeue_mix_delivery_dead_letter(dead_letter_id: Uuid) -> bool;
     }
 
     async fn store_mix_message(
@@ -205,6 +201,64 @@ impl MixRepository for Repository {
         Ok(MixBusinessReplay::Miss)
     }
 
+    unused_ports! {
+        link_local_muc_mirror(mix_domain: &str, localpart: &str, actor_bare_jid: &str, local_domain: &str) -> MixMucLinkOutcome;
+        create_mix_channel(service_domain: &str, requested_localpart: Option<&str>, creator_jid: &str, max_channels_per_owner: i64, federated: Option<&FederatedMixMutation>) -> (CreateChannelOutcome, String);
+        mix_channel(service_domain: &str, localpart: &str) -> Option<MixChannel>;
+        discoverable_mix_channel_page(service_domain: &str, requester: &str, after: Option<&str>, before: Option<Option<&str>>, max: i64) -> Option<MixDiscoPage>;
+        mix_role(channel_id: Uuid, jid: &str) -> Option<String>;
+        mix_channel_discoverable_to(channel: &MixChannel, actor: &str) -> bool;
+        mix_participant(channel_id: Uuid, jid: &str) -> Option<MixParticipant>;
+        lookup_mix_message_replay(channel_id: Uuid, actor: &str, identity: &MixReplayIdentity, authenticators: &northstar_abuse_policy::ContentIdentityAuthenticators) -> MixBusinessReplay;
+        lookup_mix_retraction_replay(channel_id: Uuid, actor: &str, target_id: Uuid, identity: &MixReplayIdentity, authenticators: &northstar_abuse_policy::ContentIdentityAuthenticators) -> MixBusinessReplay;
+        authorized_mix_event_page(channel_id: Uuid, actor: &str, node: &str, before: Option<(DateTime<Utc>, Uuid)>, limit: i64) -> MixReadOutcome<MixEventPage>;
+        authorized_mix_access_entries(channel_id: Uuid, actor: &str, banned: bool, limit: i64) -> MixReadOutcome<Vec<String>>;
+        mix_participant_preference(channel_id: Uuid, actor: &str) -> Option<MixParticipantPreference>;
+        authorized_mix_jid_map_entries(channel_id: Uuid, actor: &str, limit: i64) -> MixReadOutcome<Vec<(String, String)>>;
+        issue_mix_invitation(channel_id: Uuid, inviter: &str, invitee: &str, token: &str, lifetime: northstar_time::Duration, federated: Option<&FederatedMixMutation>) -> bool;
+        mix_private_message_recipient(channel_id: Uuid, sender: &str, recipient_id: Uuid) -> Option<(MixParticipant, MixParticipant)>;
+        find_enabled_user(username: &str) -> Option<MixAccount>;
+        find_enabled_user_by_id(user_id: Uuid) -> Option<MixAccount>;
+        is_blocked(owner_id: Uuid, candidate: &str) -> bool;
+        relay_profile_snapshot(query: MixRelayProfileQuery) -> MixRelayProfileResult;
+        latest_roster_change_for_contact(user_id: Uuid, contact_jid: &str) -> Option<northstar_roster_core::RosterChange>;
+        mix_muc_mirror_for_mix(mix_channel_id: Uuid) -> Option<MixMucMirror>;
+        mix_muc_mirror_for_muc(muc_room_id: Uuid) -> Option<MixMucMirror>;
+        mix_muc_mirror_service_complete(mix_domain: &str) -> bool;
+        enqueue_s2s_response_batch(target_domain: &str, responses: &[String], policy: S2sOutboxPolicy) -> ();
+        federated_mix_iq_replay(authenticated_domain: &str, actor_jid: &str, request_id: &str, request_digest: &[u8; 32]) -> FederatedMixIqReplay;
+        admit_federated_mix_iq_result(authenticated_domain: &str, actor_jid: &str, request_id: &str, request_digest: &[u8; 32], response: &str, policy: S2sOutboxPolicy) -> FederatedMixIqReplay;
+        prune_expired_business_intents(limit: i64) -> u64;
+        prune_expired_federated_iq_results(limit: i64) -> u64;
+    }
+}
+
+impl MixPamRepository for Repository {
+    recording_ports! {
+        begin_remote_pam_join(request: BeginRemotePamJoin) -> PamOperationReplay;
+        begin_remote_pam_leave(request: BeginRemotePamLeave) -> PamOperationReplay;
+        prune_expired_pam_results(limit: i64) -> u64;
+    }
+    unused_ports! {
+        lookup_remote_pam_operation(user_id: Uuid, requester_full_jid: &str, client_request_id: &str, request_digest: &[u8; 32]) -> PamOperationReplay;
+        complete_remote_pam_success(authenticated_domain: &str, channel_jid: &str, recipient_bare: &str, request_id: &str, response_digest: &[u8; 32], join: Option<RemotePamJoin<'_>>) -> RemotePamCompletionOutcome;
+        complete_remote_pam_error(authenticated_domain: &str, channel_jid: &str, recipient_bare: &str, request_id: &str, response_digest: &[u8; 32], error_type: &str, condition: &str) -> RemotePamCompletionOutcome;
+        pam_memberships(user_id: Uuid) -> Vec<PamMembership>;
+        pam_membership(user_id: Uuid, channel_jid: &str) -> Option<PamMembership>;
+        local_pam_users_for_channel(channel_jid: &str) -> Vec<Uuid>;
+        reconcile_expired_remote_pam(limit: i64) -> u64;
+        claim_pam_results(limit: i64) -> Vec<ClaimedPamResult>;
+        renew_pam_result_lease(operation_id: Uuid, lease_token: Uuid) -> bool;
+        acknowledge_pam_result(operation_id: Uuid, lease_token: Uuid) -> bool;
+        defer_pam_result(operation_id: Uuid, lease_token: Uuid, delay_seconds: i64) -> bool;
+        retry_pam_result(operation_id: Uuid, lease_token: Uuid, attempt_count: i32, error: &str) -> bool;
+    }
+}
+
+impl MixDeliveryRepository for Repository {
+    recording_ports! {
+        requeue_mix_delivery_dead_letter(dead_letter_id: Uuid) -> bool;
+    }
     async fn acknowledge_mix_delivery(
         &self,
         delivery_id: Uuid,
@@ -335,49 +389,9 @@ impl MixRepository for Repository {
     }
 
     unused_ports! {
-        link_local_muc_mirror(mix_domain: &str, localpart: &str, actor_bare_jid: &str, local_domain: &str) -> MixMucLinkOutcome;
-        create_mix_channel(service_domain: &str, requested_localpart: Option<&str>, creator_jid: &str, max_channels_per_owner: i64, federated: Option<&FederatedMixMutation>) -> (CreateChannelOutcome, String);
-        mix_channel(service_domain: &str, localpart: &str) -> Option<MixChannel>;
-        discoverable_mix_channel_page(service_domain: &str, requester: &str, after: Option<&str>, before: Option<Option<&str>>, max: i64) -> Option<MixDiscoPage>;
-        mix_role(channel_id: Uuid, jid: &str) -> Option<String>;
-        mix_channel_discoverable_to(channel: &MixChannel, actor: &str) -> bool;
-        mix_participant(channel_id: Uuid, jid: &str) -> Option<MixParticipant>;
-        lookup_mix_message_replay(channel_id: Uuid, actor: &str, identity: &MixReplayIdentity, authenticators: &northstar_abuse_policy::ContentIdentityAuthenticators) -> MixBusinessReplay;
-        lookup_mix_retraction_replay(channel_id: Uuid, actor: &str, target_id: Uuid, identity: &MixReplayIdentity, authenticators: &northstar_abuse_policy::ContentIdentityAuthenticators) -> MixBusinessReplay;
-        authorized_mix_event_page(channel_id: Uuid, actor: &str, node: &str, before: Option<(DateTime<Utc>, Uuid)>, limit: i64) -> MixReadOutcome<MixEventPage>;
-        authorized_mix_access_entries(channel_id: Uuid, actor: &str, banned: bool, limit: i64) -> MixReadOutcome<Vec<String>>;
-        mix_participant_preference(channel_id: Uuid, actor: &str) -> Option<MixParticipantPreference>;
-        authorized_mix_jid_map_entries(channel_id: Uuid, actor: &str, limit: i64) -> MixReadOutcome<Vec<(String, String)>>;
-        issue_mix_invitation(channel_id: Uuid, inviter: &str, invitee: &str, token: &str, lifetime: northstar_time::Duration, federated: Option<&FederatedMixMutation>) -> bool;
-        mix_private_message_recipient(channel_id: Uuid, sender: &str, recipient_id: Uuid) -> Option<(MixParticipant, MixParticipant)>;
-        lookup_remote_pam_operation(user_id: Uuid, requester_full_jid: &str, client_request_id: &str, request_digest: &[u8; 32]) -> PamOperationReplay;
-        complete_remote_pam_success(authenticated_domain: &str, channel_jid: &str, recipient_bare: &str, request_id: &str, response_digest: &[u8; 32], join: Option<RemotePamJoin<'_>>) -> RemotePamCompletionOutcome;
-        complete_remote_pam_error(authenticated_domain: &str, channel_jid: &str, recipient_bare: &str, request_id: &str, response_digest: &[u8; 32], error_type: &str, condition: &str) -> RemotePamCompletionOutcome;
-        pam_memberships(user_id: Uuid) -> Vec<PamMembership>;
-        pam_membership(user_id: Uuid, channel_jid: &str) -> Option<PamMembership>;
-        local_pam_users_for_channel(channel_jid: &str) -> Vec<Uuid>;
-        reconcile_expired_remote_pam(limit: i64) -> u64;
-        claim_pam_results(limit: i64) -> Vec<ClaimedPamResult>;
-        renew_pam_result_lease(operation_id: Uuid, lease_token: Uuid) -> bool;
-        acknowledge_pam_result(operation_id: Uuid, lease_token: Uuid) -> bool;
-        defer_pam_result(operation_id: Uuid, lease_token: Uuid, delay_seconds: i64) -> bool;
-        retry_pam_result(operation_id: Uuid, lease_token: Uuid, attempt_count: i32, error: &str) -> bool;
-        find_enabled_user(username: &str) -> Option<MixAccount>;
-        find_enabled_user_by_id(user_id: Uuid) -> Option<MixAccount>;
-        is_blocked(owner_id: Uuid, candidate: &str) -> bool;
-        relay_profile_snapshot(query: MixRelayProfileQuery) -> MixRelayProfileResult;
-        latest_roster_change_for_contact(user_id: Uuid, contact_jid: &str) -> Option<northstar_roster_core::RosterChange>;
-        mix_muc_mirror_for_mix(mix_channel_id: Uuid) -> Option<MixMucMirror>;
-        mix_muc_mirror_for_muc(muc_room_id: Uuid) -> Option<MixMucMirror>;
-        mix_muc_mirror_service_complete(mix_domain: &str) -> bool;
         archive_mix_message_once(personal_archive_id: Uuid, owner_id: Uuid, channel_jid: &str, authoritative_stanza_id: Uuid, stanza: &str, encrypted: bool, client_stanza_id: Option<&str>) -> SourceArchiveAdmission;
-        enqueue_s2s_response_batch(target_domain: &str, responses: &[String], policy: S2sOutboxPolicy) -> ();
-        federated_mix_iq_replay(authenticated_domain: &str, actor_jid: &str, request_id: &str, request_digest: &[u8; 32]) -> FederatedMixIqReplay;
-        admit_federated_mix_iq_result(authenticated_domain: &str, actor_jid: &str, request_id: &str, request_digest: &[u8; 32], response: &str, policy: S2sOutboxPolicy) -> FederatedMixIqReplay;
         claim_mix_deliveries(limit: i64, max_bytes: i64) -> Vec<ClaimedMixDelivery>;
         maintain_mix_delivery_retention() -> ();
-        prune_expired_business_intents(limit: i64) -> u64;
-        prune_expired_federated_iq_results(limit: i64) -> u64;
         fence_mix_socket_write(source: MixDelivery) -> MixDelivery;
         transfer_mix_delivery_to_cluster(source: MixDelivery, node_id: &str, request_id: Uuid, ttl_seconds: u64) -> MixDelivery;
         release_mix_cluster_delivery(source: MixDelivery, node_id: &str, request_id: Uuid) -> bool;

@@ -15,8 +15,9 @@ use northstar_pubsub_core::{
     PubSubAccount, PubSubAffiliation, PubSubConfigOutcome, PubSubItem, PubSubNode,
     PubSubNodeConfig, PubSubNodeMetadata, PubSubNotificationDelivery, PubSubOutboxDeliveryKind,
     PubSubOutboxFailureDisposition, PubSubOutboxInsert, PubSubOutboxSnapshot, PubSubOutboxSource,
-    PubSubSubscription, PubSubSubscriptionOptions, PublishItemsOutcome, RetractItemsOutcome,
-    SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscribeOutcome, UnsubscribeOutcome,
+    PubSubSubscription, PubSubSubscriptionOptions, PubSubTimeSources, PublishItemsOutcome,
+    RetractItemsOutcome, SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscribeOutcome,
+    UnsubscribeOutcome,
 };
 use northstar_xml_builder::XmlElement;
 use std::sync::Arc;
@@ -55,6 +56,7 @@ pub struct PubSubService<R> {
     mutation_admission: Arc<PubSubMutationAdmission>,
     durable_outbox_database_admission:
         northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission,
+    time: PubSubTimeSources,
 }
 
 impl<R> PubSubService<R> {
@@ -69,8 +71,21 @@ impl<R> PubSubService<R> {
                 primary_pool_max_connections as usize,
             )),
             durable_outbox_database_admission,
+            time: PubSubTimeSources::default(),
         }
     }
+
+    /// Use the supplied clock and UUID source for this service.
+    pub fn with_time_sources(mut self, time: PubSubTimeSources) -> Self {
+        self.time = time;
+        self
+    }
+
+    /// Return the clock and UUID source configured for this service.
+    pub fn time_sources(&self) -> &PubSubTimeSources {
+        &self.time
+    }
+
     pub fn mutation_admission(&self) -> Arc<PubSubMutationAdmission> {
         Arc::clone(&self.mutation_admission)
     }

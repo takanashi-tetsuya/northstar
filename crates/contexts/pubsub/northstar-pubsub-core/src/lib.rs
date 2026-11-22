@@ -17,6 +17,10 @@ pub mod telemetry;
 pub use pep_policy::*;
 
 pub use item_access::item_retrieval_access;
+mod authority;
+mod clock;
+pub use authority::*;
+pub use clock::*;
 
 mod node;
 mod outcomes;

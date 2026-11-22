@@ -24,8 +24,10 @@ mod publish_policy;
 pub use publish_policy::{existing_node_publish_admission_outcome, publish_validation_outcome};
 
 mod admission;
+mod admission_key;
 mod commands;
 pub use admission::*;
+pub use admission_key::*;
 pub use commands::*;
 
 #[cfg(test)]

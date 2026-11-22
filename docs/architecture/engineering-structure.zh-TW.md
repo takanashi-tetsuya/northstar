@@ -2950,3 +2950,4 @@ Stage 證據仍綁定其原提交。
 | WP-689 | 完成：本地與聯邦 MUC MAM 共用 room-core 的一個投影（C2-13） | 見 `git log --grep '\[WP-689\]'` |
 | WP-690 | 完成：legal hold 期間撤回與審核經顯示覆蓋層成功，匯出改為 V3（C2-09，migration 0161） | 見 `git log --grep '\[WP-690\]'` |
 | WP-691 | 完成：記錄 S47 的階段與盤點（5.43）、目標架構第 4、5 節、執行計劃的 C2 列、已知問題的 4 列與 `EXT-FEDERATION`、資料生命週期、OpenAPI、聯邦矩陣的 F15 與路線圖的狀態。WP-685–690 接成一條鏈驗證：fmt、clippy、受影響 23 個 crate 的單獨建置與測試、workspace 測試與名稱比對、全部門禁與 Python 腳本測試、Stage 4 lanes、node 腳本測試、離線 CI，以及本機 PostgreSQL 上 MIX、MUC、MAM、聯邦、retention、operations API、abuse 與 PIE 的資料庫測試與 repository conformance。整條鏈的資料庫測試抓到 WP-690 新測試與 WP-687 一個測試的 fixture 錯誤（投遞的 MAM 旗標、缺 `jabber:client` 命名空間、匯出的隔離等級與 V2 雜湊），修正併入 WP-690 後重跑通過 | 見 `git log --grep '\[WP-691\]'` |
+| WP-692 | 完成：`url` 鎖定版本升到 2.5.9（RUSTSEC-2026-0592），連帶 `form_urlencoded` 升到 1.2.3；fuzz 的 lock 對齊同一版本。S47 推送後的 CI 稽核因這個新公告失敗 | 見 `git log --grep '\[WP-692\]'` |

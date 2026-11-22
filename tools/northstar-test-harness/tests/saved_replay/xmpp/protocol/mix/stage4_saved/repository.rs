@@ -640,6 +640,13 @@ impl MixPamRepository for ControlledRepository {
 
 #[allow(unused_variables)]
 impl MixDeliveryRepository for ControlledRepository {
+    fn archive_verified_mix_reflection(
+        &self,
+        _request: VerifiedMixReflection<'_>,
+    ) -> impl std::future::Future<Output = Result<ReflectedMixArchiveOutcome>> + Send {
+        std::future::ready(Err(self.unused("archive_verified_mix_reflection")))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn archive_mix_message_once(
         &self,

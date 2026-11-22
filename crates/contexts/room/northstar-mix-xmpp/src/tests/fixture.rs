@@ -11,6 +11,7 @@ pub enum Call {
     User(String, usize),
     Block(Uuid, String, usize),
     Archive(mix_worker::ArchiveCommand, usize),
+    ReflectedRetraction(Uuid, String, Uuid, Uuid, String),
     Nodes(bool, String, usize),
     Sessions(String),
     Capability(String),
@@ -65,6 +66,9 @@ pub struct State {
     pub capability: Mutex<MixSessionCapability>,
     pub archive_mismatch: AtomicBool,
     pub archive_replay: AtomicBool,
+    pub reflection_conflict: AtomicBool,
+    pub reflection_blocked: AtomicBool,
+    pub reflection_membership: Mutex<Option<PamMembership>>,
     pub replay: Mutex<MixBusinessReplay>,
     pub foreground_owner: Mutex<Option<foreground::Observation>>,
     pub mam_outcome: Mutex<Option<MixMamReadOutcome>>,
@@ -202,7 +206,7 @@ impl MixRepository for Repository {
             candidate.into(),
             self.0.admission.available_permits(),
         ));
-        Ok(false)
+        Ok(self.0.reflection_blocked.load(Ordering::SeqCst))
     }
 
     async fn prune_expired_business_intents(&self, limit: i64) -> Result<u64> {
@@ -430,6 +434,14 @@ impl MixPamRepository for Repository {
         Ok(0)
     }
 
+    async fn pam_membership(
+        &self,
+        _user_id: Uuid,
+        _channel_jid: &str,
+    ) -> Result<Option<PamMembership>> {
+        Ok(self.0.reflection_membership.lock().unwrap().clone())
+    }
+
     unused_repository_methods! {
         begin_remote_pam_join(request: BeginRemotePamJoin) -> PamOperationReplay;
         lookup_remote_pam_operation(user_id: Uuid, requester_full_jid: &str, client_request_id: &str, request_digest: &[u8; 32]) -> PamOperationReplay;
@@ -437,7 +449,6 @@ impl MixPamRepository for Repository {
         complete_remote_pam_success(authenticated_domain: &str, channel_jid: &str, recipient_bare: &str, request_id: &str, response_digest: &[u8; 32], join: Option<RemotePamJoin<'_>>) -> RemotePamCompletionOutcome;
         complete_remote_pam_error(authenticated_domain: &str, channel_jid: &str, recipient_bare: &str, request_id: &str, response_digest: &[u8; 32], error_type: &str, condition: &str) -> RemotePamCompletionOutcome;
         pam_memberships(user_id: Uuid) -> Vec<PamMembership>;
-        pam_membership(user_id: Uuid, channel_jid: &str) -> Option<PamMembership>;
         local_pam_users_for_channel(channel_jid: &str) -> Vec<Uuid>;
         renew_pam_result_lease(operation_id: Uuid, lease_token: Uuid) -> bool;
         retry_pam_result(operation_id: Uuid, lease_token: Uuid, attempt_count: i32, error: &str) -> bool;
@@ -445,6 +456,48 @@ impl MixPamRepository for Repository {
 }
 
 impl MixDeliveryRepository for Repository {
+    async fn archive_verified_mix_reflection(
+        &self,
+        request: VerifiedMixReflection<'_>,
+    ) -> Result<ReflectedMixArchiveOutcome> {
+        let action = request.authoritative_stanza_id;
+        if let MixReflectionKind::Retraction {
+            target_id,
+            source_participant,
+        } = request.kind
+        {
+            self.0.record(Call::ReflectedRetraction(
+                request.owner_id,
+                request.channel_jid.into(),
+                target_id,
+                action,
+                source_participant.into(),
+            ));
+            if self.0.reflection_conflict.load(Ordering::SeqCst) {
+                return Ok(ReflectedMixArchiveOutcome::Conflict);
+            }
+            if self.0.archive_replay.load(Ordering::SeqCst) {
+                return Ok(ReflectedMixArchiveOutcome::Archived(
+                    SourceArchiveAdmission::Replay(action),
+                ));
+            }
+            return Ok(ReflectedMixArchiveOutcome::Archived(
+                SourceArchiveAdmission::Stored(request.personal_archive_id),
+            ));
+        }
+        self.archive_mix_message_once(
+            request.personal_archive_id,
+            request.owner_id,
+            request.channel_jid,
+            action,
+            request.stanza,
+            request.encrypted,
+            Some(&action.to_string()),
+        )
+        .await
+        .map(ReflectedMixArchiveOutcome::Archived)
+    }
+
     async fn claim_mix_deliveries_observed(
         &self,
         request: &mix_worker::ClaimRequest,
@@ -676,6 +729,9 @@ impl Context {
             capability: Mutex::new(MixSessionCapability::Supported),
             archive_mismatch: AtomicBool::new(false),
             archive_replay: AtomicBool::new(false),
+            reflection_conflict: AtomicBool::new(false),
+            reflection_blocked: AtomicBool::new(false),
+            reflection_membership: Mutex::new(None),
             replay: Mutex::new(MixBusinessReplay::Miss),
             foreground_owner: Mutex::new(None),
             mam_outcome: Mutex::new(None),

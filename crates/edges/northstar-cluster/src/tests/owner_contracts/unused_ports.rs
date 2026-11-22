@@ -544,6 +544,13 @@ mod mix {
     }
 
     impl MixDeliveryRepository for UnusedPorts {
+        async fn archive_verified_mix_reflection(
+            &self,
+            _request: VerifiedMixReflection<'_>,
+        ) -> Result<ReflectedMixArchiveOutcome> {
+            panic!("unused MixDeliveryRepository::archive_verified_mix_reflection port");
+        }
+
         async fn archive_mix_message_once(
             &self,
             _personal_archive_id: Uuid,

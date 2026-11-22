@@ -1,6 +1,10 @@
 //! Export account data from PostgreSQL into validated portable XML.
 
 use super::*;
+use northstar_archive_postgres::personal_display::{
+    project_personal_archive_content, PERSONAL_DISPLAY_JOIN, PERSONAL_DISPLAY_SELECT,
+};
+use sqlx::{Postgres, QueryBuilder};
 
 pub(super) async fn export(
     pool: &PgPool,
@@ -423,19 +427,24 @@ pub(super) async fn export_mam(
     xml: &mut String,
     count: &mut usize,
 ) -> Result<()> {
-    let rows = sqlx::query(
-        "SELECT id,stanza,created_at FROM message_archive WHERE owner_id=$1 ORDER BY created_at,id",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await?;
+    let mut query = QueryBuilder::<Postgres>::new(PERSONAL_DISPLAY_SELECT);
+    query
+        .push(
+            "(SELECT id,stanza,encrypted,created_at,source_by,source_stanza_id
+                 FROM message_archive WHERE owner_id=",
+        )
+        .push_bind(user_id)
+        .push(")")
+        .push(PERSONAL_DISPLAY_JOIN)
+        .push(" ORDER BY page.created_at,page.id");
+    let rows = query.build().fetch_all(pool).await?;
     if rows.is_empty() {
         return Ok(());
     }
     xml.push_str("      <archive xmlns='urn:xmpp:pie:0#mam'>\n");
     for row in rows {
         *count += 1;
-        let stanza: String = row.get("stanza");
+        let (stanza, _) = project_personal_archive_content(&row);
         validate_client_message_fragment(&stanza, "stored MAM stanza")?;
         let id: Uuid = row.get("id");
         let stamp: DateTime<Utc> = row.get("created_at");

@@ -14,6 +14,7 @@ mod mix_muc;
 mod mix_pam_durability;
 mod mix_publisher_visibility;
 mod mix_sequence_retention;
+mod mix_source_retractions;
 mod muc;
 mod muc_logging_admission;
 mod muc_service;

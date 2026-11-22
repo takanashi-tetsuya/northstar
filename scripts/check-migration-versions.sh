@@ -1610,6 +1610,25 @@ if printf '%s\n' "$sm_runtime_cleanup" | grep -Eq 'deployment_session_binding_cl
 fi
 echo "migration 0158 fixes only the cleanup claim alias and preserves the historical runtime authority gates"
 
+mix_source_retractions_migration="migrations/0159_mix_source_retractions.sql"
+for required_fragment in \
+    'CREATE TABLE mix_source_retractions (' \
+    'PRIMARY KEY (source_by, action_stanza_id)' \
+    'CHECK (target_stanza_id <> action_stanza_id)' \
+    'CREATE UNIQUE INDEX mix_source_retractions_first_target_key' \
+    'ON mix_source_retractions (source_by, target_stanza_id)' \
+    'WHERE first_for_target;' \
+    'REVOKE ALL ON TABLE mix_source_retractions FROM PUBLIC;'; do
+    if ! grep -Fq "$required_fragment" "$mix_source_retractions_migration"; then
+        echo "migration 0159 is missing its append-only source-fence invariant: $required_fragment" >&2
+        exit 1
+    fi
+done
+if grep -Eiq '\b(REFERENCES|FOREIGN|TRIGGER|FUNCTION|PROCEDURE|DO|INSERT|UPDATE|DELETE|COPY|ALTER|TRUNCATE)\b' "$mix_source_retractions_migration"; then
+    echo 'migration 0159 must add only the independent source-fence relation and index, without backfill' >&2
+    exit 1
+fi
+
 # Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0
 # development line. They are immutable: SQLx will reject changed content in an
 # existing database, and this repository-side manifest catches the same mistake

@@ -807,6 +807,12 @@ struct Host {
     context: Arc<Context>,
     relay: MixIqRelayIndex,
 }
+pub(super) fn reflection_host(context: Arc<Context>) -> Arc<impl MixHost> {
+    Arc::new(Host {
+        context,
+        relay: MixIqRelayIndex::new(),
+    })
+}
 struct Relay;
 impl MixIqRelayRoutePort for Relay {
     async fn deliver(&self, _recipient: &str, _stanza: String) {
@@ -843,8 +849,17 @@ impl MixHost for Host {
     fn xmpp_extension_enabled(&self, _id: northstar_xep_core::XepId) -> bool {
         true
     }
-    fn session_entries_for(&self, _jid: &str) -> Vec<(String, LocalSession)> {
-        panic!("unexpected live route");
+    fn session_entries_for(&self, jid: &str) -> Vec<(String, LocalSession)> {
+        assert!(
+            self.context
+                .state
+                .reflection_membership
+                .lock()
+                .unwrap()
+                .is_some(),
+            "unexpected live route"
+        );
+        self.context.session_entries_for(jid)
     }
     fn sessions_for(&self, _jid: &str) -> Vec<LocalSession> {
         panic!("unexpected sessions");
@@ -855,8 +870,17 @@ impl MixHost for Host {
     fn mix_outbox_context(&self) -> Context {
         self.context.as_ref().clone()
     }
-    fn session_mix_capability(&self, _full_jid: &str) -> MixSessionCapability {
-        panic!("unexpected capability lookup");
+    fn session_mix_capability(&self, full_jid: &str) -> MixSessionCapability {
+        assert!(
+            self.context
+                .state
+                .reflection_membership
+                .lock()
+                .unwrap()
+                .is_some(),
+            "unexpected capability lookup"
+        );
+        self.context.session_mix_capability(full_jid)
     }
     fn validate_routed_message(&self, _root: Node<'_, '_>) -> Result<(), &'static str> {
         Ok(())

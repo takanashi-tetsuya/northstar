@@ -741,6 +741,7 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
         None,
         &publisher_identity,
         Some(&owner),
+        &northstar_workflows::room_effects::WorkflowRoomEffects,
         &payloads,
     )
     .await
@@ -768,6 +769,15 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
     .await
     .unwrap();
     assert!(stored.contains("retracted"));
+    let facts: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM mix_source_retractions WHERE source_by=$1 AND action_stanza_id=$2",
+    )
+    .bind(channel.jid())
+    .bind(retraction_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(facts, 1);
 
     // A subscription change and message admission must serialize on the
     // channel row. Hold an admission open after persisting its event and

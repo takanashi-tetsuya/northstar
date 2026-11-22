@@ -2,7 +2,7 @@
 
 use super::{
     outbox, ClaimedMixDelivery, MixDeliveryDeadLetter, MixDeliveryRetryOutcome,
-    SourceArchiveAdmission,
+    ReflectedMixArchiveOutcome, SourceArchiveAdmission, VerifiedMixReflection,
 };
 use anyhow::Result;
 use northstar_time::{DateTime, Utc};
@@ -10,6 +10,11 @@ use uuid::Uuid;
 
 /// Persists durable MIX delivery, including archive admission and transport ownership.
 pub trait MixDeliveryRepository: Send + Sync {
+    fn archive_verified_mix_reflection(
+        &self,
+        request: VerifiedMixReflection<'_>,
+    ) -> impl std::future::Future<Output = Result<ReflectedMixArchiveOutcome>> + Send;
+
     #[allow(clippy::too_many_arguments)]
     fn archive_mix_message_once(
         &self,

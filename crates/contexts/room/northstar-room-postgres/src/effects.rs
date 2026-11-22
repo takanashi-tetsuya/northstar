@@ -4,7 +4,8 @@ use anyhow::Result;
 use northstar_delivery_core::mix_outbox::ArchiveRequest;
 use northstar_federation_core::S2sOutboxPolicy;
 use northstar_room_application::mix_service::{
-    MixRelayProfileKind, MixRelayProfileResult, SourceArchiveAdmission,
+    MixRelayProfileKind, MixRelayProfileResult, ReflectedMixArchiveOutcome, SourceArchiveAdmission,
+    VerifiedMixReflection,
 };
 use northstar_room_core::{OfflineStoreOutcome, OfflineStorePolicy};
 use northstar_roster_core::RosterChange;
@@ -123,6 +124,21 @@ pub trait RoomEffects: Clone + Default + Send + Sync + 'static {
         user_id: Uuid,
         contact_jid: &str,
     ) -> impl Future<Output = Result<Option<RosterChange>>> + Send;
+
+    fn record_mix_source_retraction_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        channel: &str,
+        target: Uuid,
+        action: Uuid,
+        participant: &str,
+    ) -> impl Future<Output = Result<()>> + Send;
+
+    fn archive_verified_mix_reflection(
+        &self,
+        pool: &PgPool,
+        request: VerifiedMixReflection<'_>,
+    ) -> impl Future<Output = Result<ReflectedMixArchiveOutcome>> + Send;
 
     /// Stores a reflected channel message in a personal archive exactly once.
     #[allow(clippy::too_many_arguments)]

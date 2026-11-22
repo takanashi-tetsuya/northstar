@@ -148,7 +148,10 @@ pub async fn begin_mix_delivery_fenced_transaction(
     pool: &PgPool,
 ) -> Result<(Transaction<'_, Postgres>, MixDeliveryAdmissionFence)> {
     let mut transaction = pool.begin().await?;
-    // This is deliberately the first SQL statement in the transaction. A
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .execute(&mut *transaction)
+        .await?;
+    // This is deliberately the first lock or data read in the transaction. A
     // cross-process waiter therefore owns no channel, participant, event or
     // sequence lock while it waits, which makes the blocking database fence a
     // deadlock-safe authority for experimental multi-process deployments.

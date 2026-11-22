@@ -1,4 +1,52 @@
+use super::dispatch::{unbound_mix_dispatch, MixDispatch};
 use super::*;
+
+#[test]
+fn unbound_mix_retraction_does_not_fall_through_to_personal_delivery() {
+    let action = "<retract xmlns='urn:xmpp:mix:misc:0' id='00000000-0000-4000-8000-000000000001'/>";
+    for (from, to, payload, mix_command, suppressed) in [
+        (
+            "alice@remote.test/phone",
+            "bob@local.test",
+            action,
+            false,
+            true,
+        ),
+        (
+            "room@mix.other.test/actor",
+            "bob@local.test",
+            action,
+            false,
+            true,
+        ),
+        (
+            "alice@remote.test/phone",
+            "bob@local.test",
+            "<body>ordinary</body>",
+            false,
+            false,
+        ),
+        (
+            "alice@remote.test/phone",
+            "room@mix.local.test",
+            action,
+            true,
+            false,
+        ),
+    ] {
+        let stanza = format!("<message xmlns='jabber:client' type='groupchat' id='action' from='{from}' to='{to}'>{payload}</message>");
+        let document = Document::parse(&stanza).unwrap();
+        let dispatch = unbound_mix_dispatch(document.root_element(), "remote.test", "local.test");
+        assert_eq!(dispatch.is_none(), mix_command);
+        assert_eq!(
+            matches!(dispatch, Some(MixDispatch::Handled(None))),
+            suppressed
+        );
+        if !mix_command && !suppressed {
+            assert!(matches!(dispatch, Some(MixDispatch::NotMix)));
+        }
+    }
+}
 
 #[test]
 fn push_notification_publish_routes_to_service_instead_of_pep() {

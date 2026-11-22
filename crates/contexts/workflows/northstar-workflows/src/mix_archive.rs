@@ -1,15 +1,20 @@
 //! Exactly-once archiving of reflected MIX messages into personal archives.
 
 use anyhow::Result;
+use northstar_archive_postgres::mix_source_retractions::{
+    action_binding_in_tx, lock_sources_in_tx, primary_retraction_in_tx, record_locked_in_tx,
+    MixSourceRetraction,
+};
+use northstar_archive_postgres::personal_display::render_mix_source_tombstone;
+use northstar_room_application::mix_service::{
+    valid_stable_participant_id, MixReflectionKind, ReflectedMixArchiveOutcome,
+    VerifiedMixReflection,
+};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SourceArchiveAdmission {
-    Stored(Uuid),
-    Replay(Uuid),
-}
+pub use northstar_room_application::mix_service::SourceArchiveAdmission;
 
 /// Store a reflected MIX message in a personal archive exactly once per
 /// channel authority and authoritative stanza-id.  A retry with the same key
@@ -71,6 +76,132 @@ async fn archive_mix_message_once_inner(
     client_stanza_id: Option<&str>,
     observation: Option<&northstar_delivery_core::mix_outbox::ArchiveRequest>,
 ) -> Result<SourceArchiveAdmission> {
+    let prepared = prepare_source_archive(SourceArchiveInput {
+        personal_archive_id,
+        owner_id,
+        channel_jid,
+        authoritative_stanza_id,
+        stanza,
+        encrypted,
+        client_stanza_id,
+    })?;
+    let mut transaction = begin_source_archive(pool).await?;
+    lock_sources_in_tx(
+        &mut transaction,
+        channel_jid,
+        &[authoritative_stanza_id],
+        false,
+    )
+    .await?;
+    let primary =
+        primary_retraction_in_tx(&mut transaction, channel_jid, authoritative_stanza_id).await?;
+    let outcome =
+        archive_mix_message_once_in_tx(&mut transaction, &prepared, primary.as_ref()).await?;
+    commit_mix_archive(transaction, observation, outcome).await?;
+    Ok(outcome)
+}
+
+pub(super) async fn archive_verified_mix_reflection(
+    pool: &PgPool,
+    request: VerifiedMixReflection<'_>,
+) -> Result<ReflectedMixArchiveOutcome> {
+    let action = request.authoritative_stanza_id;
+    let client_stanza_id = action.to_string();
+    let channel = request.channel_jid;
+    if let MixReflectionKind::Retraction {
+        target_id,
+        source_participant,
+    } = request.kind
+    {
+        anyhow::ensure!(
+            target_id != action
+                && valid_stable_participant_id(source_participant)
+                && !request.encrypted,
+            "invalid verified MIX retraction identity or encryption"
+        );
+    }
+    let prepared = prepare_source_archive(SourceArchiveInput {
+        personal_archive_id: request.personal_archive_id,
+        owner_id: request.owner_id,
+        channel_jid: channel,
+        authoritative_stanza_id: action,
+        stanza: request.stanza,
+        encrypted: request.encrypted,
+        client_stanza_id: Some(&client_stanza_id),
+    })?;
+    let mut transaction = begin_source_archive(pool).await?;
+    let bound = match request.kind {
+        MixReflectionKind::Original => {
+            lock_sources_in_tx(&mut transaction, channel, &[action], false).await?;
+            action_binding_in_tx(&mut transaction, channel, action)
+                .await?
+                .is_none()
+        }
+        MixReflectionKind::Retraction {
+            target_id,
+            source_participant,
+        } => {
+            lock_sources_in_tx(&mut transaction, channel, &[target_id, action], true).await?;
+            record_locked_in_tx(
+                &mut transaction,
+                channel,
+                target_id,
+                action,
+                source_participant,
+            )
+            .await?
+        }
+    };
+    if !bound {
+        transaction.rollback().await?;
+        return Ok(ReflectedMixArchiveOutcome::Conflict);
+    }
+    let primary = primary_retraction_in_tx(&mut transaction, channel, action).await?;
+    match archive_mix_message_once_in_tx(&mut transaction, &prepared, primary.as_ref()).await {
+        Ok(outcome) => {
+            transaction.commit().await?;
+            Ok(ReflectedMixArchiveOutcome::Archived(outcome))
+        }
+        Err(MixArchiveError::Conflict) => {
+            transaction.rollback().await?;
+            Ok(ReflectedMixArchiveOutcome::Conflict)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn begin_source_archive(pool: &PgPool) -> Result<Transaction<'_, Postgres>> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .execute(&mut *transaction)
+        .await?;
+    Ok(transaction)
+}
+
+struct SourceArchiveInput<'a> {
+    personal_archive_id: Uuid,
+    owner_id: Uuid,
+    channel_jid: &'a str,
+    authoritative_stanza_id: Uuid,
+    stanza: &'a str,
+    encrypted: bool,
+    client_stanza_id: Option<&'a str>,
+}
+
+struct PreparedSourceArchive<'a> {
+    input: SourceArchiveInput<'a>,
+    payload_digest: Vec<u8>,
+}
+
+fn prepare_source_archive(input: SourceArchiveInput<'_>) -> Result<PreparedSourceArchive<'_>> {
+    let SourceArchiveInput {
+        channel_jid,
+        authoritative_stanza_id,
+        stanza,
+        encrypted,
+        client_stanza_id,
+        ..
+    } = input;
     anyhow::ensure!(
         !stanza.is_empty() && stanza.len() <= 1_048_576,
         "MIX archive stanza must contain 1 to 1048576 bytes"
@@ -99,9 +230,38 @@ async fn archive_mix_message_once_inner(
     digest.update([u8::from(encrypted)]);
     digest.update((stanza.len() as u32).to_be_bytes());
     digest.update(stanza.as_bytes());
-    let payload_digest = digest.finalize().to_vec();
+    Ok(PreparedSourceArchive {
+        input,
+        payload_digest: digest.finalize().to_vec(),
+    })
+}
 
-    let mut transaction = pool.begin().await?;
+#[derive(Debug, thiserror::Error)]
+enum MixArchiveError {
+    #[error("conflicting MIX source stanza identity")]
+    Conflict,
+    #[error("MIX source identity conflict row disappeared during admission")]
+    MissingConflict,
+    #[error(transparent)]
+    Storage(#[from] sqlx::Error),
+}
+
+async fn archive_mix_message_once_in_tx(
+    transaction: &mut Transaction<'_, Postgres>,
+    prepared: &PreparedSourceArchive<'_>,
+    primary: Option<&MixSourceRetraction>,
+) -> std::result::Result<SourceArchiveAdmission, MixArchiveError> {
+    let SourceArchiveInput {
+        personal_archive_id,
+        owner_id,
+        channel_jid: channel,
+        authoritative_stanza_id,
+        stanza,
+        encrypted,
+        client_stanza_id,
+    } = prepared.input;
+    let tombstone = primary
+        .map(|fact| render_mix_source_tombstone(stanza, channel, authoritative_stanza_id, fact));
     let inserted = sqlx::query(
         "INSERT INTO message_archive
          (id, owner_id, peer_jid, peer_full_jid, stanza, encrypted, stanza_id,
@@ -113,23 +273,17 @@ async fn archive_mix_message_once_inner(
     )
     .bind(personal_archive_id)
     .bind(owner_id)
-    .bind(&channel)
-    .bind(stanza)
-    .bind(encrypted)
+    .bind(channel)
+    .bind(tombstone.as_deref().unwrap_or(stanza))
+    .bind(primary.is_none() && encrypted)
     .bind(client_stanza_id)
     .bind(authoritative_stanza_id)
-    .bind(&payload_digest)
-    .execute(&mut *transaction)
+    .bind(&prepared.payload_digest)
+    .execute(&mut **transaction)
     .await?
     .rows_affected()
         == 1;
     if inserted {
-        commit_mix_archive(
-            transaction,
-            observation,
-            SourceArchiveAdmission::Stored(personal_archive_id),
-        )
-        .await?;
         return Ok(SourceArchiveAdmission::Stored(personal_archive_id));
     }
 
@@ -141,33 +295,29 @@ async fn archive_mix_message_once_inner(
          FOR SHARE",
     )
     .bind(owner_id)
-    .bind(&channel)
+    .bind(channel)
     .bind(authoritative_stanza_id)
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(&mut **transaction)
     .await?;
     let Some(row) = row else {
-        anyhow::bail!("MIX source identity conflict row disappeared during admission");
+        return Err(MixArchiveError::MissingConflict);
     };
     let exact_replay = row.get::<String, _>("peer_jid") == channel
         && row.get::<String, _>("peer_full_jid") == channel
-        && row.get::<String, _>("stanza") == stanza
-        && row.get::<bool, _>("encrypted") == encrypted
+        && (primary.is_some()
+            || (row.get::<String, _>("stanza") == stanza
+                && row.get::<bool, _>("encrypted") == encrypted))
         && row.get::<Option<String>, _>("stanza_id").as_deref() == client_stanza_id
-        && row.get::<Option<String>, _>("source_by").as_deref() == Some(channel.as_str())
+        && row.get::<Option<String>, _>("source_by").as_deref() == Some(channel)
         && row.get::<Option<Uuid>, _>("source_stanza_id") == Some(authoritative_stanza_id)
         && row
             .get::<Option<Vec<u8>>, _>("source_payload_digest")
             .as_deref()
-            == Some(payload_digest.as_slice());
-    anyhow::ensure!(exact_replay, "conflicting MIX source stanza identity");
-    let existing_id: Uuid = row.get("id");
-    commit_mix_archive(
-        transaction,
-        observation,
-        SourceArchiveAdmission::Replay(existing_id),
-    )
-    .await?;
-    Ok(SourceArchiveAdmission::Replay(existing_id))
+            == Some(prepared.payload_digest.as_slice());
+    if !exact_replay {
+        return Err(MixArchiveError::Conflict);
+    }
+    Ok(SourceArchiveAdmission::Replay(row.get("id")))
 }
 
 async fn commit_mix_archive(

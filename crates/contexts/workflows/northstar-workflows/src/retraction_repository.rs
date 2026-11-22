@@ -482,7 +482,7 @@ impl RetractionRepository for PostgresRetractionRepository {
                   WHERE owner_id=$1
                     AND pg_catalog.md5(peer_jid)=pg_catalog.md5($2::TEXT)
                     AND pg_catalog.md5(stanza_id)=pg_catalog.md5($3::TEXT)
-                    AND peer_jid=$2 AND stanza_id=$3
+                    AND peer_jid=$2 AND stanza_id=$3 AND source_stanza_id IS NULL
                   ORDER BY created_at DESC,id DESC LIMIT 3 FOR UPDATE",
             )
             .bind(owner.owner_id)

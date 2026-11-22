@@ -355,6 +355,13 @@ mod mix {
     }
 
     impl MixDeliveryRepository for UnusedMix {
+        async fn archive_verified_mix_reflection(
+            &self,
+            _request: VerifiedMixReflection<'_>,
+        ) -> Result<ReflectedMixArchiveOutcome> {
+            panic!("unexpected port call: archive_verified_mix_reflection")
+        }
+
         unused_async! {
             fn archive_mix_message_once(&self, personal_archive_id: Uuid, owner_id: Uuid, channel_jid: &str, authoritative_stanza_id: Uuid, stanza: &str, encrypted: bool, client_stanza_id: Option<&str>) -> Result<SourceArchiveAdmission>;
             fn claim_mix_deliveries(&self, limit: i64, max_bytes: i64) -> Result<Vec<ClaimedMixDelivery>>;

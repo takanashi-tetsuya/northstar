@@ -280,9 +280,12 @@ pub async fn create_report_in_tx(
         .map(|item| item.archive_id)
         .collect::<Vec<_>>();
     let rows = sqlx::query(
-        "SELECT id,peer_jid,stanza,encrypted,stanza_id,created_at
-         FROM message_archive WHERE owner_id=$1 AND id=ANY($2)
-         ORDER BY id FOR SHARE",
+        "SELECT ma.id,ma.peer_jid,ma.stanza,ma.encrypted,ma.stanza_id,ma.created_at
+         FROM message_archive ma WHERE ma.owner_id=$1 AND ma.id=ANY($2)
+         AND NOT EXISTS (SELECT 1 FROM mix_source_retractions f
+             WHERE f.source_by=ma.source_by AND f.target_stanza_id=ma.source_stanza_id
+               AND f.first_for_target)
+         ORDER BY ma.id FOR SHARE OF ma",
     )
     .bind(reporter_id)
     .bind(&archive_ids)

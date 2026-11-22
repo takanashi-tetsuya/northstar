@@ -191,6 +191,7 @@ impl PendingWrite {
                 intent,
                 &self.publisher,
                 self.live_jid,
+                &WorkflowRoomEffects,
                 &MixPayloads,
             )
             .await?;
@@ -233,14 +234,16 @@ impl PendingWrite {
     }
 }
 
-async fn artifacts(pool: &PgPool, channel: Uuid) -> Result<(i64, i64, i64, i64)> {
+async fn artifacts(pool: &PgPool, channel: Uuid) -> Result<(i64, i64, i64, i64, i64)> {
     Ok(sqlx::query_as(
         "SELECT
           (SELECT count(*) FROM mix_events WHERE channel_id=$1 AND node=$2),
           (SELECT count(*) FROM mix_delivery_events WHERE channel_id=$1),
           (SELECT count(*) FROM mix_delivery_recipients r JOIN mix_delivery_events e USING(event_id)
             WHERE e.channel_id=$1),
-          (SELECT count(*) FROM mix_business_intents WHERE channel_id=$1)",
+          (SELECT count(*) FROM mix_business_intents WHERE channel_id=$1),
+          (SELECT count(*) FROM mix_source_retractions f JOIN mix_channels c
+             ON f.source_by=c.localpart || '@' || c.service_domain WHERE c.id=$1)",
     )
     .bind(channel)
     .bind(NODE_MESSAGES)

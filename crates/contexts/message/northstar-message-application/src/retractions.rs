@@ -8,8 +8,8 @@
 use anyhow::{Context, Result};
 use northstar_abuse_policy::content_identity::PersonalRetractionContentKeyring;
 use northstar_abuse_policy::ContentIdentityAuthenticators;
+use northstar_message_core::retraction::{render_retraction_tombstone, RetractionEnvelope};
 pub use northstar_message_core::ArchiveProjection as ArchiveWrite;
-use northstar_xml_builder::XmlElement;
 
 use roxmltree::{Document, Node};
 use sha2::{Digest, Sha256, Sha512};
@@ -941,19 +941,19 @@ pub fn retractable_message(root: Node<'_, '_>) -> bool {
 }
 
 pub fn tombstone_message(original: Node<'_, '_>, retraction_id: &str) -> String {
-    let mut message = XmlElement::namespaced("message", "jabber:client");
-    for attribute in ["from", "to", "type", "id"] {
-        if let Some(value) = original.attribute(attribute) {
-            message = message.attr(attribute, value);
-        }
-    }
+    let envelope = RetractionEnvelope {
+        from: original.attribute("from"),
+        to: original.attribute("to"),
+        kind: original.attribute("type"),
+        id: original.attribute("id"),
+    };
     // A tombstone replaces user content, not the server-assigned identity of
     // the archived item.  Retaining structurally valid direct stanza IDs keeps
     // XEP-0313 result IDs and XEP-0359 references stable after a retraction.
     // Rebuild the elements through the typed serializer instead of copying raw
     // XML from durable storage; malformed, nested, or extension-bearing claims
     // are deliberately discarded.
-    for stanza_id in original.children().filter_map(|node| {
+    let stanza_ids = original.children().filter_map(|node| {
         if !node.is_element()
             || node.tag_name().namespace() != Some(NS_STANZA_ID)
             || node.tag_name().name() != "stanza-id"
@@ -977,22 +977,10 @@ pub fn tombstone_message(original: Node<'_, '_>, retraction_id: &str) -> String 
         {
             return None;
         }
-        Some(
-            XmlElement::namespaced("stanza-id", NS_STANZA_ID)
-                .attr("id", id)
-                .attr("by", by),
-        )
-    }) {
-        message.push_child(stanza_id);
-    }
+        Some((id, by))
+    });
     let stamp = northstar_time::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
-    message
-        .child(
-            XmlElement::namespaced("retracted", NS_RETRACT)
-                .attr("stamp", stamp)
-                .attr("id", retraction_id),
-        )
-        .finish()
+    render_retraction_tombstone(envelope, stanza_ids, retraction_id, &stamp.to_string())
 }
 
 #[cfg(test)]

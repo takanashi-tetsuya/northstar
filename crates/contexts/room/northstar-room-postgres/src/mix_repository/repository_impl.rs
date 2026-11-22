@@ -803,6 +803,7 @@ impl<E: RoomEffects> MixRepository for PostgresMixRepository<E> {
             db_identity,
             publisher_identity,
             visible_jid,
+            &self.effects,
             &MixPayloads,
         )
         .await?;

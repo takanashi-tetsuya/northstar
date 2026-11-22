@@ -2239,6 +2239,36 @@ PSQL
 [[ "$handoff_history_acl_ok" == 't' ]] \
   || fail 'cluster MUC handoff history is not runtime read-only'
 
+mix_source_retraction_acl_ok=$(control_psql --dbname="$database_name" \
+  --tuples-only --no-align <<'PSQL'
+SELECT pg_catalog.has_table_privilege('northstar_runtime','public.mix_source_retractions','SELECT')
+   AND pg_catalog.has_table_privilege('northstar_runtime','public.mix_source_retractions','INSERT')
+   AND pg_catalog.has_table_privilege('northstar_backup','public.mix_source_retractions','SELECT')
+   AND NOT pg_catalog.has_table_privilege('northstar_runtime','public.mix_source_retractions',
+                                         'UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+   AND NOT pg_catalog.has_table_privilege('northstar_backup','public.mix_source_retractions',
+                                         'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+   AND NOT pg_catalog.has_any_column_privilege('northstar_runtime','public.mix_source_retractions',
+                                              'UPDATE,REFERENCES')
+   AND NOT pg_catalog.has_any_column_privilege('northstar_backup','public.mix_source_retractions',
+                                              'INSERT,UPDATE,REFERENCES')
+   AND NOT EXISTS (
+     SELECT 1 FROM pg_catalog.pg_class AS relation
+     CROSS JOIN LATERAL pg_catalog.aclexplode(COALESCE(
+       relation.relacl, pg_catalog.acldefault('r', relation.relowner)
+     )) AS privilege
+     WHERE relation.oid='public.mix_source_retractions'::regclass AND privilege.grantee=0
+   )
+   AND NOT EXISTS (
+     SELECT 1 FROM pg_catalog.pg_attribute AS attribute
+     CROSS JOIN LATERAL pg_catalog.aclexplode(attribute.attacl) AS privilege
+     WHERE attribute.attrelid='public.mix_source_retractions'::regclass AND privilege.grantee=0
+   );
+PSQL
+)
+[[ "$mix_source_retraction_acl_ok" == 't' ]] \
+  || fail 'MIX source retractions are not runtime append-only and backup read-only'
+
 users_acl_ok=$(control_psql --dbname="$database_name" --tuples-only --no-align <<'PSQL'
 SELECT pg_catalog.has_table_privilege('northstar_runtime','public.users','SELECT')
    AND NOT pg_catalog.has_table_privilege('northstar_runtime','public.users','INSERT')

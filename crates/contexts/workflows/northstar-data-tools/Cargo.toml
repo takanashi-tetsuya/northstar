@@ -14,6 +14,7 @@ test-support = []
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22"
+northstar-archive-postgres = { path = "../../archive/northstar-archive-postgres" }
 northstar-time = { path = "../../../kernel/northstar-time", features = ["serde", "postgres"] }
 northstar-auth-core = { path = "../../auth/northstar-auth-core" }
 northstar-auth-postgres = { path = "../../auth/northstar-auth-postgres" }

@@ -5,6 +5,10 @@
 //! extra row to determine whether another page exists.
 
 use anyhow::{ensure, Result};
+#[cfg(any(test, feature = "test-support"))]
+use northstar_archive_postgres::personal_display::{
+    project_personal_archive_content, PERSONAL_DISPLAY_JOIN, PERSONAL_DISPLAY_SELECT,
+};
 use northstar_postgres::database_cursor_clock_in_tx;
 use northstar_time::{DateTime, Utc};
 #[cfg(any(test, feature = "test-support"))]
@@ -79,10 +83,10 @@ pub async fn history_page(
 ) -> Result<KeysetPage<HistoryPageRow>> {
     let fetch_limit = checked_fetch_limit(limit)?;
     let database_now = database_cursor_clock(pool).await?;
-    let mut query = QueryBuilder::<Postgres>::new(
-        "SELECT id,peer_jid,stanza,encrypted,stanza_id,created_at
-         FROM message_archive
-         WHERE owner_id=",
+    let mut query = QueryBuilder::<Postgres>::new(PERSONAL_DISPLAY_SELECT);
+    query.push(
+        "(SELECT id,peer_jid,stanza,encrypted,stanza_id,created_at,source_by,source_stanza_id
+                 FROM message_archive WHERE owner_id=",
     );
     query.push_bind(owner_id);
     if let Some(peer) = canonical_peer_jid {
@@ -98,17 +102,23 @@ pub async fn history_page(
     }
     query
         .push(" ORDER BY created_at DESC,id DESC LIMIT ")
-        .push_bind(fetch_limit);
+        .push_bind(fetch_limit)
+        .push(")")
+        .push(PERSONAL_DISPLAY_JOIN)
+        .push(" ORDER BY page.created_at DESC,page.id DESC");
     let rows = query.build().fetch_all(pool).await?;
     Ok(finish(
         rows.into_iter()
-            .map(|row| HistoryPageRow {
-                id: row.get("id"),
-                peer_jid: row.get("peer_jid"),
-                stanza: row.get("stanza"),
-                encrypted: row.get("encrypted"),
-                stanza_id: row.get("stanza_id"),
-                created_at: row.get("created_at"),
+            .map(|row| {
+                let (stanza, encrypted) = project_personal_archive_content(&row);
+                HistoryPageRow {
+                    id: row.get("id"),
+                    peer_jid: row.get("peer_jid"),
+                    stanza,
+                    encrypted,
+                    stanza_id: row.get("stanza_id"),
+                    created_at: row.get("created_at"),
+                }
             })
             .collect(),
         limit,

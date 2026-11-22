@@ -217,6 +217,33 @@ pub enum SourceArchiveAdmission {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MixReflectionKind<'a> {
+    Original,
+    Retraction {
+        target_id: Uuid,
+        source_participant: &'a str,
+    },
+}
+
+/// A reflection whose transport, source identity and destination were verified by ingress.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct VerifiedMixReflection<'a> {
+    pub personal_archive_id: Uuid,
+    pub owner_id: Uuid,
+    pub channel_jid: &'a str,
+    pub authoritative_stanza_id: Uuid,
+    pub stanza: &'a str,
+    pub encrypted: bool,
+    pub kind: MixReflectionKind<'a>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReflectedMixArchiveOutcome {
+    Archived(SourceArchiveAdmission),
+    Conflict,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CreateChannelOutcome {
     Created(Uuid),
     Conflict,

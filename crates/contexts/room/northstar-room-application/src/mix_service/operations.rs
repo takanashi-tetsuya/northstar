@@ -428,6 +428,15 @@ impl<R: MixRepository> MixService<R> {
             .mix_muc_mirror_service_complete(mix_domain)
             .await
     }
+    pub async fn archive_verified_mix_reflection(
+        &self,
+        request: VerifiedMixReflection<'_>,
+    ) -> Result<ReflectedMixArchiveOutcome> {
+        self.repository
+            .archive_verified_mix_reflection(request)
+            .await
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn archive_mix_message_once(
         &self,

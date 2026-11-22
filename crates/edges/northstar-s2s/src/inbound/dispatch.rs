@@ -120,7 +120,6 @@ pub(super) async fn route_inbound_mix<H: InboundHost>(
         }
     }
     let from = root.attribute("from").unwrap_or_default();
-    let to = root.attribute("to").unwrap_or_default();
     if enforce_federation_policy && !state.federation_entity_allowed(from) {
         return Ok(MixDispatch::Handled(Some(s2s_stanza_error(
             root,
@@ -128,15 +127,8 @@ pub(super) async fn route_inbound_mix<H: InboundHost>(
             "not-authorized",
         ))));
     }
-    let target_is_mix = CanonicalJid::parse(to).is_ok_and(|jid| {
-        same_s2s_domain(jid.domainpart(), &format!("mix.{}", state.local_domain()))
-    });
-    let source_is_mix = prepare_domainpart(authenticated_domain).is_ok_and(|domain| {
-        domain.strip_prefix("mix.").is_some()
-            && CanonicalJid::parse(from).is_ok_and(|jid| same_s2s_domain(jid.domainpart(), &domain))
-    });
-    if !target_is_mix && !source_is_mix {
-        return Ok(MixDispatch::NotMix);
+    if let Some(dispatch) = unbound_mix_dispatch(root, authenticated_domain, state.local_domain()) {
+        return Ok(dispatch);
     }
     if !authenticated_s2s_sender(from, authenticated_domain) {
         return Ok(MixDispatch::Handled(Some(s2s_stanza_error(
@@ -178,6 +170,35 @@ pub(super) async fn route_inbound_mix<H: InboundHost>(
     Ok(MixDispatch::Handled(
         (!consumed).then_some(unsupported_error),
     ))
+}
+
+pub(super) fn unbound_mix_dispatch(
+    root: roxmltree::Node<'_, '_>,
+    authenticated_domain: &str,
+    local_domain: &str,
+) -> Option<MixDispatch> {
+    let to = CanonicalJid::parse(root.attribute("to").unwrap_or_default()).ok();
+    let target_is_mix = to
+        .as_ref()
+        .is_some_and(|jid| same_s2s_domain(jid.domainpart(), &format!("mix.{local_domain}")));
+    let source_is_mix = prepare_domainpart(authenticated_domain).is_ok_and(|domain| {
+        domain.strip_prefix("mix.").is_some()
+            && CanonicalJid::parse(root.attribute("from").unwrap_or_default())
+                .is_ok_and(|jid| same_s2s_domain(jid.domainpart(), &domain))
+    });
+    if target_is_mix || source_is_mix {
+        return None;
+    }
+    if root.tag_name().name() == "message"
+        && root.attribute("type") == Some("groupchat")
+        && to.is_some_and(|jid| same_s2s_domain(jid.domainpart(), local_domain))
+        && root
+            .children()
+            .any(|node| node.is_element() && node.has_tag_name(("urn:xmpp:mix:misc:0", "retract")))
+    {
+        return Some(MixDispatch::Handled(None));
+    }
+    Some(MixDispatch::NotMix)
 }
 
 pub(super) async fn federated_mix_iq_owned<H: InboundHost>(

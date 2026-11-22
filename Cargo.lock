@@ -1806,9 +1806,11 @@ dependencies = [
  "anyhow",
  "northstar-archive-application",
  "northstar-archive-core",
+ "northstar-message-core",
  "northstar-time",
  "northstar-xep-0313",
  "northstar-xmpp-types",
+ "roxmltree",
  "sqlx",
  "uuid",
 ]
@@ -2056,6 +2058,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "northstar-archive-postgres",
  "northstar-auth-core",
  "northstar-auth-postgres",
  "northstar-config",

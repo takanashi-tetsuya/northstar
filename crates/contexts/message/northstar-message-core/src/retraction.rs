@@ -1,8 +1,49 @@
 //! The personal XEP-0424 retraction a message carries.
 
+use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
 
 const NS_RETRACT: &str = "urn:xmpp:message-retract:1";
+
+pub struct RetractionEnvelope<'a> {
+    pub from: Option<&'a str>,
+    pub to: Option<&'a str>,
+    pub kind: Option<&'a str>,
+    pub id: Option<&'a str>,
+}
+
+pub fn render_retraction_tombstone<'a>(
+    envelope: RetractionEnvelope<'_>,
+    stanza_ids: impl IntoIterator<Item = (&'a str, &'a str)>,
+    action_id: &str,
+    stamp: &str,
+) -> String {
+    let mut message = XmlElement::namespaced("message", "jabber:client");
+    for (name, value) in [
+        ("from", envelope.from),
+        ("to", envelope.to),
+        ("type", envelope.kind),
+        ("id", envelope.id),
+    ] {
+        if let Some(value) = value {
+            message = message.attr(name, value);
+        }
+    }
+    for (id, by) in stanza_ids {
+        message.push_child(
+            XmlElement::namespaced("stanza-id", "urn:xmpp:sid:0")
+                .attr("id", id)
+                .attr("by", by),
+        );
+    }
+    message
+        .child(
+            XmlElement::namespaced("retracted", NS_RETRACT)
+                .attr("stamp", stamp)
+                .attr("id", action_id),
+        )
+        .finish()
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PersonalRetractionCommand {

@@ -1,6 +1,9 @@
 //! MAM archive sources, visibility filters, boundaries and page queries.
 
 use super::*;
+use crate::personal_display::{
+    project_personal_archive_content, PERSONAL_DISPLAY_JOIN, PERSONAL_DISPLAY_SELECT,
+};
 use northstar_archive_core::{MamAccountOutcome, MamLocalAuthority};
 
 #[derive(Clone, Copy)]
@@ -299,11 +302,20 @@ pub async fn mam_archive_page_for_in_transaction(
     let max = query.max.clamp(0, MAX_MAM_PAGE_SIZE);
     let page = plan.page_window(resolved.page, max);
 
-    let mut page_builder = QueryBuilder::<Postgres>::new("SELECT ");
-    page_builder
-        .push(source.select_columns())
-        .push(" FROM ")
-        .push(source.table());
+    let personal = matches!(source, MamArchiveSource::User(_));
+    let mut page_builder = QueryBuilder::<Postgres>::new(if personal {
+        PERSONAL_DISPLAY_SELECT
+    } else {
+        "SELECT "
+    });
+    if personal {
+        page_builder.push("(SELECT ");
+    }
+    page_builder.push(source.select_columns());
+    if personal {
+        page_builder.push(", source_by, source_stanza_id");
+    }
+    page_builder.push(" FROM ").push(source.table());
     push_mam_scope(
         &mut page_builder,
         source,
@@ -320,9 +332,35 @@ pub async fn mam_archive_page_for_in_transaction(
     if let Some(index) = page.offset {
         page_builder.push(" OFFSET ").push_bind(index);
     }
+    if personal {
+        page_builder
+            .push(")")
+            .push(PERSONAL_DISPLAY_JOIN)
+            .push(if page.descending {
+                " ORDER BY page.created_at DESC, page.id DESC"
+            } else {
+                " ORDER BY page.created_at ASC, page.id ASC"
+            });
+    }
     let fetched = page_builder.build().fetch_all(&mut **transaction).await?;
     let (rows, complete) = finish_mam_page(
-        fetched.iter().map(archive_from_row).collect(),
+        fetched
+            .iter()
+            .map(|row| {
+                if !personal {
+                    return archive_from_row(row);
+                }
+                let (stanza, encrypted) = project_personal_archive_content(row);
+                ArchiveRow {
+                    id: row.get("id"),
+                    peer_jid: row.get("peer_jid"),
+                    stanza,
+                    encrypted,
+                    stanza_id: row.get("stanza_id"),
+                    created_at: row.get("created_at"),
+                }
+            })
+            .collect(),
         max,
         page.descending,
     );

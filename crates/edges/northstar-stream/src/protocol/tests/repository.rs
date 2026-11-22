@@ -1607,6 +1607,13 @@ mod mix_ports {
     }
 
     impl MixDeliveryRepository for UnusedRepository {
+        async fn archive_verified_mix_reflection(
+            &self,
+            _request: VerifiedMixReflection<'_>,
+        ) -> Result<ReflectedMixArchiveOutcome> {
+            panic!("unexpected port call: archive_verified_mix_reflection")
+        }
+
         #[allow(clippy::too_many_arguments)]
         async fn archive_mix_message_once(
             &self,

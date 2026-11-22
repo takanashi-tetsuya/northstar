@@ -256,6 +256,13 @@ impl MixPamRepository for Repository {
 }
 
 impl MixDeliveryRepository for Repository {
+    async fn archive_verified_mix_reflection(
+        &self,
+        _request: VerifiedMixReflection<'_>,
+    ) -> Result<ReflectedMixArchiveOutcome> {
+        panic!("unexpected port call: archive_verified_mix_reflection")
+    }
+
     recording_ports! {
         requeue_mix_delivery_dead_letter(dead_letter_id: Uuid) -> bool;
     }

@@ -2374,6 +2374,10 @@
     ],
     [
       "northstar-archive-postgres",
+      "northstar-message-core"
+    ],
+    [
+      "northstar-archive-postgres",
       "northstar-time"
     ],
     [
@@ -2383,6 +2387,10 @@
     [
       "northstar-archive-postgres",
       "northstar-xmpp-types"
+    ],
+    [
+      "northstar-archive-postgres",
+      "roxmltree"
     ],
     [
       "northstar-archive-postgres",
@@ -3131,6 +3139,10 @@
     [
       "northstar-data-tools",
       "base64"
+    ],
+    [
+      "northstar-data-tools",
+      "northstar-archive-postgres"
     ],
     [
       "northstar-data-tools",

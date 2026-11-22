@@ -2,6 +2,7 @@
 
 use super::publish::matches_locked_publisher_identity;
 use super::*;
+use crate::effects::RoomEffects;
 use northstar_room_application::mix_service::MixPublisherIdentity;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -234,6 +235,7 @@ pub async fn retract_mix_message(
     identity: Option<MixBusinessIdentity<'_>>,
     publisher_identity: &MixPublisherIdentity,
     visible_jid: Option<&str>,
+    effects: &impl RoomEffects,
     payloads: &dyn MixEventPayloadRenderer,
 ) -> Result<RetractMixMessageAdmission> {
     let actor = canonical_user_bare(actor)?;
@@ -352,7 +354,7 @@ pub async fn retract_mix_message(
     .bind(tombstone_payload)
     .execute(&mut *transaction)
     .await?;
-    let _ = store_mix_event_tx(
+    let stored = store_mix_event_tx(
         &mut transaction,
         &channel,
         NODE_MESSAGES,
@@ -361,6 +363,16 @@ pub async fn retract_mix_message(
         retraction_payload,
     )
     .await?;
+    anyhow::ensure!(stored.is_some(), "MIX retraction action identity collided");
+    effects
+        .record_mix_source_retraction_in_tx(
+            &mut transaction,
+            &channel.jid(),
+            target_id,
+            retraction_id,
+            &sender.participant_id.to_string(),
+        )
+        .await?;
     let recipients = mix_subscribers_tx(&mut transaction, channel_id, NODE_MESSAGES).await?;
     let stanza_template = recipients
         .first()

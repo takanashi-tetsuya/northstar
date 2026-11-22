@@ -38,6 +38,14 @@ use self::import_payloads::{
     parse_private, parse_roster, parse_scram,
 };
 
+#[cfg(feature = "test-support")]
+pub async fn export_mam_for_test(pool: &PgPool, user_id: Uuid) -> Result<String> {
+    let mut xml = String::new();
+    let mut count = 0;
+    export_data::export_mam(pool, user_id, &mut xml, &mut count).await?;
+    Ok(xml)
+}
+
 const PIE_NS: &str = "urn:xmpp:pie:0";
 const SCRAM_NS: &str = "urn:xmpp:pie:0#scram";
 const MAM_PIE_NS: &str = "urn:xmpp:pie:0#mam";

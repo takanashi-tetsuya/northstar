@@ -30,12 +30,13 @@ pub use self::contracts::{
     MixAccessEntryOperation, MixAccessEntryUpdate, MixAccessList, MixAccount, MixChannel,
     MixConfigUpdate, MixDeliveryDeadLetter, MixInfoUpdate, MixInvitationProof, MixMucLinkOutcome,
     MixMutationAdmission, MixMutationOutcome, MixParticipantPreference,
-    MixParticipantPreferenceUpdateOutcome, MixRelayProfileDenial, MixRelayProfileKind,
-    MixRelayProfileQuery, MixRelayProfileRequester, MixRelayProfileResult, MixRepository,
-    MixRoleUpdate, PamMembership, PamOperationReplay, PresenceOutcome, RegisterMixNickOutcome,
-    RemotePamCompletion, RemotePamCompletionOutcome, RemotePamJoin, RetractMixMessageAdmission,
+    MixParticipantPreferenceUpdateOutcome, MixReflectionKind, MixRelayProfileDenial,
+    MixRelayProfileKind, MixRelayProfileQuery, MixRelayProfileRequester, MixRelayProfileResult,
+    MixRepository, MixRoleUpdate, PamMembership, PamOperationReplay, PresenceOutcome,
+    ReflectedMixArchiveOutcome, RegisterMixNickOutcome, RemotePamCompletion,
+    RemotePamCompletionOutcome, RemotePamJoin, RetractMixMessageAdmission,
     RetractMixMessageOutcome, RetractMixMessageRequest, SetNickError, SourceArchiveAdmission,
-    StoreMixMessageRequest, UpdateSubscriptionsOutcome,
+    StoreMixMessageRequest, UpdateSubscriptionsOutcome, VerifiedMixReflection,
 };
 pub use self::delivery_repository::MixDeliveryRepository;
 pub use self::identity_policy::MixPublisherIdentity;

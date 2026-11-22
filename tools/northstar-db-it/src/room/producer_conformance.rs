@@ -254,6 +254,7 @@ async fn producer(pool: &PgPool, label: &str) -> anyhow::Result<()> {
                 None,
                 &ABSENT_PUBLISHER,
                 None,
+                &WorkflowRoomEffects,
                 &payloads,
             )
             .await?;
@@ -324,6 +325,13 @@ async fn producers_and_wrappers_take_the_delivery_fence_before_business_rows() {
             .await
             .unwrap();
         assert_eq!(events, 0, "{label}: no mutation before the fence");
+        let facts: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM mix_source_retractions WHERE source_by='producer-fence@mix.example.test'",
+        )
+        .fetch_one(&mut *probe)
+        .await
+        .unwrap();
+        assert_eq!(facts, 0, "{label}: no source fact before the fence");
         probe.rollback().await.unwrap();
         fence.commit().await.unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(5), task)

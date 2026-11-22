@@ -965,3 +965,5 @@ async fn claimed_effects_preserve_observed_contracts() {
     shared_policy_contracts().await;
     ingress_contracts().await;
 }
+
+mod reflected_retraction;

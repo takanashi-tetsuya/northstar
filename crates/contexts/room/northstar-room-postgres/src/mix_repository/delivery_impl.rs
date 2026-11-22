@@ -3,6 +3,15 @@
 use super::*;
 
 impl<E: RoomEffects> MixDeliveryRepository for PostgresMixRepository<E> {
+    async fn archive_verified_mix_reflection(
+        &self,
+        request: VerifiedMixReflection<'_>,
+    ) -> Result<ReflectedMixArchiveOutcome> {
+        self.effects
+            .archive_verified_mix_reflection(&self.pool, request)
+            .await
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn archive_mix_message_once(
         &self,

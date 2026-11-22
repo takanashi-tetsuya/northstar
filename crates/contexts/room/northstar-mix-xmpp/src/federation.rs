@@ -4,9 +4,12 @@ use super::relay::relay_profile_reply;
 use super::*;
 use northstar_federation_core::S2sOutboxCapacityExceeded;
 use northstar_room_application::mix_service::{
-    MixMamAdmissionOutcome, MixRelayProfileDenial, MixRelayProfileQuery, MixRelayProfileRequester,
-    MixRelayProfileResult,
+    MixMamAdmissionOutcome, MixReflectionKind, MixRelayProfileDenial, MixRelayProfileQuery,
+    MixRelayProfileRequester, MixRelayProfileResult, ReflectedMixArchiveOutcome,
+    VerifiedMixReflection,
 };
+
+mod reflected_retraction;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct AuthenticatedMixIqActor {
@@ -747,7 +750,19 @@ pub async fn federated_mix_message(
     authenticated_domain: &str,
     raw: String,
 ) -> Result<bool> {
-    let (from, to, id, kind, encrypted, reflected_identity, reflected_stanza_id, validation_error) = {
+    let local_mix = local_mix_domain(state.local_domain());
+    let (
+        from,
+        to,
+        id,
+        kind,
+        encrypted,
+        reflected_identity,
+        reflected_stanza_id,
+        validation_error,
+        claims_retraction,
+        verified_target,
+    ) = {
         let document = Document::parse(&raw).context("malformed federated MIX message")?;
         let root = document.root_element();
         if root.tag_name().name() != "message" {
@@ -759,6 +774,20 @@ pub async fn federated_mix_message(
                 condition,
             )
         });
+        let reflected_stanza_id = reflected_mix_stanza_id(root);
+        let claims_retraction = reflected_retraction::claims_retraction(root);
+        let verified_target = if claims_retraction {
+            reflected_stanza_id.as_ref().ok().and_then(|&action| {
+                reflected_retraction::verified_target(
+                    root,
+                    action,
+                    &local_mix,
+                    authenticated_domain,
+                )
+            })
+        } else {
+            None
+        };
         (
             root.attribute("from").unwrap_or_default().to_owned(),
             root.attribute("to").unwrap_or_default().to_owned(),
@@ -766,12 +795,20 @@ pub async fn federated_mix_message(
             root.attribute("type").unwrap_or("normal").to_owned(),
             is_encrypted(root),
             validate_reflected_mix_identity(root),
-            reflected_mix_stanza_id(root),
+            reflected_stanza_id,
             validation_error,
+            claims_retraction,
+            verified_target,
         )
     };
-    let local_mix = local_mix_domain(state.local_domain());
     let to_jid = CanonicalJid::parse(&to)?;
+    let local_recipient = same_jid_domain(to_jid.domainpart(), state.local_domain());
+    if local_recipient
+        && claims_retraction
+        && (verified_target.is_none() || reflected_identity.is_err() || validation_error.is_some())
+    {
+        return Ok(true);
+    }
     if let Some((error_type, condition)) = validation_error {
         if kind != "error" {
             let response = message_error(&id, &to, &from, error_type, condition);
@@ -795,7 +832,7 @@ pub async fn federated_mix_message(
         }
         return Ok(true);
     }
-    if same_jid_domain(to_jid.domainpart(), state.local_domain()) {
+    if local_recipient {
         if kind != "groupchat" {
             return Ok(false);
         }
@@ -836,21 +873,28 @@ pub async fn federated_mix_message(
         if state.mix_service().is_blocked(user.id, &channel).await? {
             return Ok(true);
         }
-        let personal_archive_id = Uuid::new_v4();
-        let source_stanza_id = authoritative_stanza_id.to_string();
+        let kind = verified_target.map_or(MixReflectionKind::Original, |target_id| {
+            MixReflectionKind::Retraction {
+                target_id,
+                source_participant: participant_id,
+            }
+        });
         let admission = state
             .mix_service()
-            .archive_mix_message_once(
-                personal_archive_id,
-                user.id,
-                &channel,
+            .archive_verified_mix_reflection(VerifiedMixReflection {
+                personal_archive_id: Uuid::new_v4(),
+                owner_id: user.id,
+                channel_jid: &channel,
                 authoritative_stanza_id,
-                &raw,
+                stanza: &raw,
                 encrypted,
-                Some(&source_stanza_id),
-            )
+                kind,
+            })
             .await?;
-        if matches!(admission, SourceArchiveAdmission::Replay(_)) {
+        if !matches!(
+            admission,
+            ReflectedMixArchiveOutcome::Archived(SourceArchiveAdmission::Stored(_))
+        ) {
             return Ok(true);
         }
         for (jid, session) in state.session_entries_for(&to_jid.to_string()) {

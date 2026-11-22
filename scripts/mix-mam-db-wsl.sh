@@ -49,6 +49,26 @@ for test_name in \
 done
 
 for test_name in \
+  local_retraction_projects_every_copy_without_rewriting_history \
+  source_fence_serializes_original_admission_in_both_orders \
+  failed_channel_retraction_rolls_back_source_and_delivery \
+  verified_reflection_converges_action_before_original_and_rejects_rebinding \
+  held_source_retraction_preserves_raw_evidence_and_survives_retention; do
+  if ! output="$(TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
+    cargo test --locked --offline -p northstar-db-it \
+    "room::mix_source_retractions::$test_name" \
+    -- --ignored --exact --nocapture 2>&1)"; then
+    printf '%s\n' "$output"
+    exit 1
+  fi
+  printf '%s\n' "$output"
+  if ! grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$output"; then
+    echo "expected exactly one ignored MIX source retraction test to execute: $test_name" >&2
+    exit 1
+  fi
+done
+
+for test_name in \
   mix_mam_paging_across_deletion_preserves_surviving_cursors \
   mix_mam_count_pruning_uses_storage_uuid_for_timestamp_ties; do
   if ! output="$(TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \

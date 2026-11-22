@@ -209,9 +209,13 @@ and Docker artifacts and their provenance. They do not repeat source CI.
   cleanup through the final runtime role, the existing auth lease-lock case,
   independent maintenance readiness and protocol/federation startup; source
   checks alone do not establish those PostgreSQL outcomes.
+- [ ] Apply [migration `0159`](../migrations/0159_mix_source_retractions.sql)
+  with every server process stopped. Reconcile exact grants and verify that
+  runtime holds only `SELECT, INSERT` on `mix_source_retractions` before
+  starting updated binaries; never run old and new readers or writers together.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 157 migrations from `0001` through the current
-  repository maximum `0158`, with `0021` as the sole intentional gap.
+  identity and verify all 158 migrations from `0001` through the current
+  repository maximum `0159`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

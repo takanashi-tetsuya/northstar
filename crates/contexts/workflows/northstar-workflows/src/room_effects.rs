@@ -4,7 +4,8 @@ use anyhow::Result;
 use northstar_delivery_core::mix_outbox::ArchiveRequest;
 use northstar_federation_core::S2sOutboxPolicy;
 use northstar_room_application::mix_service::{
-    MixRelayProfileKind, MixRelayProfileResult, SourceArchiveAdmission,
+    MixRelayProfileKind, MixRelayProfileResult, ReflectedMixArchiveOutcome, SourceArchiveAdmission,
+    VerifiedMixReflection,
 };
 use northstar_room_core::{OfflineStoreOutcome, OfflineStorePolicy};
 use northstar_room_postgres::effects::RoomEffects;
@@ -20,19 +21,6 @@ pub type PostgresMucRepository =
 
 pub type PostgresMixRepository =
     northstar_room_postgres::mix_repository::PostgresMixRepository<WorkflowRoomEffects>;
-
-fn source_admission(
-    admission: crate::mix_archive::SourceArchiveAdmission,
-) -> SourceArchiveAdmission {
-    match admission {
-        crate::mix_archive::SourceArchiveAdmission::Stored(id) => {
-            SourceArchiveAdmission::Stored(id)
-        }
-        crate::mix_archive::SourceArchiveAdmission::Replay(id) => {
-            SourceArchiveAdmission::Replay(id)
-        }
-    }
-}
 
 impl RoomEffects for WorkflowRoomEffects {
     async fn enqueue_federated_stanza(
@@ -227,6 +215,35 @@ impl RoomEffects for WorkflowRoomEffects {
         .await
     }
 
+    async fn record_mix_source_retraction_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        channel: &str,
+        target: Uuid,
+        action: Uuid,
+        participant: &str,
+    ) -> Result<()> {
+        use northstar_archive_postgres::mix_source_retractions::{
+            lock_sources_in_tx, record_locked_in_tx,
+        };
+
+        anyhow::ensure!(target != action, "MIX retraction action equals its target");
+        lock_sources_in_tx(tx, channel, &[target, action], true).await?;
+        anyhow::ensure!(
+            record_locked_in_tx(tx, channel, target, action, participant).await?,
+            "conflicting MIX source action binding"
+        );
+        Ok(())
+    }
+
+    async fn archive_verified_mix_reflection(
+        &self,
+        pool: &PgPool,
+        request: VerifiedMixReflection<'_>,
+    ) -> Result<ReflectedMixArchiveOutcome> {
+        crate::mix_archive::archive_verified_mix_reflection(pool, request).await
+    }
+
     async fn archive_mix_message_once(
         &self,
         pool: &PgPool,
@@ -249,7 +266,6 @@ impl RoomEffects for WorkflowRoomEffects {
             client_stanza_id,
         )
         .await
-        .map(source_admission)
     }
 
     async fn archive_mix_message_once_observed(
@@ -257,8 +273,6 @@ impl RoomEffects for WorkflowRoomEffects {
         pool: &PgPool,
         request: &ArchiveRequest,
     ) -> Result<SourceArchiveAdmission> {
-        crate::mix_archive::archive_mix_message_once_observed(pool, request)
-            .await
-            .map(source_admission)
+        crate::mix_archive::archive_mix_message_once_observed(pool, request).await
     }
 }

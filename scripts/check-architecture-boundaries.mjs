@@ -2608,7 +2608,11 @@ if (/\bstate\.cluster\b/.test(clusterMaintenance)
     || !mucRedisAdapter.includes('self.reconcile_muc_soft_state(room_jid)')) {
   throw new Error('cluster lease maintenance must use scoped Redis projection authority');
 }
-const clusterListener = rustItemBody(readProductionModule('crates/edges/northstar-cluster/src/listener.rs', { root }), 'async fn listen_once<A: ClusterAdapters>(');
+// listen_once delegates to step functions in listener/, so the forbidden read
+// is checked over the whole listener module and the required call in the
+// session-termination step.
+const clusterListener = readProductionModule('crates/edges/northstar-cluster/src/listener.rs', { root });
+const clusterSessionTermination = rustItemBody(clusterListener, 'async fn terminate_session<A: ClusterAdapters>(');
 const clusterListenerTransport = rustItemBody(cluster, 'pub struct ClusterPubsubListenerTransport');
 const clusterListenerSupervisor = rustItemBody(cluster, 'pub async fn run_pubsub_listener<A: ClusterAdapters>(');
 if (/\b(?:ServerNode|ClusterManager|signer|pending_acks|replay)\s*:/.test(clusterListenerTransport)
@@ -2618,7 +2622,7 @@ if (/\b(?:ServerNode|ClusterManager|signer|pending_acks|replay)\s*:/.test(cluste
 const listenerDispatch = read('crates/edges/northstar-cluster/src/listener_dispatch.rs');
 const listenerDispatchConstructor = read('src/node/adapters/cluster_listener_dispatch.rs');
 if (clusterListener.includes('db::cluster_session_route_authority(')
-    || !clusterListener.includes('dispatch.terminate_exact_session(')
+    || !clusterSessionTermination.includes('dispatch.terminate_exact_session(')
     || !listenerDispatchConstructor.includes('SessionTerminationAuthorityService::new(')
     || !listenerDispatch.includes('fence_local_session_in(')) {
   throw new Error('signed session termination must re-read exact route authority through its service');

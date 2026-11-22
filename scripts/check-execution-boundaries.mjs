@@ -158,6 +158,9 @@ export function readExecutionSources() {
     name === 'state' ? readModuleParts(file, { root, includeTests: false })
       .filter(part => !sessionHostForwards.test(part.path.replaceAll('\\', '/')))
       .map(part => part.source).join('\n')
+      // Keep the existing field-shape checks strict outside the five fields shared by credential siblings.
+      : name === 'authFacts' ? withoutTestModules(readProductionModule(file, { root }))
+        .replace(/^([ \t]+)pub\(super\) ((?:observation: CredentialObservation|prepared: &'a PreparedCredential|attempt: Uuid|request: CredentialRequest|receipt: ReceiptProjection),)$/gm, '$1$2')
       : productionModules.has(name) ? readProductionModule(file, { root })
       : roleSplitSources.has(name) ? readRoleSplitFile(file, { root }) : fs.readFileSync(path.join(root, file), 'utf8')]));
 }

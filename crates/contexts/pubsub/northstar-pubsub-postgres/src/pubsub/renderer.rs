@@ -12,6 +12,9 @@ use super::{
 /// locked the source node, every ancestor collection and their subscription
 /// authority. The returned rows are inserted before the mutation commits.
 pub trait PubSubMutationOutboxRenderer: Sync {
+    /// Draw an ID for the mutation event or a fallback subscription ID.
+    fn new_event_id(&self) -> Uuid;
+
     fn render_create(
         &self,
         node: &PubSubNode,
@@ -147,7 +150,11 @@ pub trait PubSubMutationOutboxRenderer: Sync {
 pub struct NoopMutationOutboxRenderer;
 
 #[cfg(any(test, feature = "test-support"))]
-impl PubSubMutationOutboxRenderer for NoopMutationOutboxRenderer {}
+impl PubSubMutationOutboxRenderer for NoopMutationOutboxRenderer {
+    fn new_event_id(&self) -> Uuid {
+        Uuid::new_v4()
+    }
+}
 
 #[cfg(any(test, feature = "test-support"))]
 pub(super) struct FixedMutationOutboxRenderer<'a>(
@@ -156,6 +163,10 @@ pub(super) struct FixedMutationOutboxRenderer<'a>(
 
 #[cfg(any(test, feature = "test-support"))]
 impl PubSubMutationOutboxRenderer for FixedMutationOutboxRenderer<'_> {
+    fn new_event_id(&self) -> Uuid {
+        Uuid::new_v4()
+    }
+
     fn render_create(
         &self,
         _: &PubSubNode,

@@ -220,7 +220,7 @@ pub async fn set_affiliations_with_renderer(
             &node,
             jid,
             affiliation,
-            Uuid::new_v4(),
+            renderer.new_event_id(),
             event_time,
         )?);
     }
@@ -231,7 +231,7 @@ pub async fn set_affiliations_with_renderer(
             std::slice::from_ref(&subscription.jid),
             &[],
             None,
-            Uuid::new_v4(),
+            renderer.new_event_id(),
             event_time,
         )?);
     }
@@ -242,7 +242,7 @@ pub async fn set_affiliations_with_renderer(
             std::slice::from_ref(&subscription.jid),
             &[],
             last_item.as_ref(),
-            Uuid::new_v4(),
+            renderer.new_event_id(),
             event_time,
         )?);
     }

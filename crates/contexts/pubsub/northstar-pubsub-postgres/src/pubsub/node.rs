@@ -305,7 +305,8 @@ pub(super) async fn create_node_in_transaction(
         .expect("newly created PubSub node disappeared inside its transaction");
     let audience =
         notification_audience_in_transaction(transaction, &created, "nodes", event_time).await?;
-    let outbox = renderer.render_create(&created, &audience, Uuid::new_v4(), event_time)?;
+    let outbox =
+        renderer.render_create(&created, &audience, renderer.new_event_id(), event_time)?;
     enqueue_locked_mutation_outbox(transaction, &outbox, event_time).await?;
     Ok(Created(Box::new(created)))
 }
@@ -817,7 +818,7 @@ pub async fn update_node_config_and_graph_with_outbox(
             &updated,
             &updated_config,
             &audience,
-            Uuid::new_v4(),
+            renderer.new_event_id(),
             event_time,
         )?);
     }
@@ -841,7 +842,7 @@ pub async fn update_node_config_and_graph_with_outbox(
             action,
             &updated.node,
             &audience,
-            Uuid::new_v4(),
+            renderer.new_event_id(),
             event_time,
         )?);
     }
@@ -854,7 +855,7 @@ pub async fn update_node_config_and_graph_with_outbox(
             action,
             &child_name,
             &audience,
-            Uuid::new_v4(),
+            renderer.new_event_id(),
             event_time,
         )?);
     }
@@ -932,7 +933,7 @@ pub async fn purge_node_as_owner_with_outbox(
     }
     let audience =
         notification_audience_in_transaction(&mut transaction, &node, "items", event_time).await?;
-    let outbox = renderer.render_purge(&node, &audience, Uuid::new_v4(), event_time)?;
+    let outbox = renderer.render_purge(&node, &audience, renderer.new_event_id(), event_time)?;
     sqlx::query("DELETE FROM pubsub_items WHERE node_id = $1")
         .bind(node_id)
         .execute(&mut *transaction)
@@ -950,6 +951,10 @@ pub async fn delete_node_with_redirect(
 ) -> Result<bool> {
     struct EmptyRenderer;
     impl PubSubMutationOutboxRenderer for EmptyRenderer {
+        fn new_event_id(&self) -> Uuid {
+            Uuid::new_v4()
+        }
+
         fn render_items(
             &self,
             _node: &PubSubNode,
@@ -1080,7 +1085,7 @@ pub async fn delete_node_as_owner_with_redirect_and_outbox(
         redirect,
         &audience,
         &nonactive_recipients,
-        Uuid::new_v4(),
+        renderer.new_event_id(),
         event_time,
     )?;
     sqlx::query("DELETE FROM pubsub_nodes WHERE id = $1")

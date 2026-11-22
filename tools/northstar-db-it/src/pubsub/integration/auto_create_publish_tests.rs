@@ -12,6 +12,10 @@ struct AutoCreateRenderer {
 }
 
 impl PubSubMutationOutboxRenderer for AutoCreateRenderer {
+    fn new_event_id(&self) -> Uuid {
+        self.inner.new_event_id()
+    }
+
     fn render_create(
         &self,
         node: &PubSubNode,

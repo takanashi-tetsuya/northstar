@@ -5,6 +5,10 @@ use super::*;
 struct FailingRetractRenderer;
 
 impl PubSubMutationOutboxRenderer for FailingRetractRenderer {
+    fn new_event_id(&self) -> Uuid {
+        Uuid::new_v4()
+    }
+
     fn render_retract(
         &self,
         _: &PubSubNode,

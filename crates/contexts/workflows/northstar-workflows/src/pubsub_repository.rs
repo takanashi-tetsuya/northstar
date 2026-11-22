@@ -23,12 +23,12 @@ use northstar_pubsub_core::{
     PepNodeConfig, PepOutboxAuthorizationMode, PepOutboxAuthorizationOutcome, PepOutboxDropReason,
     PepOutboxEventKind, PepOutboxFactory, PepOwnerMutationOutcome, PepPresenceSubscription,
     PepPublishOutcome, PepSubscribeOutboxFactory, PepSubscribeOutcome, PepSubscribeSnapshot,
-    PepSubscription, PepSubscriptionActor, PepUnsubscribeOutcome, PubSubAccount, PubSubAffiliation,
-    PubSubConfigOutcome, PubSubItem, PubSubNode, PubSubNodeConfig, PubSubNodeMetadata,
-    PubSubOutboxDeliveryKind, PubSubOutboxFailureDisposition, PubSubOutboxInsert,
-    PubSubOutboxSnapshot, PubSubOutboxSource, PubSubSubscription, PublishItemsOutcome,
-    RetractItemsOutcome, SetAffiliationsOutcome, SetSubscriptionsOutcome,
-    SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome,
+    PepSubscription, PepSubscriptionActor, PepUnsubscribeOutcome, PreparedEventContext,
+    PubSubAccount, PubSubAffiliation, PubSubConfigOutcome, PubSubItem, PubSubNode,
+    PubSubNodeConfig, PubSubNodeMetadata, PubSubOutboxDeliveryKind, PubSubOutboxFailureDisposition,
+    PubSubOutboxInsert, PubSubOutboxSnapshot, PubSubOutboxSource, PubSubSubscription,
+    PubSubTimeSources, PublishItemsOutcome, RetractItemsOutcome, SetAffiliationsOutcome,
+    SetSubscriptionsOutcome, SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome,
 };
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -64,15 +64,27 @@ pub struct PostgresPubSubRepository {
     pool: PgPool,
     domain: String,
     renderer: PubSubEventRenderer,
+    time: PubSubTimeSources,
 }
 impl PostgresPubSubRepository {
     pub fn new(pool: PgPool, domain: &str) -> Self {
+        let renderer = PubSubEventRenderer::new(domain);
+        let time = renderer.time_sources().clone();
         Self {
             pool,
             domain: domain.to_owned(),
-            renderer: PubSubEventRenderer::new(domain),
+            renderer,
+            time,
         }
     }
+
+    /// Use the same clock and UUID source as the PubSub service.
+    pub fn with_time_sources(mut self, time: PubSubTimeSources) -> Self {
+        self.renderer = self.renderer.with_time_sources(&time);
+        self.time = time;
+        self
+    }
+
     async fn lock_pep_subscription_principal(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
@@ -213,8 +225,10 @@ impl PostgresPubSubRepository {
             .to_string();
             local_accounts.insert(bare, id);
         }
-        let event_id = Uuid::new_v4();
-        let created_at = northstar_time::Utc::now();
+        let PreparedEventContext {
+            id: event_id,
+            at: created_at,
+        } = self.time.prepare_event();
         let mut seen = HashSet::new();
         let mut outbox = Vec::new();
         for (recipient, payload) in deliveries {
@@ -516,8 +530,10 @@ impl PostgresPubSubRepository {
                 .all(|(recipient, _)| audience.authorizes_routed_jid(recipient)),
             "PEP renderer escaped the transaction-owned audience"
         );
-        let event_id = Uuid::new_v4();
-        let created_at = northstar_time::Utc::now();
+        let PreparedEventContext {
+            id: event_id,
+            at: created_at,
+        } = self.time.prepare_event();
         let mut seen = HashSet::new();
         deliveries
             .into_iter()
@@ -684,13 +700,15 @@ fn map_database_busy(error: anyhow::Error) -> anyhow::Error {
 #[cfg(any(test, feature = "test-support"))]
 pub fn test_pubsub_service(pool: PgPool, domain: &str) -> PubSubService<PostgresPubSubRepository> {
     let capacity = pool.options().get_max_connections();
+    let time = PubSubTimeSources::default();
     PubSubService::new_with_durable_outbox_database_admission(
-        PostgresPubSubRepository::new(pool, domain),
+        PostgresPubSubRepository::new(pool, domain).with_time_sources(time.clone()),
         capacity,
         northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission::for_primary_pool(
             capacity,
         ),
     )
+    .with_time_sources(time)
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 //! storage services over their PostgreSQL repositories.
 
 use crate::node::*;
+use northstar_pubsub_core::PubSubTimeSources;
 use northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission;
 
 /// The pubsub context's services, built once at startup.
@@ -57,21 +58,25 @@ impl PubSubModule {
         pool: &PgPool,
         durable_outbox_database_admission: &DurableOutboxDatabaseAdmission,
     ) -> Self {
+        let time = PubSubTimeSources::default();
         let pubsub_service =
             northstar_pubsub_application::PubSubService::new_with_durable_outbox_database_admission(
                 northstar_workflows::pubsub_repository::PostgresPubSubRepository::new(
                     pool.clone(),
                     &config.domain,
-                ),
+                )
+                .with_time_sources(time.clone()),
                 pool.options().get_max_connections(),
                 durable_outbox_database_admission.clone(),
-            );
+            )
+            .with_time_sources(time.clone());
         let profile_service =
             northstar_pubsub_application::profile::ProfileService::with_mutation_admission(
                 northstar_workflows::profile::PostgresProfileRepository::new(
                     pool.clone(),
                     config.domain.clone(),
-                ),
+                )
+                .with_time_sources(time),
                 pubsub_service.mutation_admission(),
             );
         let private_storage_service =

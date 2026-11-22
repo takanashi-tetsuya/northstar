@@ -7,6 +7,7 @@ use northstar_pubsub_application::profile::{
     ProfileOutboxFactory, ProfilePepWrite, ProfilePublishResult, ProfilePublishStatus,
     ProfileRepository, PublicVCard,
 };
+use northstar_pubsub_core::{PreparedEventContext, PubSubTimeSources};
 use northstar_xml_builder::XmlElement;
 use northstar_xmpp_avatar::{
     detected_media_type, sha1_hex, valid_png_image, AVATAR_DATA, AVATAR_METADATA,
@@ -18,11 +19,23 @@ use uuid::Uuid;
 pub struct PostgresProfileRepository {
     pool: PgPool,
     domain: String,
+    time: PubSubTimeSources,
 }
 impl PostgresProfileRepository {
     pub fn new(pool: PgPool, domain: String) -> Self {
-        Self { pool, domain }
+        Self {
+            pool,
+            domain,
+            time: PubSubTimeSources::default(),
+        }
     }
+
+    /// Use the same clock and UUID source as the PubSub service.
+    pub fn with_time_sources(mut self, time: PubSubTimeSources) -> Self {
+        self.time = time;
+        self
+    }
+
     async fn exact_profile_outbox(
         &self,
         transaction: &mut Transaction<'_, Postgres>,
@@ -210,6 +223,7 @@ impl PostgresProfileRepository {
             &self.domain,
             &local_accounts,
             &deliveries,
+            self.time.prepare_event(),
         )
     }
 
@@ -975,6 +989,7 @@ fn privacy_denies_message(
     false
 }
 
+#[allow(clippy::too_many_arguments)]
 fn profile_outbox(
     user_id: Uuid,
     owner_bare_jid: &str,
@@ -983,9 +998,8 @@ fn profile_outbox(
     local_domain: &str,
     local_accounts: &HashMap<String, Uuid>,
     deliveries: &[(String, String)],
+    event: PreparedEventContext,
 ) -> Result<Vec<northstar_pubsub_postgres::PubSubOutboxInsert>> {
-    let event_id = Uuid::new_v4();
-    let created_at = northstar_time::Utc::now();
     deliveries
         .iter()
         .map(|(recipient, message)| {
@@ -996,7 +1010,7 @@ fn profile_outbox(
                 local_accounts.get(&recipient_bare).copied()
             };
             northstar_pubsub_postgres::PubSubOutboxInsert::new_pep_stanza(
-                event_id,
+                event.id,
                 user_id,
                 owner_bare_jid,
                 sender_connection_id,
@@ -1007,7 +1021,7 @@ fn profile_outbox(
                 message.clone(),
                 node,
                 local_domain,
-                created_at,
+                event.at,
             )
         })
         .collect()

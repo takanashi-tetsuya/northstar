@@ -171,7 +171,13 @@ pub(super) async fn publish_items_in_transaction(
     }
     let audience =
         notification_audience_in_transaction(transaction, &fresh, "items", event_time).await?;
-    let outbox = renderer.render_items(&fresh, items, &audience, Uuid::new_v4(), event_time)?;
+    let outbox = renderer.render_items(
+        &fresh,
+        items,
+        &audience,
+        renderer.new_event_id(),
+        event_time,
+    )?;
     if !fresh.persist_items {
         enqueue_locked_mutation_outbox(transaction, &outbox, event_time).await?;
         return Ok(PublishItemsOutcome::Published);
@@ -343,7 +349,13 @@ pub async fn retract_items_with_renderer(
         let audience =
             notification_audience_in_transaction(&mut transaction, &node, "items", event_time)
                 .await?;
-        renderer.render_retract(&node, item_ids, &audience, Uuid::new_v4(), event_time)?
+        renderer.render_retract(
+            &node,
+            item_ids,
+            &audience,
+            renderer.new_event_id(),
+            event_time,
+        )?
     } else {
         Vec::new()
     };

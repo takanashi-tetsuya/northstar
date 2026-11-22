@@ -331,7 +331,7 @@ pub async fn associate_collection_child_with_renderer(
         "associate",
         &fresh_child.node,
         &audience,
-        Uuid::new_v4(),
+        renderer.new_event_id(),
         event_time,
     )?;
     enqueue_locked_mutation_outbox(&mut transaction, &outbox, event_time).await?;
@@ -419,7 +419,7 @@ pub async fn dissociate_collection_child_with_renderer(
             "dissociate",
             &fresh_child.node,
             &audience,
-            Uuid::new_v4(),
+            renderer.new_event_id(),
             event_time,
         )?;
         enqueue_locked_mutation_outbox(&mut transaction, &outbox, event_time).await?;

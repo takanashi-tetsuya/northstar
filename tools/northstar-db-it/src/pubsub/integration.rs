@@ -116,6 +116,10 @@ impl RaceMutationRenderer {
 }
 
 impl PubSubMutationOutboxRenderer for RaceMutationRenderer {
+    fn new_event_id(&self) -> Uuid {
+        self.inner.new_event_id()
+    }
+
     fn render_create(
         &self,
         node: &PubSubNode,

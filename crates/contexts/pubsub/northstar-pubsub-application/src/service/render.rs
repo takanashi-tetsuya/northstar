@@ -39,6 +39,11 @@ impl PubSubEventRenderer {
         self.time = time.clone();
         self
     }
+
+    /// Return the clock and UUID source configured for this renderer.
+    pub fn time_sources(&self) -> &PubSubTimeSources {
+        &self.time
+    }
 }
 pub(super) const NS_PUBSUB_EVENT: &str = "http://jabber.org/protocol/pubsub#event";
 pub(super) const NS_DATA: &str = "jabber:x:data";

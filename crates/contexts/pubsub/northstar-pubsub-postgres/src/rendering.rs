@@ -6,6 +6,10 @@ use northstar_pubsub_core::PubSubNotificationDelivery;
 use uuid::Uuid;
 
 impl crate::PubSubMutationOutboxRenderer for PubSubEventRenderer {
+    fn new_event_id(&self) -> Uuid {
+        self.time_sources().new_uuid()
+    }
+
     fn render_create(
         &self,
         node: &crate::PubSubNode,
@@ -212,5 +216,26 @@ impl crate::PubSubMutationOutboxRenderer for PubSubEventRenderer {
             event_id,
             created_at,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PubSubEventRenderer, Uuid};
+    use crate::PubSubMutationOutboxRenderer;
+    use northstar_pubsub_core::{PubSubTimeSources, SequentialPubSubIds, SystemPubSubClock};
+    use std::sync::Arc;
+
+    #[test]
+    fn mutation_renderer_draws_ids_from_bound_source() {
+        let time = PubSubTimeSources::new(
+            Arc::new(SystemPubSubClock),
+            Arc::new(SequentialPubSubIds::default()),
+        );
+        let renderer = PubSubEventRenderer::new("example.test").with_time_sources(&time);
+
+        assert_eq!(renderer.new_event_id(), Uuid::from_u128(1));
+        assert_eq!(time.new_uuid(), Uuid::from_u128(2));
+        assert_eq!(renderer.new_event_id(), Uuid::from_u128(3));
     }
 }

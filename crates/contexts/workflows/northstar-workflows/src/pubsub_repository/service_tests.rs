@@ -8,14 +8,16 @@ use northstar_pubsub_application::{
     PubSubService, PubSubUpdateSubscriptionOptionsCommand,
 };
 use northstar_pubsub_core::{
-    ClaimedPubSubOutboxDelivery, PepAudienceSnapshot, PepCreateOutcome, PepNodeConfig,
-    PepOutboxAuthorizationMode, PepOutboxAuthorizationOutcome, PepOutboxDropReason,
+    ClaimedPubSubOutboxDelivery, FixedPubSubClock, PepAudienceSnapshot, PepCreateOutcome,
+    PepNodeConfig, PepOutboxAuthorizationMode, PepOutboxAuthorizationOutcome, PepOutboxDropReason,
     PepOutboxEventKind, PepPublishWrite, PepQuotas, PepSubscribeOutcome, PepSubscribeSnapshot,
     PepSubscribeWrite, PepSubscriptionActor, PepUnsubscribeOutcome, PepUnsubscribeWrite,
     PubSubAccount, PubSubNodeId, PubSubOutboxInsert, PubSubSubscription, PubSubSubscriptionOptions,
-    SubscriptionOptionsOutcome, SubscriptionOptionsPatch,
+    PubSubTimeSources, SequentialPubSubIds, SubscriptionOptionsOutcome, SubscriptionOptionsPatch,
+    PUBSUB_OUTBOX_DEFAULT_TTL_SECONDS,
 };
-use northstar_time::{TimeZone, Utc};
+use northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission;
+use northstar_time::{DateTime, TimeZone, Utc};
 use sqlx::PgPool;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -966,10 +968,21 @@ async fn pep_publish_audience_is_linearizable_with_every_revocation_input() {
         .await
         .unwrap();
 
-    let service = Arc::new(crate::pubsub_repository::test_pubsub_service(
-        pool.clone(),
-        "example.test",
-    ));
+    let event_at = Utc.with_ymd_and_hms(2090, 4, 5, 6, 7, 8).unwrap();
+    let time = PubSubTimeSources::new(
+        Arc::new(FixedPubSubClock(event_at)),
+        Arc::new(SequentialPubSubIds::default()),
+    );
+    let capacity = pool.options().get_max_connections();
+    let service = Arc::new(
+        PubSubService::new_with_durable_outbox_database_admission(
+            PostgresPubSubRepository::new(pool.clone(), "example.test")
+                .with_time_sources(time.clone()),
+            capacity,
+            DurableOutboxDatabaseAdmission::for_primary_pool(capacity),
+        )
+        .with_time_sources(time),
+    );
     let gate = Arc::new((Mutex::new(false), Condvar::new()));
     let factory_gate = Arc::clone(&gate);
     let (snapshot_tx, mut snapshot_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1149,6 +1162,20 @@ async fn pep_publish_audience_is_linearizable_with_every_revocation_input() {
         .unwrap(),
         expected_recipients,
         "revocation-first publication must not append a stale audience"
+    );
+    let expires_at =
+        event_at + northstar_time::Duration::seconds(PUBSUB_OUTBOX_DEFAULT_TTL_SECONDS);
+    let event_rows = sqlx::query_as::<_, (Uuid, DateTime<Utc>)>(
+        "SELECT event_id,expires_at FROM pubsub_event_outbox WHERE source_node=$1",
+    )
+    .bind(&node)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        event_rows,
+        vec![(Uuid::from_u128(1), expires_at); expected_recipients.len()],
+        "each recipient must share the prepared event ID and expiry"
     );
     sqlx::query("DELETE FROM users WHERE id=$1")
         .bind(owner_id)

@@ -265,7 +265,7 @@ pub async fn resolve_pending_subscription_with_renderer(
         std::slice::from_ref(&subscriber_jid),
         &[],
         last_item.as_ref(),
-        Uuid::new_v4(),
+        renderer.new_event_id(),
         event_time,
     )?;
     enqueue_locked_mutation_outbox(&mut transaction, &outbox, event_time).await?;
@@ -429,7 +429,7 @@ pub async fn set_subscriptions_with_renderer(
             let planned_subid = expected_transitions
                 .and_then(|expected| expected.iter().find(|(candidate, _, _)| candidate == jid))
                 .map(|(_, _, subid)| subid.clone())
-                .unwrap_or_else(|| Uuid::new_v4().to_string());
+                .unwrap_or_else(|| renderer.new_event_id().to_string());
             let subid: String = sqlx::query_scalar("INSERT INTO pubsub_subscriptions (node_id, jid, state, subid, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5) ON CONFLICT (node_id, jid) DO UPDATE SET state = EXCLUDED.state, updated_at = EXCLUDED.updated_at RETURNING subid")
                 .bind(node_id)
                 .bind(jid)
@@ -470,7 +470,7 @@ pub async fn set_subscriptions_with_renderer(
                 (subscription.state == "subscribed")
                     .then_some(last_item.as_ref())
                     .flatten(),
-                Uuid::new_v4(),
+                renderer.new_event_id(),
                 event_time,
             )?,
         );

@@ -27,9 +27,19 @@ IDs where duplicate presentation matters.
 
 The recipient and option snapshot is frozen while the request is evaluated,
 then stored by the mutation transaction. That snapshot is the event's audience
-and is never re-resolved by a retry worker. A later unsubscribe, affiliation
-change, node delete, presence change, or capability change does not
-retroactively cancel an already accepted event. Conversely, a later subscribe
+and is never re-resolved by a retry worker: a later unsubscribe, affiliation
+change, node delete, presence change, or capability change neither adds nor
+removes a durable recipient, and the worker never substitutes a recipient or
+payload. Delivery can still drop (acknowledge without sending) an accepted PEP
+row. Before routing, every PEP row rechecks live communication authority: a
+disabled or renamed sender or recipient account, a block, or a privacy-list
+denial drops it. Publish and last-item events of security-sensitive PEP nodes
+(OMEMO and legacy Axolotl device lists, bundles and pre-keys; see
+`security_sensitive_pep_node`) use the live-node-access mode and also
+re-evaluate the node's current access model, notification setting and roster
+or whitelist access, so a newer ACL decision drops them too. State-removal
+events (retract, purge, delete, configuration, subscription and affiliation
+state) always keep their causal audience. Conversely, a later subscribe
 does not receive earlier events except through the separately specified
 last-item behavior. Optimistic snapshots whose exact generated identity or
 compatibility projection can race (subscription SubIDs, affiliation-driven

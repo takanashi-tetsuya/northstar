@@ -12,8 +12,10 @@ pub use northstar_xmpp_types::CanonicalJid;
 use uuid::Uuid;
 
 mod item_access;
+mod pep_form_policy;
 mod pep_policy;
 pub mod telemetry;
+pub use pep_form_policy::*;
 pub use pep_policy::*;
 
 pub use item_access::item_retrieval_access;

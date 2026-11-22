@@ -1,5 +1,7 @@
 use anyhow::Result;
-use northstar_pubsub_core::PubSubAccount;
+use northstar_pubsub_core::{
+    pep_publish_config_decision, PepPublishConfigRejection, PubSubAccount,
+};
 use northstar_time::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -673,11 +675,18 @@ pub async fn publish_pep_items_in_transaction(
         roster_groups_allowed: actual.get("roster_groups_allowed"),
         access_whitelist: actual.get("access_whitelist"),
     };
-    if enforce_preconditions && actual != *requested {
-        return Ok(PepPublishOutcome::PreconditionFailed);
-    }
-    if items.len() > actual.max_items as usize {
-        return Ok(PepPublishOutcome::MaxItemsExceeded);
+    let requested = northstar_pubsub_core::PepNodeConfig::from(requested.clone());
+    let actual = northstar_pubsub_core::PepNodeConfig::from(actual);
+    if let Some(rejection) = pep_publish_config_decision(
+        &requested,
+        enforce_preconditions,
+        Some(&actual),
+        items.len(),
+    ) {
+        return Ok(match rejection {
+            PepPublishConfigRejection::PreconditionNotMet => PepPublishOutcome::PreconditionFailed,
+            PepPublishConfigRejection::MaxItemsExceeded => PepPublishOutcome::MaxItemsExceeded,
+        });
     }
     if actual.persist_items {
         for (item_id, payload) in items {

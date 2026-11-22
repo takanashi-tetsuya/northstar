@@ -305,6 +305,8 @@ run_exact_ignored \
 run_exact_ignored \
   pubsub::integration::bookmarks::legacy_bookmark_commit_conflict_is_atomic_and_success_uses_locked_diff
 run_exact_ignored \
+  pubsub::integration::pep_policy_lock::pep_explicit_options_are_checked_against_the_locked_node
+run_exact_ignored \
   pubsub::integration::pep_snapshot::item_read_never_combines_revoked_access_with_a_new_publication
 run_exact_ignored \
   pubsub::integration::pep_snapshot::node_discovery_cannot_pair_the_old_open_model_with_a_new_unblock

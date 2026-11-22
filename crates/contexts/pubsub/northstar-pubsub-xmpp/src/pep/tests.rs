@@ -1,4 +1,5 @@
 use super::*;
+use northstar_pubsub_core::pep_nodes::{CONTACTS, OMEMO_BUNDLES, OMEMO_DEVICES};
 use roxmltree::Document;
 
 #[test]

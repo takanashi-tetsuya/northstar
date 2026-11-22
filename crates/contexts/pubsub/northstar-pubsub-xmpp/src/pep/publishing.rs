@@ -1,6 +1,11 @@
 //! Handle PEP publication and retraction with publication options, event factories, and item normalization.
 
+use super::forms::{decode_pep_config_form, is_pep_config_form};
 use super::*;
+use northstar_pubsub_core::{
+    pep_publish_config_decision, requested_pep_publish_config, PepConfigPatch,
+    PepPublishConfigRejection, PepRequestedConfig, PubSubTimeSources,
+};
 
 pub(super) struct PepPublishedEventFactory<'a, S> {
     pub(super) session: &'a S,
@@ -68,19 +73,13 @@ pub(super) fn profile_publish_error(id: &str, status: ProfilePublishStatus) -> O
     match status {
         ProfilePublishStatus::Published => None,
         ProfilePublishStatus::Unauthorized => Some(iq_error(id, "not-authorized")),
-        ProfilePublishStatus::PreconditionFailed => Some(pep_error(
+        ProfilePublishStatus::PreconditionFailed => Some(publish_config_error(
             id,
-            None,
-            "cancel",
-            "conflict",
-            Some("precondition-not-met"),
+            PepPublishConfigRejection::PreconditionNotMet,
         )),
-        ProfilePublishStatus::MaxItemsExceeded => Some(pep_error(
+        ProfilePublishStatus::MaxItemsExceeded => Some(publish_config_error(
             id,
-            None,
-            "modify",
-            "not-allowed",
-            Some("max-items-exceeded"),
+            PepPublishConfigRejection::MaxItemsExceeded,
         )),
         ProfilePublishStatus::QuotaExceeded => {
             Some(pep_error(id, None, "wait", "resource-constraint", None))
@@ -210,83 +209,23 @@ pub async fn pep_publish<S: PepSession>(
             ));
         }
     };
-    let stored_config = session.pep_pubsub_service().pep_node(user.id, node).await?;
-    if options.explicit
-        && stored_config
-            .as_ref()
-            .is_some_and(|config| config != &options.config)
-    {
-        return Ok(pep_error(
-            id,
-            None,
-            "cancel",
-            "conflict",
-            Some("precondition-not-met"),
-        ));
-    }
-    let effective_config = stored_config
-        .clone()
-        .unwrap_or_else(|| options.config.clone());
-    let mut normalized = Vec::with_capacity(items.len());
-    let mut assigned_ids = Vec::new();
-    let mut unique_ids = HashSet::new();
-    for item in items {
-        let generated = item.attribute("id").is_none();
-        let wire_item_id = item
-            .attribute("id")
-            .map(str::to_owned)
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let item_id = match northstar_pubsub_core::canonical_profile_item_id(node, &wire_item_id) {
-            Ok(item_id) => item_id,
-            Err(_) => {
-                return Ok(pep_error(
-                    id,
-                    None,
-                    "modify",
-                    "bad-request",
-                    Some("invalid-payload"),
-                ));
-            }
-        };
-        if item_id.is_empty()
-            || item_id.len() > 1024
-            || !unique_ids.insert(item_id.clone())
-            || !valid_pep_payload(node, &item_id, item)
-        {
-            return Ok(pep_error(
-                id,
-                None,
-                "modify",
-                "bad-request",
-                Some("invalid-payload"),
-            ));
-        }
-        let range = item.range();
-        let item_xml =
-            normalized_pep_item(&raw[range], &item_id, generated || wire_item_id != item_id);
-        if item_xml.len() > 512 * 1024 {
-            return Ok(pep_error(
-                id,
-                None,
-                "modify",
-                "not-acceptable",
-                Some("payload-too-big"),
-            ));
-        }
-        normalized.push((item_id.clone(), item_xml));
-        if generated {
-            assigned_ids.push(item_id);
-        }
-    }
-    if normalized.len() > effective_config.max_items as usize {
-        return Ok(pep_error(
-            id,
-            None,
-            "modify",
-            "not-allowed",
-            Some("max-items-exceeded"),
-        ));
-    }
+    let service = session.pep_pubsub_service();
+    let stored_config = service.pep_node(user.id, node).await?;
+    let PreparedPepItems {
+        normalized,
+        assigned_ids,
+    } = match prepare_pep_items(
+        id,
+        node,
+        raw,
+        items,
+        &options,
+        stored_config.as_ref(),
+        service.time_sources(),
+    ) {
+        Ok(items) => items,
+        Err(error) => return Ok(error),
+    };
     let borrowed = normalized
         .iter()
         .map(|(item_id, payload)| (item_id.as_str(), payload.as_str()))
@@ -421,21 +360,15 @@ pub async fn pep_publish<S: PepSession>(
             return Ok(iq_error(id, "not-authorized"));
         }
         Some(PepPublishOutcome::PreconditionFailed) => {
-            return Ok(pep_error(
+            return Ok(publish_config_error(
                 id,
-                None,
-                "cancel",
-                "conflict",
-                Some("precondition-not-met"),
+                PepPublishConfigRejection::PreconditionNotMet,
             ));
         }
         Some(PepPublishOutcome::MaxItemsExceeded) => {
-            return Ok(pep_error(
+            return Ok(publish_config_error(
                 id,
-                None,
-                "modify",
-                "not-allowed",
-                Some("max-items-exceeded"),
+                PepPublishConfigRejection::MaxItemsExceeded,
             ));
         }
         Some(PepPublishOutcome::QuotaExceeded) => {
@@ -568,131 +501,128 @@ pub(super) async fn pep_retract<S: PepSession>(
     Ok(iq_result(id, ""))
 }
 
-pub(super) struct PublishOptions {
-    pub(super) config: PepNodeConfig,
-    pub(super) explicit: bool,
-}
-
-pub(super) fn publish_options(
-    pubsub: Node<'_, '_>,
-    node: &str,
-) -> std::result::Result<PublishOptions, ()> {
-    let mut config = northstar_pubsub_core::default_pep_node_config(node);
+fn decode_publish_options(pubsub: Node<'_, '_>) -> std::result::Result<Option<PepConfigPatch>, ()> {
     let Some(options) = pubsub.children().find(|child| {
         child.is_element()
             && child.tag_name().namespace() == Some(NS_PUBSUB)
             && child.tag_name().name() == "publish-options"
     }) else {
-        return Ok(PublishOptions {
-            config,
-            explicit: false,
-        });
+        return Ok(None);
     };
     let form = options
         .children()
-        .find(|child| {
-            child.is_element()
-                && child.tag_name().namespace() == Some(NS_XDATA)
-                && child.tag_name().name() == "x"
-                && child.attribute("type") == Some("submit")
-        })
+        .find(|child| is_pep_config_form(*child) && child.attribute("type") == Some("submit"))
         .ok_or(())?;
-    if xdata_field(form, "FORM_TYPE") != Some("http://jabber.org/protocol/pubsub#publish-options") {
-        return Err(());
+    decode_pep_config_form(form, "http://jabber.org/protocol/pubsub#publish-options").map(Some)
+}
+
+pub(super) fn publish_options(
+    pubsub: Node<'_, '_>,
+    node: &str,
+) -> std::result::Result<PepRequestedConfig, ()> {
+    let patch = decode_publish_options(pubsub)?;
+    requested_pep_publish_config(node, patch.as_ref()).map_err(|_| ())
+}
+
+struct PreparedPepItems {
+    normalized: Vec<(String, String)>,
+    assigned_ids: Vec<String>,
+}
+
+fn prepare_pep_items(
+    id: &str,
+    node: &str,
+    raw: &str,
+    items: Vec<Node<'_, '_>>,
+    options: &PepRequestedConfig,
+    stored_config: Option<&PepNodeConfig>,
+    time_sources: &PubSubTimeSources,
+) -> std::result::Result<PreparedPepItems, String> {
+    // Reject explicit mismatches before decoding payloads without acquiring the owner lock.
+    // The decision against the locked configuration is authoritative and uses the same function.
+    if let Some(rejection) =
+        pep_publish_config_decision(&options.config, options.explicit, stored_config, 0)
+    {
+        return Err(publish_config_error(id, rejection));
     }
-    let mut seen_fields = HashSet::new();
-    for field in form.children().filter(|child| {
-        child.is_element()
-            && child.tag_name().namespace() == Some(NS_XDATA)
-            && child.tag_name().name() == "field"
-    }) {
-        let variable = field.attribute("var").ok_or(())?;
-        if !seen_fields.insert(variable) {
-            return Err(());
+    let mut normalized = Vec::with_capacity(items.len());
+    let mut assigned_ids = Vec::new();
+    let mut unique_ids = HashSet::new();
+    for item in items {
+        let generated = item.attribute("id").is_none();
+        let wire_item_id = item
+            .attribute("id")
+            .map(str::to_owned)
+            .unwrap_or_else(|| time_sources.new_uuid().to_string());
+        let item_id = match northstar_pubsub_core::canonical_profile_item_id(node, &wire_item_id) {
+            Ok(item_id) => item_id,
+            Err(_) => {
+                return Err(pep_error(
+                    id,
+                    None,
+                    "modify",
+                    "bad-request",
+                    Some("invalid-payload"),
+                ));
+            }
+        };
+        if item_id.is_empty()
+            || item_id.len() > 1024
+            || !unique_ids.insert(item_id.clone())
+            || !valid_pep_payload(node, &item_id, item)
+        {
+            return Err(pep_error(
+                id,
+                None,
+                "modify",
+                "bad-request",
+                Some("invalid-payload"),
+            ));
         }
-        match variable {
-            "FORM_TYPE" => {}
-            "pubsub#access_model" => {
-                let value = child_text(field, "value").ok_or(())?;
-                if !matches!(value, "open" | "presence" | "roster" | "whitelist") {
-                    return Err(());
-                }
-                config.access_model = value.to_owned();
-            }
-            "pubsub#max_items" => {
-                let value = child_text(field, "value").ok_or(())?;
-                config.max_items = if value == "max" {
-                    northstar_pubsub_core::PEP_MAX_ITEMS
-                } else {
-                    value.parse().map_err(|_| ())?
-                };
-                if !(1..=northstar_pubsub_core::PEP_MAX_ITEMS).contains(&config.max_items) {
-                    return Err(());
-                }
-            }
-            "pubsub#persist_items" => {
-                config.persist_items = parse_form_bool(child_text(field, "value").ok_or(())?)?;
-            }
-            "pubsub#send_last_published_item" => {
-                let value = child_text(field, "value").ok_or(())?;
-                if !matches!(value, "never" | "on_sub" | "on_sub_and_presence") {
-                    return Err(());
-                }
-                config.send_last_published_item = value.to_owned();
-            }
-            "pubsub#deliver_notifications" => {
-                config.deliver_notifications =
-                    parse_form_bool(child_text(field, "value").ok_or(())?)?;
-            }
-            "pubsub#roster_groups_allowed" => {
-                let values = field
-                    .children()
-                    .filter(|node| {
-                        node.is_element()
-                            && node.tag_name().name() == "value"
-                            && node.tag_name().namespace() == Some(NS_XDATA)
-                    })
-                    .map(|node| node.text().unwrap_or_default().to_owned())
-                    .collect::<Vec<_>>();
-                if values.is_empty()
-                    || values.len() > 100
-                    || values
-                        .iter()
-                        .any(|value| value.is_empty() || value.len() > 128)
-                {
-                    return Err(());
-                }
-                config.roster_groups_allowed = values;
-            }
-            _ => return Err(()),
+        let range = item.range();
+        let item_xml =
+            normalized_pep_item(&raw[range], &item_id, generated || wire_item_id != item_id);
+        if item_xml.len() > 512 * 1024 {
+            return Err(pep_error(
+                id,
+                None,
+                "modify",
+                "not-acceptable",
+                Some("payload-too-big"),
+            ));
+        }
+        normalized.push((item_id.clone(), item_xml));
+        if generated {
+            assigned_ids.push(item_id);
         }
     }
-    if matches!(node, OMEMO_DEVICES | OMEMO_BUNDLES)
-        && (config.access_model != "open"
-            || !config.persist_items
-            || node == OMEMO_DEVICES && config.max_items != 1
-            || node == OMEMO_BUNDLES && config.max_items != northstar_pubsub_core::PEP_MAX_ITEMS)
-    {
-        return Err(());
+    if let Some(rejection) = pep_publish_config_decision(
+        &options.config,
+        options.explicit,
+        stored_config,
+        normalized.len(),
+    ) {
+        return Err(publish_config_error(id, rejection));
     }
-    if matches!(node, AVATAR_DATA | AVATAR_METADATA | VCARD4)
-        && (config.access_model != "open"
-            || !config.persist_items
-            || matches!(node, AVATAR_METADATA | VCARD4) && config.max_items != 1)
-    {
-        return Err(());
-    }
-    if matches!(node, BOOKMARKS2 | CONTACTS | "storage:bookmarks")
-        && (config.access_model != "whitelist"
-            || !config.persist_items
-            || config.send_last_published_item != "never")
-    {
-        return Err(());
-    }
-    Ok(PublishOptions {
-        config,
-        explicit: true,
+    Ok(PreparedPepItems {
+        normalized,
+        assigned_ids,
     })
+}
+
+fn publish_config_error(id: &str, rejection: PepPublishConfigRejection) -> String {
+    match rejection {
+        PepPublishConfigRejection::PreconditionNotMet => {
+            pep_error(id, None, "cancel", "conflict", Some("precondition-not-met"))
+        }
+        PepPublishConfigRejection::MaxItemsExceeded => pep_error(
+            id,
+            None,
+            "modify",
+            "not-allowed",
+            Some("max-items-exceeded"),
+        ),
+    }
 }
 
 pub(super) fn normalized_pep_item(item_xml: &str, item_id: &str, rewrite_id: bool) -> String {
@@ -700,4 +630,65 @@ pub(super) fn normalized_pep_item(item_xml: &str, item_id: &str, rewrite_id: boo
         return item_xml.to_owned();
     }
     set_root_attribute(item_xml, "id", item_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use roxmltree::Document;
+
+    #[test]
+    fn explicit_config_mismatch_wins_over_an_invalid_payload() {
+        let raw = "<pubsub xmlns='http://jabber.org/protocol/pubsub'>
+            <publish node='example'><item id='broken'/></publish>
+            <publish-options><x xmlns='jabber:x:data' type='submit'>
+                <field var='FORM_TYPE'><value>http://jabber.org/protocol/pubsub#publish-options</value></field>
+                <field var='pubsub#access_model'><value>open</value></field>
+            </x></publish-options>
+        </pubsub>";
+        let document = Document::parse(raw).unwrap();
+        let pubsub = document.root_element();
+        let item = pubsub
+            .descendants()
+            .find(|node| node.is_element() && node.tag_name().name() == "item")
+            .unwrap();
+        let options = publish_options(pubsub, "example").unwrap();
+        let stored = northstar_pubsub_core::default_pep_node_config("example");
+        for (actual, error_type, condition, detail) in [
+            (&stored, "cancel", "conflict", "precondition-not-met"),
+            (&options.config, "modify", "bad-request", "invalid-payload"),
+        ] {
+            let Err(reply) = prepare_pep_items(
+                "test",
+                "example",
+                raw,
+                vec![item],
+                &options,
+                Some(actual),
+                &PubSubTimeSources::default(),
+            ) else {
+                panic!("expected the publish to be rejected");
+            };
+            let reply = Document::parse(&reply).unwrap();
+            let iq = reply.root_element();
+            assert_eq!(iq.attribute("type"), Some("error"));
+            let error = iq.first_element_child().unwrap();
+            assert_eq!(error.attribute("type"), Some(error_type));
+            let children = error
+                .children()
+                .filter(Node::is_element)
+                .collect::<Vec<_>>();
+            assert_eq!(children.len(), 2);
+            assert_eq!(children[0].tag_name().name(), condition);
+            assert_eq!(
+                children[0].tag_name().namespace(),
+                Some("urn:ietf:params:xml:ns:xmpp-stanzas")
+            );
+            assert_eq!(children[1].tag_name().name(), detail);
+            assert_eq!(
+                children[1].tag_name().namespace(),
+                Some("http://jabber.org/protocol/pubsub#errors")
+            );
+        }
+    }
 }

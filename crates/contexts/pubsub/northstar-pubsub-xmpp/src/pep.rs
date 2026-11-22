@@ -15,6 +15,7 @@ use northstar_pubsub_application::{
     PepPublishItemsCommand, PepPurgeNodeCommand, PepRequester, PepRetractCommand,
     PepSetAffiliationsCommand, PepUnsubscribeBatchCommand, PubSubService,
 };
+use northstar_pubsub_core::pep_nodes::{BOOKMARKS2, VCARD4};
 use northstar_pubsub_core::{
     pep_read_access, PepAccessDenial, PepAccessFacts, PepAudienceSnapshot, PepBlockFacts,
     PepConfigureNodeWrite, PepCreateOutcome, PepDeleteNodeWrite, PepDirectStateSnapshot,
@@ -37,6 +38,7 @@ use roxmltree::Node;
 use sha1::{Digest, Sha1};
 use std::collections::HashSet;
 
+mod forms;
 mod node_management;
 mod notifications;
 mod publishing;
@@ -130,11 +132,6 @@ pub trait PepLastItemDelivery: Sync {
 const NS_PUBSUB: &str = "http://jabber.org/protocol/pubsub";
 const NS_PUBSUB_EVENT: &str = "http://jabber.org/protocol/pubsub#event";
 const NS_XDATA: &str = "jabber:x:data";
-const OMEMO_DEVICES: &str = "urn:xmpp:omemo:2:devices";
-const OMEMO_BUNDLES: &str = "urn:xmpp:omemo:2:bundles";
-const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
-const VCARD4: &str = "urn:xmpp:vcard4";
-const CONTACTS: &str = "urn:xmpp:contacts";
 
 fn canonical_account_jid(username: &str, domain: &str) -> Result<String> {
     northstar_xmpp_types::jid::canonicalize_bare(&format!("{username}@{domain}"))
@@ -822,6 +819,7 @@ const MODULE_SOURCE: &[(&str, &str)] = &[
     ("publishing", include_str!("pep/publishing.rs")),
     ("notifications", include_str!("pep/notifications.rs")),
     ("node_management", include_str!("pep/node_management.rs")),
+    ("forms", include_str!("pep/forms.rs")),
 ];
 
 #[cfg(test)]

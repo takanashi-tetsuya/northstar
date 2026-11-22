@@ -8,12 +8,11 @@ use northstar_xmpp_types::text::contains_unsafe_bidi_controls;
 use roxmltree::Node;
 use std::collections::HashSet;
 
+use northstar_pubsub_core::pep_nodes::{
+    BOOKMARKS2, CONTACTS, OMEMO_BUNDLES, OMEMO_DEVICES, VCARD4,
+};
+
 const NS_OMEMO2: &str = "urn:xmpp:omemo:2";
-const OMEMO_DEVICES: &str = "urn:xmpp:omemo:2:devices";
-const OMEMO_BUNDLES: &str = "urn:xmpp:omemo:2:bundles";
-const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
-const VCARD4: &str = "urn:xmpp:vcard4";
-const CONTACTS: &str = "urn:xmpp:contacts";
 
 fn valid_bare_jid(value: &str) -> bool {
     northstar_xmpp_types::jid::CanonicalJid::parse_bare(value).is_ok()

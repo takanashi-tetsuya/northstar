@@ -1,6 +1,8 @@
 //! Create PEP nodes and handle owner operations and node configuration forms.
 
+use super::forms::{decode_pep_config_form, is_pep_config_form};
 use super::*;
+use northstar_pubsub_core::{apply_pep_config_patch, pep_owner_config_policy, PepConfigPatch};
 
 pub(super) fn pep_data_field(
     variable: &str,
@@ -203,7 +205,12 @@ pub async fn pep_owner_set<S: PepSession>(
             {
                 return Ok(iq_result_from_optional(id, iq.attribute("to"), ""));
             }
-            let config = match parse_owner_config(operation, current.clone(), node) {
+            let proposed = parse_owner_config(operation).and_then(|patch| {
+                let config = apply_pep_config_patch(&current, &patch).map_err(|_| ())?;
+                pep_owner_config_policy(node, &config).map_err(|_| ())?;
+                Ok(config)
+            });
+            let config = match proposed {
                 Ok(config) => config,
                 Err(()) => {
                     return Ok(pep_error(
@@ -452,112 +459,12 @@ pub(super) fn valid_node_name(node: &str) -> bool {
     !node.is_empty() && node.len() <= 1_024 && !node.chars().any(char::is_control)
 }
 
-pub(super) fn parse_owner_config(
-    container: Node<'_, '_>,
-    mut config: PepNodeConfig,
-    node: &str,
-) -> std::result::Result<PepNodeConfig, ()> {
+fn parse_owner_config(container: Node<'_, '_>) -> std::result::Result<PepConfigPatch, ()> {
     let form = container
         .children()
-        .find(|child| {
-            child.is_element()
-                && child.tag_name().name() == "x"
-                && child.tag_name().namespace() == Some(NS_XDATA)
-        })
+        .find(|child| is_pep_config_form(*child))
         .ok_or(())?;
-    if form.attribute("type") != Some("submit")
-        || xdata_field(form, "FORM_TYPE") != Some("http://jabber.org/protocol/pubsub#node_config")
-    {
-        return Err(());
-    }
-    let mut seen = HashSet::new();
-    for field in form.children().filter(|child| {
-        child.is_element()
-            && child.tag_name().name() == "field"
-            && child.tag_name().namespace() == Some(NS_XDATA)
-    }) {
-        let variable = field.attribute("var").ok_or(())?;
-        if !seen.insert(variable) {
-            return Err(());
-        }
-        match variable {
-            "FORM_TYPE" => {}
-            "pubsub#access_model" => {
-                let value = child_text(field, "value").ok_or(())?;
-                if !matches!(value, "open" | "presence" | "roster" | "whitelist") {
-                    return Err(());
-                }
-                config.access_model = value.to_owned();
-            }
-            "pubsub#max_items" => {
-                let value = child_text(field, "value").ok_or(())?;
-                config.max_items = if value == "max" {
-                    northstar_pubsub_core::PEP_MAX_ITEMS
-                } else {
-                    value.parse().map_err(|_| ())?
-                };
-                if !(1..=northstar_pubsub_core::PEP_MAX_ITEMS).contains(&config.max_items) {
-                    return Err(());
-                }
-            }
-            "pubsub#persist_items" => {
-                config.persist_items = parse_form_bool(child_text(field, "value").ok_or(())?)?
-            }
-            "pubsub#send_last_published_item" => {
-                let value = child_text(field, "value").ok_or(())?;
-                if !matches!(value, "never" | "on_sub" | "on_sub_and_presence") {
-                    return Err(());
-                }
-                config.send_last_published_item = value.to_owned();
-            }
-            "pubsub#deliver_notifications" => {
-                config.deliver_notifications =
-                    parse_form_bool(child_text(field, "value").ok_or(())?)?
-            }
-            "pubsub#roster_groups_allowed" => {
-                let values = field
-                    .children()
-                    .filter(|child| {
-                        child.is_element()
-                            && child.tag_name().name() == "value"
-                            && child.tag_name().namespace() == Some(NS_XDATA)
-                    })
-                    .map(|child| child.text().unwrap_or_default().to_owned())
-                    .collect::<Vec<_>>();
-                if values.is_empty()
-                    || values.len() > 100
-                    || values
-                        .iter()
-                        .any(|value| value.is_empty() || value.len() > 128)
-                {
-                    return Err(());
-                }
-                config.roster_groups_allowed = values;
-            }
-            _ => return Err(()),
-        }
-    }
-    if matches!(node, OMEMO_DEVICES | OMEMO_BUNDLES)
-        && (config.access_model != "open"
-            || !config.persist_items
-            || node == OMEMO_DEVICES && config.max_items != 1
-            || node == OMEMO_BUNDLES && config.max_items != northstar_pubsub_core::PEP_MAX_ITEMS)
-    {
-        return Err(());
-    }
-    if matches!(node, AVATAR_DATA | AVATAR_METADATA | VCARD4)
-        && (config.access_model != "open"
-            || !config.persist_items
-            || matches!(node, AVATAR_METADATA | VCARD4) && config.max_items != 1)
-    {
-        return Err(());
-    }
-    if matches!(node, BOOKMARKS2 | CONTACTS | "storage:bookmarks")
-        && config.access_model != "whitelist"
-    {
-        return Err(());
-    }
-    Ok(config)
+    decode_pep_config_form(form, "http://jabber.org/protocol/pubsub#node_config")
 }
 
 pub(super) fn pep_config_form(config: &PepNodeConfig, kind: &str) -> String {

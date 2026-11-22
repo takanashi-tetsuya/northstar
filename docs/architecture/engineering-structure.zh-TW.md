@@ -148,6 +148,7 @@ WP-495 後，operation runtime 的現行位置為
 | S44 C1 語義退出（第一批） | WP-643–652 | 唯讀審計 C1 PubSub/PEP（WP-643）與 C2 Archive/MAM（WP-644）；`northstar-stream` 的 `misc.rs` 依職責只移動地拆分（WP-645）；自動建立節點的發布改為一個交易（WP-646）；服務節點的項目與訂閱選項讀取（WP-647）、探索與自身清單（WP-648）、PEP 讀取與探索（WP-649）、MIX 的 profile 轉送（WP-650）與 Private XML 讀取（WP-651）各由一個唯讀快照回答，PEP 建立與 Private XML 一般寫入檢查帳號 generation；記錄階段（WP-652）。盤點見 5.40 | C1 的 16 項發現關閉 8 項；新增 21 個單元測試與 33 個 ignored 資料庫測試，資料庫測試登記在 CI 執行的 DB 腳本，合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S45 C2 語義退出 | WP-653–661 | MUC MAM 在同一快照證明確切的持久 occupancy、房間鎖定狀態與帳號權威（WP-653）；MIX MAM 的本地與聯邦查詢各由一個權威快照回答，聯邦查詢在 mutation replay 之前分派（WP-654）；個人歷史在寫入交易內取樣封存偏好（WP-655）；MIX 發布者身分在儲存交易內核對（WP-656）；MUC 討論是否封存由鎖定的 room 列決定（WP-657）；MAM 關閉時隱藏附屬介面（WP-658）；以資料庫測試固定刪除與 legal hold 下的分頁與撤回行為（WP-659）；vCard store 的測試專用 import 加上 cfg（WP-660）；記錄階段（WP-661）。盤點見 5.41 | C2 的 15 項發現關閉 10 項，C2-12 的目前行為由測試固定，需要產品決策的 4 項留在已知問題；新增 26 個單元測試與 22 個 ignored 資料庫測試，資料庫測試登記在 CI 執行的 DB 腳本，合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S46 C1 語義退出（第二批）與預先拆分 | WP-662–684 | 後續路線圖（WP-662）；接近行數上限的 9 個檔案依職責拆分：PubSub service（WP-663）、PubSub PostgreSQL 模組（WP-664）、direct lifecycle 的測試（WP-665）、XEP-0198 SM（WP-666）、BOSH crate 根（WP-667）與憑證發布（WP-668）只移動，叢集 listener（WP-669）、MUC join（WP-670）與聯邦 MUC 訊息（WP-671）的單一長函式依原順序抽成步驟函式；PubSub core 與 application 的 crate 根依宣告族拆分（WP-672）；型別化權威、注入的時鐘與 ID、型別化 admission 鍵的共用契約（WP-673）；按需的鎖與延遲量測（WP-674）；一般 presence 重播（WP-675）與 PEP 最新項目重播（WP-676）每頁一個唯讀快照；訂閱命令在訂閱鎖下決定（WP-677）；發布政策與擁有者寫入以鎖定狀態為準（WP-678）；PEP 發布與擁有者表單由一份 core 政策決定（WP-679）；頭像 presence 快取依擁有者 fence（WP-680）；其餘變更以型別化鍵 admission（WP-682）；PostgreSQL 與 workflow 的事件 ID 由服務的來源產生（WP-683）；`northstar-http` 健康檢查 fixture 保留連接埠（WP-681）；記錄階段（WP-684）。盤點見 5.42 | C1 的 16 項發現全部關閉；最大的生產檔由 1,492 行降為 1,425 行；拆分通過只移動檢查或逐行比對；新增 51 個單元測試與 29 個 ignored 資料庫測試（24 個登記在 CI 執行的 DB 腳本，5 個是按需量測），合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
+| S47 C2 產品決策 | WP-685–691 | 依使用者對 S44 C2 審計 4 項的決定實作：先只移動地拆分 MIX repository port（WP-685）與治理資料生命週期模組（WP-686）；MIX 個人副本以永久的來源撤回事實收斂到頻道撤回（WP-687，migration 0159）；聯邦 MUC MAM 入列以交易內的 generation 列 fence outbox 配額（WP-688，migration 0160）；本地與聯邦 MUC MAM 共用 room-core 的一個投影（WP-689）；legal hold 期間撤回與審核經顯示覆蓋層成功，匯出改為附帶顯示變更的 V3 雜湊鏈（WP-690，migration 0161）；記錄階段（WP-691） |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -1967,6 +1968,66 @@ C2-08 動工前拆分。
 S46 後最大的生產檔是 `northstar-room-postgres` 的 `mix_repository/repository_impl.rs`（1,425 行），最大的測試檔仍是
 `stage4_replay/tests.rs`（2,742 行）。workspace 測試由 3,576 個增為 3,656 個（ignored 由 351 個增為 380 個，其中 257 個在
 `northstar-db-it`），原有名稱不變。Cargo.lock 仍是 485 個套件，沒有新的 migration。
+### 5.43 S47 盤點：C2 產品決策（`31cf3328190894f1865eed1762ce133fbbe9a9d4`）
+
+S47 依[後續路線圖](next-steps-roadmap.zh-TW.md)執行 B：S44 C2 審計（WP-644）中需要產品決策的 4 項。使用者的決定：C2-08 的個人
+MIX 副本收斂到頻道撤回；C2-09 在 legal hold 期間撤回與審核也要成功，線上隱藏原文，原文仍是受治理的證據，匯出回傳原文與撤回
+紀錄；C2-10 以交易內的 generation 列 fence；C2-13 本地與聯邦 MUC MAM 統一成一種投影，對端互通證據留在 `EXT-FEDERATION` 的
+發布門禁。C2 的 15 項發現至此全部關閉。
+
+| WP | 內容 |
+| --- | --- |
+| WP-685 | MIX repository port 依角色拆分：15 個 MIX-PAM 方法移到 `MixPamRepository`，19 個持久投遞方法（含個人封存 admission `archive_mix_message_once`）移到 `MixDeliveryRepository`；`MixRepository` 要求三者，泛型界限與呼叫點不變。PostgreSQL 的 `repository_impl.rs`（1,425 行）降為 967 行，另有 `pam_impl.rs` 與 `delivery_impl.rs`，方法本體逐字移動 |
+| WP-686 | `northstar-operations-postgres` 的 `data_lifecycle.rs`（1,375 行）依角色拆出 `legal_hold.rs`、`held_record_export.rs` 與 `audit_export.rs`，只移動（33 項），公開路徑不變 |
+| WP-687 | C2-08：migration 0159 的 `mix_source_retractions` 為每個頻道撤回保存永久、只插入的來源事實，每個目標一個主要行動。本地撤回在寫入頻道事件與投遞的交易內以排他的來源 advisory 鍵記錄事實，原文封存取共享鍵，事實之後才到的原文只保存 tombstone，重放摘要仍綁定原始 ingress；經驗證的遠端反射記錄事實，可以先於原文到達，不得把行動改綁到其他目標或行動者。archive-postgres 的 `personal_display` 在讀頁面的語句 join 主要事實，個人 MAM、HTTP 歷史與 PIE 投影同一個無內文 tombstone，不改寫儲存的副本；共用的 tombstone 渲染歸 message-core；S2S 入站只把宣稱的反射交給 MIX handler。5 個 DB 測試 |
+| WP-688 | C2-10：migration 0160 的單列 `s2s_outbox_enqueue_generation`。`enqueue_s2s_outbox_with_id_in_transaction` 在計算列數、位元組與目標網域的同一語句以 `FOR NO KEY UPDATE` 鎖定該列，插入 outbox 列的語句推進 generation，快照早於並行 admission 的寫入者得到序列化錯誤。`admit_federated_room_stream` 接受 `FnMut` renderer，只在 `40001` 時回滾、確認 room guard 已釋放後整批重試一次，第二次衝突回 `OutboxRejected`，不送前綴也不喚醒；claim、完成、過期、續租與 SM ACK 不碰該列。DB 測試、重試規則的單元測試，以及 `s2s-db-wsl.sh` 中按需的鎖量測情境 |
+| WP-689 | C2-13：room-core `stanza::mam_projection` 的 `project_muc_mam_message`（型別化的 `MucMamProjectionError`）取代 `mam_muc_stanza`，從封存列重建 groupchat 信封：沒有根 `to`，from 是 room/nick（審核行動用 bare room），一個以列 UUID 為值的 stanza-id、一個 room occupant-id，移除儲存的身分宣告，真實 JID 只在可見時放進 muc#user item；tombstone 與行動列只轉送驗證過的撤回控制。archive-core 的 `ArchiveRow` 帶 MUC 列的 metadata，由 `mam_query.rs` 的一份 MUC select 讀取；archive-xmpp 與 muc-xmpp 新的 `federated_muc/mam.rs` 都呼叫投影，格式錯誤的列使整頁回 `wait/internal-server-error`，聯邦串流不入列任何前綴 |
+| WP-690 | C2-09：migration 0161 加入 `personal_archive_display_changes`、`muc_archive_display_changes`、`legal_hold_export_display_cutoffs` 與共用的 `archive_display_change_seq`（也為 `mix_source_retractions` 編號）。個人、MUC 作者與審核撤回在任何目標列鎖之前取封存關係 fence，在新的 READ COMMITTED 語句重讀 hold 與覆蓋層，受保留的列插入覆蓋層，未受保留的照舊替換；行動、投遞與喚醒一起提交，遇 `40P01`、`40001` 重試一次。讀取端在同一語句組合覆蓋層，報告證據拒絕覆蓋的列。legal hold 匯出改為 `northstar-legal-hold-chain-v3`：每筆保留原文並附 `display_change`，首頁經 `northstar_lock_legal_hold_export` 先對 `mix_source_retractions` 取 `SHARE`，再對封存表取 barrier 並凍結序列 cutoff；舊租約以 V2 完成。WP-659 的測試改為 `legal_hold_retractions_succeed_without_replacing_evidence`，`operations::hold_display_races` 加 4 個競態測試 |
+| WP-691 | 記錄階段 |
+
+讀寫規則：
+
+- 來源事實與覆蓋層是只插入的事實，只隨基底封存列或匯出租約級聯刪除。讀取端在讀頁面的同一語句組合有效內容，優先序是
+  MIX 來源 tombstone、個人覆蓋層、儲存的 stanza；儲存的副本不改寫，受保留的原文永不替換。
+- 顯示與證據分開：線上歷史、MAM、HTTP、PIE 與聯邦串流顯示有效內容；legal hold 匯出、checksum 與保留使用原始資料。規則
+  寫在[資料生命週期](../DATA_LIFECYCLE.md)。
+- 鎖順序：撤回寫入者先取封存關係 fence，再鎖目標列；匯出首頁依序對 `mix_source_retractions`、`message_archive`、
+  `muc_messages`、`offline_messages`、`abuse_report_evidence` 取 `SHARE`。
+- runtime 角色對新表只有 `SELECT, INSERT`（outbox generation 是 `SELECT, UPDATE`）；需要表鎖時經 migration 擁有、在函式內
+  檢查管理員的 `SECURITY DEFINER` capability，不擴大表權限。
+- 序列化衝突只重試一次整個嘗試，第二次回既有的拒絕；聯邦 MUC MAM 的 renderer 可重複呼叫並產生相同位元組。
+
+部署：migration 0159–0161 都是停機切換。停止所有伺服器程序（0161 另需等進行中的匯出請求結束），遷移、核對 exact grants、
+證明 runtime 角色，只啟動新版；舊版的寫入者會繞過 fence 或讓受保留的撤回失敗，舊版的讀取者會顯示原文，所以沒有混版期，
+也沒有滾動回退。三個 migration 只能前進，運維說明與發布檢查記錄在生產運維與發布檢查清單。
+
+線上行為的改變（都是使用者的決定）：被頻道撤回的 MIX 副本在個人 MAM、HTTP 歷史與 PIE 顯示 tombstone；受保留的撤回與審核
+成功；新的 legal hold 匯出是 V3；本地與聯邦 MUC MAM 的形狀相同。不受決策影響的 stanza、錯誤條件與鎖順序不變。
+
+與審計的差異：C2-09 的審計列出「保全優先」與顯示覆蓋層兩個選項；使用者要求撤回必須成功，所以採用覆蓋層，並把匯出升級為
+有新 domain 的 V3 雜湊鏈，讓證據與顯示變更一起受雜湊保護。C2-08 審計建議的持久來源 fence 以永久事實表加來源 advisory 鍵
+實作，遠端副本只在經驗證的反射後收斂。WP-690 的撤回路徑不再以 `FOR SHARE` 鎖 `users` 列：只有 `SELECT` 的角色取不到
+這個鎖（以 PostgreSQL 17 實測）；其他既有路徑是否有同樣的權限缺口，不屬於 C2，另案審查。
+
+尚未處理：D 起其他上下文的語義退出審計；聯邦 MUC MAM 統一格式的對端互通（[聯邦矩陣](../LOCAL_VM_FEDERATION_MATRIX.md)的
+F15，屬於 `EXT-FEDERATION`）；`northstar-http` 的 `maintenance_health` 測試在完整 workspace 執行時偶發「health listener
+survived shutdown」，單獨執行都通過，另案處理。
+
+新決定：
+
+- MIX 頻道撤回收斂所有個人副本；來源事實永久保存，不被保留清理（WP-687）。
+- legal hold 期間撤回與審核成功；解除 hold 不還原原文，之後由一般保留政策連同覆蓋層刪除，停用保留時原文可能無限期留存
+  （WP-690）。
+- legal hold 匯出的新格式是 `northstar-legal-hold-chain-v3`；稽核匯出仍是 v2（WP-690）。
+- outbox 配額以交易內的 generation 列 fence（WP-688）。
+- 本地與聯邦 MUC MAM 只有一個投影（WP-689）。
+
+S47 後最大的生產檔是 `northstar-stream` 的 `local_routes/session_table.rs`（1,388 行），最大的測試檔仍是
+`stage4_replay/tests.rs`（2,742 行）。workspace 測試由 3,656 個增為 3,687 個（ignored 由 380 個增為 395 個，其中 272 個在
+`northstar-db-it`）。原有名稱只有兩個改變：WP-659 的測試因行為依決定改變而改名，WP-689 刪除 room-application 的
+`muc_mam_payload_never_trusts_archived_identity_extensions`，由 room-core 投影的測試取代。Cargo.lock 仍是 485 個套件；
+新增 migration 0159–0161，共 160 項。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點），S31 的 WP-483 起 agy 額度用盡，再改由 Codex CLI 執行（第 10 點）。
@@ -2268,6 +2329,16 @@ S46 後最大的生產檔是 `northstar-room-postgres` 的 `mix_repository/repos
      有效的 payload）。
    - 其他工作階段可能在階段期間推送到 `dev`，並使用尚未記錄的 WP 編號；推送前的 fetch 會發現。已推送的編號不改，未推送的
      順延，並把對方的 WP 記進本階段（S46 的 WP-681）。
+   - 有些 DB 測試自己建 schema、不跑 migration（例如 `room::muc` 的邀請原子性測試）。WP-688 新增 outbox generation 表後，
+     這個 fixture 只在整條鏈的 MUC 腳本上失敗。新增表或改動 SQL 時，搜尋所有手寫的 fixture；單一 WP 的 DB 檢查包含每個
+     fixture 碰到改動 SQL 的 `*-db-wsl.sh`（S47）。
+   - PostgreSQL 的 `FOR SHARE`、`FOR KEY SHARE` 需要 UPDATE 權限，`LOCK TABLE ... IN SHARE MODE` 需要 UPDATE、DELETE 或
+     TRUNCATE；只有 `SELECT` 的 runtime 角色取不到。需要時以 migration 擁有、在函式內檢查呼叫者的 `SECURITY DEFINER`
+     capability 取鎖，不擴大表權限（WP-690）。
+   - 兩個 WP 改同一個讀取路徑（WP-687 的個人顯示投影與 WP-689 的 MUC metadata 都改 `mam_query.rs`）時，合併保留兩邊的
+     分支，並由兩邊的測試共同驗證（S47）。
+   - 委派寫的 DB 測試要在接鏈前實際執行，不能只看編譯：WP-690 的 4 個競態測試在整條鏈上才第一次執行，連續暴露三層 fixture
+     錯誤；一個 WP 改變共用行為（匯出的隔離等級與雜湊格式）時，也要重跑其他 WP 依賴該行為的測試（S47）。
 10. Codex（S31 的 WP-483 起，2026-11-16）：agy 額度用盡期間，程式修改改由 Codex CLI（`gpt-6.1-sol`，2026-11-19 起
     `gpt-6.2-sol`）執行，呼叫方式與
     限制同第 8 點，`model_reasoning_effort` 依任務難度選擇；第 1、3、4、7 點與第 9 點的機械搬移做法照舊。agy 恢復後回到
@@ -2872,3 +2943,10 @@ Stage 證據仍綁定其原提交。
 | WP-682 | 完成：其餘 PubSub 變更以型別化鍵 admission，application 與 XMPP 的 ID 來自注入的來源（C1-14、C1-16） | 見 `git log --grep '\[WP-682\]'` |
 | WP-683 | 完成：PostgreSQL 與 workflow 的事件 ID 由服務的來源產生（C1-16） | 見 `git log --grep '\[WP-683\]'` |
 | WP-684 | 完成：記錄 S46 的階段與盤點（5.42）、目標架構第 4、5 節、執行計劃的 C1 列、PubSub event outbox 的受眾規則與路線圖的狀態。C 的拆分先推送（`9dbf4a92`）；WP-672–683 在 WP-681 之前的基準上接成一條鏈驗證，接到 WP-681 之後重跑 `northstar-http` 的測試與文件檢查。鏈的驗證項目：fmt、clippy、受影響 crate 的單獨建置與測試、workspace 測試與名稱比對、全部門禁與 Python 腳本測試、Stage 4 lanes、node 腳本測試、離線 CI，以及本機 PostgreSQL 上 `pubsub-db-wsl.sh` 登記的全部測試、PubSub PostgreSQL、workflows、roster、privacy 與 conformance 資料庫測試 | 見 `git log --grep '\[WP-684\]'` |
+| WP-685 | 完成：MIX repository port 依角色拆出 `MixPamRepository` 與 `MixDeliveryRepository`，PostgreSQL 實作只移動地分檔 | 見 `git log --grep '\[WP-685\]'` |
+| WP-686 | 完成：治理資料生命週期模組依角色拆出 legal hold、held-record 匯出與稽核匯出，只移動 | 見 `git log --grep '\[WP-686\]'` |
+| WP-687 | 完成：MIX 個人副本以永久的來源撤回事實收斂到頻道撤回（C2-08，migration 0159） | 見 `git log --grep '\[WP-687\]'` |
+| WP-688 | 完成：聯邦 MUC MAM 入列以交易內的 generation 列 fence outbox 配額（C2-10，migration 0160） | 見 `git log --grep '\[WP-688\]'` |
+| WP-689 | 完成：本地與聯邦 MUC MAM 共用 room-core 的一個投影（C2-13） | 見 `git log --grep '\[WP-689\]'` |
+| WP-690 | 完成：legal hold 期間撤回與審核經顯示覆蓋層成功，匯出改為 V3（C2-09，migration 0161） | 見 `git log --grep '\[WP-690\]'` |
+| WP-691 | 完成：記錄 S47 的階段與盤點（5.43）、目標架構第 4、5 節、執行計劃的 C2 列、已知問題的 4 列與 `EXT-FEDERATION`、資料生命週期、OpenAPI、聯邦矩陣的 F15 與路線圖的狀態。WP-685–690 接成一條鏈驗證：fmt、clippy、受影響 23 個 crate 的單獨建置與測試、workspace 測試與名稱比對、全部門禁與 Python 腳本測試、Stage 4 lanes、node 腳本測試、離線 CI，以及本機 PostgreSQL 上 MIX、MUC、MAM、聯邦、retention、operations API、abuse 與 PIE 的資料庫測試與 repository conformance。整條鏈的資料庫測試抓到 WP-690 新測試與 WP-687 一個測試的 fixture 錯誤（投遞的 MAM 旗標、缺 `jabber:client` 命名空間、匯出的隔離等級與 V2 雜湊），修正併入 WP-690 後重跑通過 | 見 `git log --grep '\[WP-691\]'` |

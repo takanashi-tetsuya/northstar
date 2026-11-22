@@ -27,6 +27,18 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   contacts on other XMPP domains subject to server federation policy.
 - Stop upload lease renewal when the request is cancelled.
 - Set certificate fixture key identifiers explicitly for OpenSSL 4 compatibility.
+- Hide a retracted MIX channel message in subscribers' personal MAM, HTTP
+  history and PIE export as well, including when the retraction arrives before
+  the original or as a verified remote reflection.
+- Let message retraction and MUC moderation succeed while a legal hold covers
+  the message: online history shows the tombstone and the held original stays
+  available to governed export.
+- Return `northstar-legal-hold-chain-v3` from new legal-hold exports, adding
+  each record's display change (retraction or moderation) to the hashed record;
+  exports started before the upgrade finish in v2.
+- Render local and federated MUC MAM results with the same projection.
+- Keep concurrent federated MUC MAM requests within the S2S outbox row, byte
+  and per-domain limits.
 
 ## [0.2.0] - Release notes (publication date: GitHub Releases)
 

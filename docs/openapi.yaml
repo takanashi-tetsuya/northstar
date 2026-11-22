@@ -1389,15 +1389,27 @@ components:
         payload_disposition: { type: string, enum: [ciphertext, server_plaintext, encrypted_evidence_plaintext_omitted, released_record_expired] }
         previous_hash: { type: string, pattern: "^[0-9a-f]{64}$" }
         entry_hash: { type: string, pattern: "^[0-9a-f]{64}$" }
+        display_change: { $ref: "#/components/schemas/HeldArchiveDisplayChange" }
+    HeldArchiveDisplayChange:
+      type: object
+      additionalProperties: false
+      description: V3 only and omitted when absent. Records how online history displays a held archive row (the ordinary tombstone) while server_visible_payload keeps the governed original. mix_retraction comes from the channel's primary source retraction, the other kinds from a display overlay written when a retraction or moderation met a legal hold.
+      required: [kind, actor, changed_at, reason, action_id]
+      properties:
+        kind: { type: string, enum: [personal_retraction, mix_retraction, muc_retraction, muc_moderation] }
+        actor: { type: string, description: "Canonical bare JID of the retracting account, moderator or MIX channel" }
+        changed_at: { type: string, format: date-time, description: "Database time of the display decision" }
+        reason: { type: [string, "null"], description: "Moderation reason; null for personal and MIX retractions" }
+        action_id: { type: string, description: "Retraction or moderation action identifier; a UUID for MIX and MUC actions" }
     LegalHoldExportResult:
       type: object
       additionalProperties: false
       required: [format, export_id, exported_at, snapshot_at, lease_expires_at, hold, records, chain_start_sha256, chain_root_sha256, complete, truncated, next_cursor]
       properties:
-        format: { type: string, const: northstar-legal-hold-chain-v2 }
+        format: { type: string, enum: [northstar-legal-hold-chain-v2, northstar-legal-hold-chain-v3], description: "Every new export is v3. A lease opened before migration 0161 continues in v2 and its exact replays return the stored response; v2 records never carry display_change" }
         export_id: { type: string, format: uuid }
         exported_at: { type: string, format: date-time }
-        snapshot_at: { type: string, format: date-time, description: Fixed database-time upper bound for every scope target in this export }
+        snapshot_at: { type: string, format: date-time, description: "Fixed database-time upper bound for every scope target in this export; in v3 the first page also freezes the set of display changes, so a later retraction appears only in a fresh export" }
         lease_expires_at: { type: [string, "null"], format: date-time, description: Fixed non-renewable deadline for an active-hold export; null for a released one-page export }
         hold: { $ref: "#/components/schemas/LegalHoldSummary" }
         records: { type: array, maxItems: 100, items: { $ref: "#/components/schemas/HeldRecordExport" } }

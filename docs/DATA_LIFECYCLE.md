@@ -78,6 +78,41 @@ stanza into `legal_hold_offline_snapshots`. The queue ACK can then complete.
 The snapshot is immutable while the hold is active and returns to the
 recipient's original effective cutoff after release.
 
+## Retraction and moderation under hold
+
+A held archive row keeps two views. The *evidentiary payload* is the stored
+stanza, which the hold triggers keep byte-for-byte. The *effective display* is
+what online history shows. Since migration 0161 a personal retraction, a MUC
+author retraction or a MUC moderation of a held row succeeds: instead of
+replacing the stored stanza, the writer inserts one row into
+`personal_archive_display_changes` or `muc_archive_display_changes`, numbered
+from the shared `archive_display_change_seq`. The action, its delivery and its
+wake commit in the same transaction as the overlay. An unheld row is still
+replaced in place exactly as before.
+
+Each writer takes the archive relation fence before any target row lock, then
+re-reads hold and overlay state in a fresh READ COMMITTED statement, so hold
+creation and retraction serialize in either order: a retraction that commits
+first replaces the row and the hold preserves the tombstone, while a hold that
+commits first turns the retraction into an overlay. Both writers retry once on
+`40P01` or `40001`.
+
+Readers compose the effective display in the same statement as the row read.
+The personal resolver shows a MIX source tombstone first
+(`mix_source_retractions`), then a personal overlay, then the stored stanza,
+and an overlaid row is never reported as encrypted. MUC MAM, join history and
+the federated MUC stream treat a MUC overlay as the ordinary retraction or
+moderation tombstone. Report evidence rejects an overlaid row. A snapshot
+taken before the retraction commits can still show the earlier display; that
+is the normal read-committed boundary, not a second source of truth.
+
+Releasing a hold restores nothing: the overlay keeps hiding the original, and
+ordinary retention later deletes the original and its overlay together through
+the foreign-key cascade. If the applicable retention policy is disabled, the
+released original can therefore remain stored indefinitely behind its overlay.
+Overlays and cutoffs are insert-only for the runtime role and disappear only
+with their base archive row or export lease.
+
 Account deletion fails closed while that account has an active personal,
 offline, or report-evidence hold. Room destruction fails closed while its MUC
 archive is held. The API must return a conflict and the operator must export
@@ -130,14 +165,21 @@ Cursors and leases use the database clock and one fixed 15-minute deadline;
 continuation never extends it. Abandoning an export can therefore delay a hold
 release for at most that bounded window, not indefinitely.
 
-For an active hold, the first page takes short `SHARE` barriers over the four
-source tables, fixes `snapshot_at`, and creates a lease while retaining a lock
-on the hold header. Scope rows are limited to `record_created_at <= snapshot_at`.
-Active-hold triggers freeze those rows and their server-visible payload, and a
-release conflicts until the last page atomically completes the lease or the
-lease expires. A released hold no longer supplies that payload fence: it is
-exported only if the entire result fits in one page; otherwise the API returns
-`409` instead of promising an unstable continuation.
+For an active hold, the first page calls the admin-checked `SECURITY DEFINER`
+capability `northstar_lock_legal_hold_export(uuid,uuid,bool)`, which locks the
+hold header `FOR UPDATE` and takes `SHARE` on `mix_source_retractions`; it then
+takes short `SHARE` barriers over the four source tables, reads the
+`archive_display_change_seq` high-water mark into
+`legal_hold_export_display_cutoffs`, fixes `snapshot_at`, and creates a lease
+while retaining the hold-header lock. Every later page annotates records only
+with display changes at or below that cutoff, so a retraction that commits
+mid-export never changes a later page. Scope rows are limited to
+`record_created_at <= snapshot_at`. Active-hold triggers freeze those rows and
+their server-visible payload, and a release conflicts until the last page
+atomically completes the lease or the lease expires. A released hold no longer
+supplies that payload fence: it is exported only if the entire result fits in
+one page; otherwise the API returns `409` instead of promising an unstable
+continuation.
 
 ## OMEMO boundary
 
@@ -209,6 +251,32 @@ by those structs, not the response wrapper (which also contains the two hash
 fields). Any future serialization change requires a new domain/version rather
 than silently changing the v2 chain.
 
+Since migration 0161 every new legal-hold export is
+`northstar-legal-hold-chain-v3`. Audit exports stay on their v2 chain. V3 keeps
+the v2 construction with two changes:
+
+```text
+legal genesis = SHA-256("northstar/legal-hold-export/v3\0" ||
+                       export_uuid || admin_uuid || hold_uuid || snapshot_us)
+row JSON      = HeldRecordHashPayload fields, then "display_change"
+```
+
+`display_change` is appended after the flattened `HeldRecordHashPayload` fields
+(`HeldRecordHashPayloadV3`). The hashed row carries an explicit JSON `null`
+when the record has no display change, although the response omits the field
+then. Otherwise it is an object with the fields `kind`, `actor`, `changed_at`,
+`reason` and `action_id` in that order; `kind` is `personal_retraction`,
+`mix_retraction`, `muc_retraction` or `muc_moderation`, and `reason` is `null`
+unless a moderator supplied one. The record's `server_visible_payload` is
+always the held original, never the tombstone; MIX personal copies are
+annotated from their source retraction fact. A released hold that fits in one
+page is exported as V3 without a cutoff and annotates with the display changes
+visible at that moment.
+
+Leases opened before migration 0161 have no cutoff row and continue to
+completion in v2, and an exact replay of any page returns its stored body
+unchanged. A verifier selects the chain by the response's `format`.
+
 A PostgreSQL owner or superuser can disable triggers or rewrite tables. That is
 an explicit external trust boundary. Use a separate least-privilege runtime
 role, PostgreSQL audit logging, restricted migration credentials, independent
@@ -245,8 +313,10 @@ Pure unit tests cover retention monotonicity, closed target kinds, export chain
 domain separation and cross-page continuity, signed digest cursor shapes,
 filter separation, fixed lease limits, policy-aware SQL shape, hold exclusion,
 and route/OpenAPI agreement. The ignored isolated-PostgreSQL fixture is
-responsible for migration upgrade, concurrent cleanup/hold races,
-account/room fail-closed deletion, offline ACK snapshotting, active-export
-release fencing, multi-page chain continuation, immutable release history,
-post-release cleanup, and audit deletion gates. Static/unit success is not a
-claim that a production database, restore, or legal workflow was exercised.
+responsible for migration upgrade, concurrent cleanup/hold races, account/room
+fail-closed deletion, offline ACK snapshotting, active-export release fencing,
+hold/retraction ordering, overlay rollback with delivery, single-snapshot
+display reads, V3 cutoff freezing across pages, multi-page chain continuation,
+immutable release history, post-release cleanup, and audit deletion gates.
+Static/unit success is not a claim that a production database, restore, or
+legal workflow was exercised.

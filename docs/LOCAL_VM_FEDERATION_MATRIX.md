@@ -196,6 +196,7 @@ separately configured observation client.
 | F12 | Rotate peer leaf with old and new TLSA associations published together; then remove the old association after its TTL | New handshakes accept the new leaf throughout the overlap. After cache expiry, the old leaf fails. Record DNS serial, cache timing and certificate fingerprints. |
 | F13 | Rotate Northstar's own chain and key through authenticated TLS reload, first with a mismatched candidate, then a valid one | Bad reload keeps the previous generation; valid reload changes new S2S handshakes on both listeners while established sessions remain valid. Test ns-a and ns-b separately. |
 | F14 | Stop and restart each independent peer after a DANE-positive baseline | Durable outbox retries after peer recovery; the received marker and server-assigned stanza ID identify any at-least-once duplicate. Do not assert exactly-once delivery. |
+| F15 | A Prosody and an ejabberd account join a Northstar MUC room over S2S and query its archive (XEP-0313 to the room JID) covering an ordinary message, an author retraction, a moderation and a semi-anonymous and a non-anonymous room | Each result carries the unified S47 projection (`ARCH-MUC-MAM-PROJECTION`): no root `to` on the forwarded groupchat, one room `stanza-id` equal to the archive ID, one `occupant-id`, the real JID only where the room exposes it, and a bodyless tombstone for retracted or moderated rows. Both peers and their clients accept and display the page; record raw stanzas from both sides. |
 
 Northstar's required-DANE policy is outbound. A successful inbound stanza from
 Prosody or ejabberd does not prove that those peers validated Northstar's TLSA.
@@ -215,5 +216,5 @@ and a post-case restoration check. The live soak evidence must be sealed before
 changing any service. Finish with the original zone, certificates, service
 configuration, process health and two-node binary hashes restored. Keep
 `EXT-FEDERATION` open if the trust-anchor integration, independent Direct TLS
-peer, reverse DANE validation or any negative row remains untested. Public
-deployment remains a separate evidence gate.
+peer, reverse DANE validation, the F15 federated MUC MAM row or any negative
+row remains untested. Public deployment remains a separate evidence gate.

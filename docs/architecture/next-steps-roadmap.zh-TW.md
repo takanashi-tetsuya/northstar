@@ -29,7 +29,7 @@
 9. **每個語義修正都有證據。** 單元測試證明純決策；資料庫測試以暫停點在讀取或寫入中途提交競爭的變更，證明快照與 fence；
    在唯讀連線上執行查詢，證明查詢不寫入。穩定狀態下的 XML、錯誤條件、順序與 RSM 游標不變，除非該變更是記錄在案的決定。
 
-## 2. S46 後的現況
+## 2. S47 後的現況
 
 - 工作區 95 個 package（94 個 member 加根 crate）：`kernel`（XEP 線格式、XML、時間型別）、`platform`（設定、PostgreSQL、runtime、安全、遙測、web
   surface）、`contexts`（abuse、archive、auth、federation、message、operations、pubsub、room、roster、session、upload，
@@ -37,16 +37,18 @@
   `northstar-test-harness`）與根 crate `northstar-server`（組合根與程序監督）。層級依賴由 `architecture-validator` 與
   `catalog/crates.yaml` 執行。
 - 結構工作完成：行數基線為空（生產檔 ≤ 1,500 行、測試檔 ≤ 3,000 行），根目錄沒有測試檔，靜態門禁中能改為測試的
-  已改寫（S35、S36），門禁再審計完成（S42）。S46 再拆分 9 個接近上限的檔案（WP-663–671），目前最大的生產檔是
-  `mix_repository/repository_impl.rs`（1,425 行）。
+  已改寫（S35、S36），門禁再審計完成（S42）。S46 再拆分 9 個接近上限的檔案（WP-663–671），S47 拆分 MIX repository
+  port 與治理資料生命週期模組（WP-685、WP-686）；目前最大的生產檔是 `northstar-stream` 的
+  `local_routes/session_table.rs`（1,388 行）。
 - 語義退出：C1（PubSub/PEP）16 項發現全部關閉（S44 的 8 項、S46 的 8 項），C2（Archive/MAM）15 項
-  關閉 10 項、C2-12（良性競態）以測試固定現行行為（S45），其餘 4 項需要產品決策（其中 C2-09 的現行行為也已由測試固定）。其他上下文尚未做語義退出審計。
-- workspace 測試 3,656 個（S46 的 `1c728447`），其中 380 個是 ignored 測試，需要 PostgreSQL、Redis 或其他專用環境，
-  由 CI 的專用腳本執行（其中 257 個在 `northstar-db-it`，包括 5 個不在 CI 執行的按需量測情境）。
-- Cargo.lock 485 個套件；migration 到 `0158`；`cargo audit` 忽略 RUSTSEC-2026-0459（SQLx 的 `libsqlite3-sys` 升到 ≥ 0.39
+  全部關閉：S45 修正 10 項、C2-12（良性競態）以測試固定並維持現狀，S47 依使用者的產品決策實作其餘 4 項（C2-08、09、10、
+  13）。聯邦 MUC MAM 統一格式的對端互通證據留在 K 的 `EXT-FEDERATION`。其他上下文尚未做語義退出審計。
+- workspace 測試 3,687 個（S47 的 `31cf3328`），其中 395 個是 ignored 測試，需要 PostgreSQL、Redis 或其他專用環境，
+  由 CI 的專用腳本執行（其中 272 個在 `northstar-db-it`，包括 6 個不在 CI 執行的按需量測情境）。
+- Cargo.lock 485 個套件；migration 到 `0161`；`cargo audit` 忽略 RUSTSEC-2026-0459（SQLx 的 `libsqlite3-sys` 升到 ≥ 0.39
   前保留）、RUSTSEC-2026-0543 與 RUSTSEC-2026-0542（`object_store` 經 chrono／humantime 引入，`cargo deny` 有相同例外）。
 
-## 3. 已完成的任務（S0–S46）
+## 3. 已完成的任務（S0–S47）
 
 細節見工程結構藍圖第 5 節的階段表與各盤點小節。
 
@@ -62,6 +64,7 @@
 | S44 | C1、C2 唯讀審計；C1 的多事實查詢改為單一快照、自動建立的發布改為一個交易、PEP 建立與 Private XML 寫入檢查帳號 generation |
 | S45 | C2：MUC／MIX MAM 的讀取授權與路由、寫入時的政策取樣、MAM 關閉時隱藏附屬介面、以測試固定刪除與 legal hold 下的行為 |
 | S46 | C1 第二批：重播快照、訂閱命令、寫入前提、PEP 表單政策、頭像快取、型別化權威與注入的時鐘和 ID；預先拆分 9 個接近行數上限的檔案 |
+| S47 | C2 的 4 項產品決策：MIX 個人副本收斂到頻道撤回、legal hold 下撤回成功（顯示覆蓋層與 V3 匯出）、outbox 配額的 generation 列、本地與聯邦 MUC MAM 統一投影；先拆分 MIX repository port 與治理資料生命週期模組 |
 
 ## 4. 待辦總表
 
@@ -71,7 +74,7 @@
 | ID | 項目 | 類型 | 優先 | 前置 | 詳細 | 狀態 |
 | --- | --- | --- | --- | --- | --- | --- |
 | A | C1 語義退出第二批（C1-05、07、08、09、12、14、15、16） | 程式 | P0 | 無；A0 先做 | 5.1 | 完成（S46，工程結構藍圖 5.42） |
-| B | C2 的 4 項產品決策與實作（C2-08、09、10、13） | 決策＋程式 | P1 | 使用者決定 | 5.2 | 未開始 |
+| B | C2 的 4 項產品決策與實作（C2-08、09、10、13） | 決策＋程式 | P1 | 使用者決定 | 5.2 | 完成（S47，工程結構藍圖 5.43） |
 | C | 接近行數上限的檔案預先拆分 | 結構 | P0（隨 A 一起） | 無 | 5.3 | 完成（S46，工程結構藍圖 5.42） |
 | D | 其他上下文的語義退出審計與修正 | 審計＋程式 | P1 | A 的做法定型 | 5.4 | 未開始 |
 | E | `northstar-workflows` 的範圍審查 | 結構 | P2 | D 的審計結果 | 5.5 | 未開始 |
@@ -83,7 +86,7 @@
 | K | 發佈資格（8.2 的 7 個 gate、R1–R3） | 環境證據 | P3 | 凍結候選版本 | 5.11 | 未開始 |
 | L | 可選產品範圍（XEP-0357、0447/0448、0487） | 產品 | P3 | K | 5.12 | 未開始 |
 
-建議的階段編號（實際編號以開工時為準）：S46 = A＋C（已完成）；S47 = B（決策後）；S48 起 = D，依 5.4 的順序每個上下文一個階段；
+建議的階段編號（實際編號以開工時為準）：S46 = A＋C（已完成）；S47 = B（已完成）；S48 起 = D，依 5.4 的順序每個上下文一個階段；
 E、F、G、I 在 D 的空檔或之後插入。WP 編號接續 WP-662（本文件）。
 
 ## 5. 各項詳細說明
@@ -128,6 +131,10 @@ E、F、G、I 在 D 的空檔或之後插入。WP 編號接續 WP-662（本文�
 
 ### 5.2 B：C2 的 4 項產品決策
 
+**已完成**（S47，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.43）：使用者選擇 C2-08 收斂、C2-09 讓撤回成功（顯示
+覆蓋層，匯出保留原文並附撤回紀錄）、C2-10 交易內 generation 列、C2-13 統一投影；WP-687–690 實作，WP-685、WP-686 先拆分。
+已知問題的 4 列改為已解決，執行計劃的 C2 列移到「Done」。以下保留為當時的計劃。
+
 這 4 項會改變線上格式、保存語義或需要 migration，必須先由使用者決定，修正 WP 不得自行決定。每項的現況與選項在已知
 問題的對應列。開工時以一次提問列出全部 4 項，每項附建議選項。
 
@@ -142,7 +149,7 @@ E、F、G、I 在 D 的空檔或之後插入。WP 編號接續 WP-662（本文�
 
 ### 5.3 C：接近行數上限的檔案
 
-**已完成**（S46，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.42）：表中除 `repository_impl.rs` 之外的 9 個檔案已拆分（WP-663–671）；`repository_impl.rs` 在 B 的 C2-08 動工前拆分。以下保留為當時的計劃。
+**已完成**（S46，見[工程結構藍圖](engineering-structure.zh-TW.md) 5.42）：表中除 `repository_impl.rs` 之外的 9 個檔案已拆分（WP-663–671）；`repository_impl.rs` 在 S47 的 WP-685 依角色拆分（降為 967 行）。以下保留為當時的計劃。
 
 R1 的上限是生產檔 1,500 行、測試檔 3,000 行，由 `node scripts/check-source-structure.mjs` 執行（基線為空），新檔不得
 超標，既有檔只能縮小。下列檔案在 1,400 行以上，下一次語義修改
@@ -278,7 +285,7 @@ S46  A0 契約 ─┬─ A1 重播快照
               ├─ A3 寫入前提 ┘
               ├─ A4 PEP 政策層
               └─ A5 頭像 fence ── A6 收尾 ── 記錄
-S47  B（使用者決策後）：4 個修正 WP 可並行（檔案大多不重疊；B-甲 與 C2-13 都碰 MUC 聯邦檔，依序整合）
+S47  B（已完成）：4 個修正 WP 可並行（檔案大多不重疊；B-甲 與 C2-13 都碰 MUC 聯邦檔，依序整合）
 S48+ D：每個上下文先審計，再修正；審計可提前並行（唯讀），修正依順序
      E：D 的 room、message 審計完成後
      F → G：可在 D 的空檔並行（G 的 migration 依領域逐一進行）
@@ -355,6 +362,14 @@ crate 當成最新（S44 的教訓）。不要在 codex、驗證或 cargo 正在
 - 政策在儲存時已改變：回滾、重讀並重試一次，第二次不符回既有錯誤，避免無限重試。
 - 配額或容量拒絕要整批回滾，不留下部分前綴。
 - PubSub outbox 的序號只在同一收件人內遞增；比較序號的測試要送給同一個收件人。
+- PostgreSQL 的 `FOR SHARE`、`FOR KEY SHARE` 需要 UPDATE 權限，`LOCK TABLE ... IN SHARE MODE` 需要 UPDATE、DELETE 或
+  TRUNCATE；只有 SELECT 的 runtime 角色無法取這些鎖。需要時以 migration 擁有、在函式內檢查呼叫者的 `SECURITY DEFINER`
+  capability 取鎖（WP-690 的 `northstar_lock_legal_hold_export`），不要擴大表權限。
+- 序列化衝突（`40001`、`40P01`）的重試：整個嘗試回滾後重試一次，重試前確認鎖已釋放、渲染可以重複呼叫；第二次衝突回既有的
+  拒絕，不留前綴、不喚醒（WP-688、WP-690）。
+- 讀取端的投影（tombstone、覆蓋層）在讀頁面的同一語句組合，不先讀再補查；受保留的原文不改寫，證據與顯示分開（WP-687、
+  WP-690）。
+- 雜湊鏈或匯出格式改變時使用新的 domain 與版本，進行中的租約以舊版完成，重放回傳儲存的回應（V2 → V3）。
 
 ### 9.2 測試
 
@@ -367,6 +382,8 @@ crate 當成最新（S44 的教訓）。不要在 codex、驗證或 cargo 正在
 - 會改變 SQL 形狀或鎖時間的 WP，以 `northstar-db-it` 的 `pubsub::integration::lock_measure` 情境在獨立的資料庫量測前後（需要 `pg_stat_statements`，逐一執行）。
 - 凍結既有行為的測試（例如 WP-659）要在提交訊息說明它固定的是哪個尚未決定的行為，以便日後有意識地改變。
 - 只在 test 或 test-support 使用的 import 要加相同的 cfg。
+- 有些 DB 測試自己建 schema、不跑 migration（例如 `room::muc` 的邀請原子性測試）。新增表或改動 SQL 時，搜尋所有手寫的
+  fixture；單一 WP 的 DB 檢查要包含每個 fixture 碰到改動 SQL 的 `*-db-wsl.sh`，不只新增測試所在的腳本（S47 的 WP-688）。
 
 ### 9.3 整合
 

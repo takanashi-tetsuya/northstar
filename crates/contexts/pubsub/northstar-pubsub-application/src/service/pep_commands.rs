@@ -14,7 +14,7 @@ use crate::{
     PepPurgeNodeResult, PepRetractCommand, PepRetractResult, PepSetAffiliationsCommand,
     PepSetAffiliationsResult, PepSubscribeCommand, PepSubscribeResult,
     PepSubscriptionMutationRepository, PepUnsubscribeBatchCommand, PepUnsubscribeBatchResult,
-    PepUnsubscribeCommand, PepUnsubscribeResult,
+    PepUnsubscribeCommand, PepUnsubscribeResult, PubSubAdmissionKey, PubSubMutationPermit,
 };
 use anyhow::Result;
 use northstar_pubsub_core::{
@@ -126,9 +126,8 @@ impl<
         command: PepCreateNodeCommand<'_>,
     ) -> Result<PepCreateNodeResult> {
         validate_pep_create_node_command(&command)?;
-        let owner_key = command.owner.id.to_string();
         let _permit = self
-            .admit_mutation(&[&owner_key, command.node], false)
+            .admit_pep_node_mutation(command.owner.id, command.node)
             .await?;
         self.repository
             .create_pep_node(
@@ -147,9 +146,16 @@ impl<
     ) -> Result<PepSubscribeResult> {
         validate_pep_subscribe_command(&command)?;
         let write = &command.write;
-        let owner_key = write.owner.id.to_string();
         let _permit = self
-            .admit_mutation(&[&owner_key, write.subscriber_jid, write.node], false)
+            .mutation_admission
+            .acquire_keys(
+                &[
+                    PubSubAdmissionKey::Owner(write.owner.id),
+                    PubSubAdmissionKey::Text(write.subscriber_jid),
+                    PubSubAdmissionKey::Text(write.node),
+                ],
+                false,
+            )
             .await?;
         self.repository.subscribe_pep_node(command, factory).await
     }
@@ -159,9 +165,16 @@ impl<
     ) -> Result<PepUnsubscribeResult> {
         validate_pep_unsubscribe_command(&command)?;
         let write = &command.write;
-        let owner_key = write.owner.id.to_string();
         let _permit = self
-            .admit_mutation(&[&owner_key, write.subscriber_jid, write.node], false)
+            .mutation_admission
+            .acquire_keys(
+                &[
+                    PubSubAdmissionKey::Owner(write.owner.id),
+                    PubSubAdmissionKey::Text(write.subscriber_jid),
+                    PubSubAdmissionKey::Text(write.node),
+                ],
+                false,
+            )
             .await?;
         self.repository.unsubscribe_pep_node(command).await
     }
@@ -174,8 +187,7 @@ impl<
         config: &PepNodeConfig,
         factory: &dyn PepOutboxFactory,
     ) -> Result<PepOwnerMutationOutcome> {
-        let owner_key = owner.id.to_string();
-        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
+        let _permit = self.admit_pep_node_mutation(owner.id, node).await?;
         self.repository
             .update_pep_node_config(owner, sender_connection_id, node, expected, config, factory)
             .await
@@ -189,8 +201,7 @@ impl<
         changes: &[(String, String)],
         factory: &dyn PepDirectOutboxFactory,
     ) -> Result<PepOwnerMutationOutcome> {
-        let owner_key = owner.id.to_string();
-        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
+        let _permit = self.admit_pep_node_mutation(owner.id, node).await?;
         self.repository
             .update_pep_affiliations(
                 owner,
@@ -209,8 +220,7 @@ impl<
         node: &str,
         factory: &dyn PepOutboxFactory,
     ) -> Result<PepOwnerMutationOutcome> {
-        let owner_key = owner.id.to_string();
-        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
+        let _permit = self.admit_pep_node_mutation(owner.id, node).await?;
         self.repository
             .purge_pep_node(owner, sender_connection_id, node, factory)
             .await
@@ -222,8 +232,7 @@ impl<
         node: &str,
         factory: &dyn PepOutboxFactory,
     ) -> Result<PepOwnerMutationOutcome> {
-        let owner_key = owner.id.to_string();
-        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
+        let _permit = self.admit_pep_node_mutation(owner.id, node).await?;
         self.repository
             .delete_pep_node(owner, sender_connection_id, node, factory)
             .await
@@ -237,8 +246,7 @@ impl<
         notify: bool,
         factory: &dyn PepOutboxFactory,
     ) -> Result<PepOwnerMutationOutcome> {
-        let owner_key = owner.id.to_string();
-        let _permit = self.admit_mutation(&[&owner_key, node], false).await?;
+        let _permit = self.admit_pep_node_mutation(owner.id, node).await?;
         self.repository
             .retract_pep_items(owner, sender_connection_id, node, item_ids, notify, factory)
             .await
@@ -249,9 +257,8 @@ impl<
         factory: &dyn PepDirectOutboxFactory,
     ) -> Result<PepUnsubscribeBatchResult> {
         validate_pep_unsubscribe_batch_command(&command)?;
-        let owner_key = command.owner.id.to_string();
         let _permit = self
-            .admit_mutation(&[&owner_key, command.node], false)
+            .admit_pep_node_mutation(command.owner.id, command.node)
             .await?;
         self.repository
             .unsubscribe_pep_nodes_batch(
@@ -271,9 +278,8 @@ impl<
     ) -> Result<PepCommitLegacyBookmarksResult> {
         const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
         validate_pep_commit_legacy_bookmarks_command(&command)?;
-        let owner_key = command.owner.id.to_string();
         let _permit = self
-            .admit_mutation(&[&owner_key, BOOKMARKS2], false)
+            .admit_pep_node_mutation(command.owner.id, BOOKMARKS2)
             .await?;
         self.repository
             .commit_legacy_bookmarks(command, factory)
@@ -286,10 +292,27 @@ impl<
     ) -> Result<PepPublishItemsResult> {
         validate_pep_publish_command(&command)?;
         let write = &command.write;
-        let owner_key = write.user_id.to_string();
         let _permit = self
-            .admit_mutation(&[&owner_key, write.node], false)
+            .admit_pep_node_mutation(write.user_id, write.node)
             .await?;
         self.repository.publish_pep_items(command, factory).await
+    }
+}
+
+impl<R> PubSubService<R> {
+    async fn admit_pep_node_mutation(
+        &self,
+        owner: Uuid,
+        node: &str,
+    ) -> Result<PubSubMutationPermit> {
+        self.mutation_admission
+            .acquire_keys(
+                &[
+                    PubSubAdmissionKey::Owner(owner),
+                    PubSubAdmissionKey::Text(node),
+                ],
+                false,
+            )
+            .await
     }
 }

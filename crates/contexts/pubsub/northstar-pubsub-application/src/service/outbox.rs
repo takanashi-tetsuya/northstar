@@ -182,9 +182,15 @@ impl<R: PubSubOutboxRepository> PubSubService<R> {
         event_xml: &str,
         frequency_ms: i32,
     ) -> Result<bool> {
-        let node_key = node_id.to_string();
         let _permit = self
-            .admit_mutation(&[subscriber_jid, &node_key], false)
+            .mutation_admission
+            .acquire_keys(
+                &[
+                    PubSubAdmissionKey::Text(subscriber_jid),
+                    PubSubAdmissionKey::NodeId(PubSubNodeId::new(node_id)),
+                ],
+                false,
+            )
             .await?;
         self.repository
             .enqueue_pubsub_digest(node_id, subscriber_jid, event_xml, frequency_ms)
@@ -449,7 +455,7 @@ impl PubSubEventRenderer {
         )?;
 
         if !authorization_recipients.is_empty() {
-            let authorization_event_id = Uuid::new_v4();
+            let authorization_event_id = self.time.new_uuid();
             let form = XmlElement::namespaced("x", NS_DATA)
                 .attr("type", "form")
                 .child(data_form_field(
@@ -468,7 +474,7 @@ impl PubSubEventRenderer {
                 .finish();
             for recipient in authorization_recipients {
                 let mut message = XmlElement::namespaced("message", "jabber:client")
-                    .attr("id", Uuid::new_v4())
+                    .attr("id", self.time.new_uuid())
                     .attr("from", &self.service_jid)
                     .attr("to", recipient);
                 message.push_validated_fragment(&form)?;
@@ -489,7 +495,7 @@ impl PubSubEventRenderer {
         }
 
         if let Some(item) = last_item {
-            let last_item_event_id = Uuid::new_v4();
+            let last_item_event_id = self.time.new_uuid();
             let mut event = XmlElement::new("items").attr("node", &node.node);
             if node.deliver_payloads {
                 event.push_validated_fragment(&item.xml_payload)?;

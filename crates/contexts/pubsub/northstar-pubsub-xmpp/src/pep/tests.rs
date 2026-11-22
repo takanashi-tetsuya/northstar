@@ -2,6 +2,73 @@ use super::*;
 use northstar_pubsub_core::pep_nodes::{CONTACTS, OMEMO_BUNDLES, OMEMO_DEVICES};
 use roxmltree::Document;
 
+#[test]
+fn pep_audience_messages_use_sequential_ids_in_recipient_order() {
+    use northstar_pubsub_core::{FixedPubSubClock, SequentialPubSubIds};
+    use northstar_time::DateTime;
+    use std::sync::Arc;
+
+    const OWNER: &str = "owner@example.test";
+    const PUBLISHER: &str = "owner@example.test/Phone";
+    const CONTACT: &str = "contact@example.test";
+    const CONTACT_RESOURCE: &str = "contact@example.test/Desk";
+    const EXPLICIT: &str = "reader@remote.test/Desk";
+    const EVENT: &str = "<items node='news'><item id='one'/></items>";
+    const REPLY_TO: &str = "<addresses xmlns='http://jabber.org/protocol/address'>\
+        <address type='replyto' jid='owner@example.test/Phone'/></addresses>";
+
+    struct Routing;
+
+    impl PepAudienceRouting for Routing {
+        fn pep_routing_local_domain(&self) -> &str {
+            "example.test"
+        }
+
+        fn pep_available_resources_wanting(&self, bare_jid: &str, node: &str) -> Vec<String> {
+            assert_eq!(node, "news");
+            match bare_jid {
+                OWNER => vec![PUBLISHER.to_owned()],
+                CONTACT => vec![CONTACT_RESOURCE.to_owned()],
+                _ => panic!("unexpected recipient {bare_jid}"),
+            }
+        }
+
+        fn pep_interested_resources(&self, _bare_jid: &str, _node: &str) -> Vec<String> {
+            panic!("all explicit recipients already have a resource");
+        }
+    }
+
+    let ids = PubSubTimeSources::new(
+        Arc::new(FixedPubSubClock(DateTime::UNIX_EPOCH)),
+        Arc::new(SequentialPubSubIds::default()),
+    );
+    let audience = PepAudienceSnapshot {
+        owner_bare_jid: OWNER.to_owned(),
+        roster_jids: vec![CONTACT.to_owned()],
+        explicit_jids: vec![CONTACT_RESOURCE.to_owned(), EXPLICIT.to_owned()],
+    };
+    let messages =
+        pep_audience_messages(&Routing, &ids, Some(PUBLISHER), "news", EVENT, &audience).unwrap();
+    let expected = [
+        (PUBLISHER, 1, ""),
+        (CONTACT_RESOURCE, 2, REPLY_TO),
+        (EXPLICIT, 3, ""),
+    ]
+    .map(|(recipient, sequence, reply_to)| {
+        (
+            recipient.to_owned(),
+            format!(
+                "<message xmlns='jabber:client' from='{OWNER}' to='{recipient}' type='headline' \
+                 id='00000000-0000-0000-0000-00000000000{sequence}'>\
+                 <event xmlns='http://jabber.org/protocol/pubsub#event'>{EVENT}</event>\
+                 {reply_to}</message>",
+            ),
+        )
+    });
+    assert_eq!(messages, expected);
+    assert_eq!(ids.new_uuid(), uuid::Uuid::from_u128(4));
+}
+
 #[tokio::test]
 async fn pep_replay_modes_keep_exact_message_bytes_and_route_epochs() {
     use northstar_pubsub_core::{

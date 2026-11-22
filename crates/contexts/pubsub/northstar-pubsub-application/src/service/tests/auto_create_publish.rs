@@ -191,6 +191,7 @@ impl PubSubSubscriptionMutationRepository for PublishRepository {
         node_id: Uuid,
         requester: &str,
         changes: &[(String, String, Option<String>)],
+        _time: &PubSubTimeSources,
     ) -> Result<SetSubscriptionsOutcome> {
         self.record_owner_write("subscriptions", node_id, requester);
         assert_eq!(changes.len(), 1);
@@ -205,7 +206,7 @@ impl PubSubSubscriptionMutationRepository for PublishRepository {
             -> PubSubSubscribeOutcome;
         fn unsubscribe_checked(_node_id: PubSubNodeId, _requester: &PubSubBareJid, _subscriber: &PubSubAddress, _subid: RequestedSubId<'_>, _time: &PubSubTimeSources)
             -> PubSubUnsubscribeOutcome;
-        fn resolve_pending_subscription(_node_id: Uuid, _requester: &str, _subscriber: &str, _subid: &str, _allow: bool)
+        fn resolve_pending_subscription(_node_id: Uuid, _requester: &str, _subscriber: &str, _subid: &str, _allow: bool, _time: &PubSubTimeSources)
             -> SubscriptionAuthorizationOutcome;
     }
 }

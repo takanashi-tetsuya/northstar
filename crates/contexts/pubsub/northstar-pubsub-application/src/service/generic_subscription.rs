@@ -4,9 +4,10 @@ use super::PubSubService;
 use crate::{
     authorization_precheck, validate_pubsub_authorize_subscription_command,
     validate_pubsub_subscribe_command, validate_pubsub_unsubscribe_command,
-    validate_pubsub_update_subscription_options_command, PubSubAuthorizeSubscriptionCommand,
-    PubSubAuthorizeSubscriptionResult, PubSubNodeQueryRepository, PubSubSubscribeCommand,
-    PubSubSubscribeResult, PubSubSubscriptionMutationRepository, PubSubSubscriptionQueryRepository,
+    validate_pubsub_update_subscription_options_command, PubSubAdmissionKey,
+    PubSubAuthorizeSubscriptionCommand, PubSubAuthorizeSubscriptionResult,
+    PubSubNodeQueryRepository, PubSubSubscribeCommand, PubSubSubscribeResult,
+    PubSubSubscriptionMutationRepository, PubSubSubscriptionQueryRepository,
     PubSubUnsubscribeCommand, PubSubUnsubscribeResult, PubSubUpdateSubscriptionOptionsCommand,
     PubSubUpdateSubscriptionOptionsResult,
 };
@@ -118,10 +119,14 @@ impl<
         ) {
             return Ok(PubSubAuthorizeSubscriptionResult { outcome });
         }
-        let node_key = node.id.to_string();
         let _permit = self
-            .admit_mutation(
-                &[command.requester, command.subscriber_jid, &node_key],
+            .mutation_admission
+            .acquire_keys(
+                &[
+                    PubSubAdmissionKey::Text(command.requester),
+                    PubSubAdmissionKey::Text(command.subscriber_jid),
+                    PubSubAdmissionKey::NodeId(PubSubNodeId::new(node.id)),
+                ],
                 false,
             )
             .await?;
@@ -133,6 +138,7 @@ impl<
                 command.subscriber_jid,
                 &subscription.subid,
                 command.allow,
+                self.time_sources(),
             )
             .await?;
         Ok(PubSubAuthorizeSubscriptionResult { outcome })

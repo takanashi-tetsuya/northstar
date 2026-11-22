@@ -138,9 +138,10 @@ pub async fn federated_pep_subscription<H: PubSubHost>(
         return Ok(s2s_iq_error(id, to, from, "jid-malformed"));
     };
     if operation.tag_name().name() == "subscribe" {
-        let requested_subid = uuid::Uuid::new_v4().to_string();
         let service = host.pubsub_application_service();
-        let context = service.time_sources().prepare_event();
+        let time = service.time_sources();
+        let requested_subid = time.new_uuid().to_string();
+        let context = time.prepare_event();
         let outcome = match service
             .subscribe_pep_node(
                 northstar_pubsub_application::PepSubscribeCommand::from(

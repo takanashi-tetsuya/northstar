@@ -193,9 +193,10 @@ async fn pep_subscribe<S: PepSession>(
             canonical_account_jid(&requester.username, session.pep_local_domain())
                 .expect("authenticated account must form a canonical JID")
         });
-    let requested_subid = uuid::Uuid::new_v4().to_string();
     let service = session.pep_pubsub_service();
-    let context = service.time_sources().prepare_event();
+    let time = service.time_sources();
+    let requested_subid = time.new_uuid().to_string();
+    let context = time.prepare_event();
     let outcome = service
         .subscribe_pep_node(
             northstar_pubsub_application::PepSubscribeCommand::from(PepSubscribeWrite {

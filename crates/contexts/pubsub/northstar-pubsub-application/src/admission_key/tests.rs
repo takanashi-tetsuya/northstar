@@ -37,6 +37,18 @@ fn all_key_variants_use_existing_admission_text() {
     );
 }
 
+#[test]
+fn pep_node_keys_preserve_owner_then_node_text() {
+    let owner = Uuid::from_u128(42);
+    let node = " urn:test:MixedCase ";
+    let keys = [
+        PubSubAdmissionKey::Owner(owner),
+        PubSubAdmissionKey::Text(node),
+    ];
+    let actual = keys.map(|key| key.compat_text().into_owned());
+    assert_eq!(actual, [owner.to_string(), node.to_owned()]);
+}
+
 #[tokio::test(start_paused = true)]
 async fn address_key_contends_with_its_canonical_text() {
     let input = "ALIce@Example.TEST/Phone";

@@ -5,7 +5,9 @@ use northstar_pubsub_application::{
     PubSubCollectionItemSelection, PubSubItemQuery, PubSubItemRead, PubSubLeafItemSelection,
     PubSubOptionsNode, PubSubOptionsQuery, PubSubOptionsRead,
 };
-use northstar_pubsub_core::{CollectionVisibleItem, PubSubNodeId, RequestedSubId};
+use northstar_pubsub_core::{
+    CollectionVisibleItem, PubSubNodeId, PubSubTimeSources, RequestedSubId,
+};
 use northstar_xep_0060::supports_include_body;
 
 const MAX_COLLECTION_READ_ITEMS: i64 = 100;
@@ -406,6 +408,29 @@ pub(super) fn subscription_options_reply(
     ))
 }
 
+fn create_node_name<'a>(
+    explicit: Option<&'a str>,
+    ids: &PubSubTimeSources,
+) -> Result<Cow<'a, str>, PubSubReply> {
+    match explicit {
+        Some(name) => valid_node_id(Some(name))
+            .map(Cow::Borrowed)
+            .ok_or(PubSubReply::Error("bad-request")),
+        None => Ok(Cow::Owned(ids.new_uuid().to_string())),
+    }
+}
+
+fn publish_item_id(item: Node<'_, '_>, ids: &PubSubTimeSources) -> Result<String, PubSubReply> {
+    let id = item
+        .attribute("id")
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| ids.new_uuid().to_string());
+    if !valid_item_id(&id) {
+        return Err(PubSubReply::Error("bad-request"));
+    }
+    Ok(id)
+}
+
 pub(super) async fn handle_entity_set<H: PubSubHost>(
     host: &H,
     requester: &str,
@@ -517,16 +542,13 @@ pub(super) async fn handle_entity_set<H: PubSubHost>(
             if !has_only_attributes(primary, &["node"]) || !has_no_element_content(primary) {
                 return Ok(PubSubReply::Error("bad-request"));
             }
-            let generated;
-            let node_name = if let Some(value) = primary.attribute("node") {
-                let Some(value) = valid_node_id(Some(value)) else {
-                    return Ok(PubSubReply::Error("bad-request"));
+            let service = host.pubsub_application_service();
+            let node_name =
+                match create_node_name(primary.attribute("node"), service.time_sources()) {
+                    Ok(name) => name,
+                    Err(reply) => return Ok(reply),
                 };
-                value
-            } else {
-                generated = uuid::Uuid::new_v4().to_string();
-                generated.as_str()
-            };
+            let node_name = node_name.as_ref();
             let mut config = PubSubNodeConfig::default();
             if node_name == "serverinfo" {
                 return Ok(PubSubReply::Error("conflict"));
@@ -546,12 +568,7 @@ pub(super) async fn handle_entity_set<H: PubSubHost>(
                 config: &config,
                 max_nodes_per_owner: host.pubsub_node_owner_limits().max_nodes,
             });
-            match host
-                .pubsub_application_service()
-                .execute_pubsub_create_node(cmd)
-                .await?
-                .outcome
-            {
+            match service.execute_pubsub_create_node(cmd).await?.outcome {
                 CreateNodeOutcome::Created => {}
                 CreateNodeOutcome::Conflict => {
                     return Ok(PubSubReply::Error("conflict"));
@@ -619,6 +636,7 @@ pub(super) async fn handle_entity_set<H: PubSubHost>(
             if !publish_batch_size_allowed(item_nodes.len()) {
                 return Ok(PubSubReply::Error("bad-request"));
             }
+            let service = host.pubsub_application_service();
             let mut items = Vec::with_capacity(item_nodes.len());
             let mut seen_item_ids = BTreeSet::new();
             let mut total_bytes = 0usize;
@@ -639,13 +657,10 @@ pub(super) async fn handle_entity_set<H: PubSubHost>(
                         "invalid-payload",
                     )));
                 }
-                let item_id = item_node
-                    .attribute("id")
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                if !valid_item_id(&item_id) {
-                    return Ok(PubSubReply::Error("bad-request"));
-                }
+                let item_id = match publish_item_id(item_node, service.time_sources()) {
+                    Ok(id) => id,
+                    Err(reply) => return Ok(reply),
+                };
                 if !seen_item_ids.insert(item_id.clone()) {
                     return Ok(PubSubReply::Error("bad-request"));
                 }
@@ -665,10 +680,7 @@ pub(super) async fn handle_entity_set<H: PubSubHost>(
                 max_storage_bytes_per_owner: limits.max_storage_bytes,
                 max_nodes_per_owner: limits.max_nodes,
             });
-            let result = host
-                .pubsub_application_service()
-                .execute_pubsub_publish(cmd)
-                .await?;
+            let result = service.execute_pubsub_publish(cmd).await?;
             let item_ids = match result.outcome {
                 PubSubPublishOutcome::Published { item_ids } => item_ids,
                 PubSubPublishOutcome::Conflict => return Ok(PubSubReply::Error("conflict")),
@@ -985,5 +997,49 @@ pub(super) async fn handle_entity_set<H: PubSubHost>(
             Ok(PubSubReply::Result(String::new()))
         }
         _ => Ok(PubSubReply::Error("feature-not-implemented")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use northstar_pubsub_core::{FixedPubSubClock, SequentialPubSubIds};
+    use northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission;
+    use northstar_time::DateTime;
+    use roxmltree::Document;
+    use std::sync::Arc;
+
+    #[test]
+    fn instant_node_name_and_publish_item_id_use_the_service_id_source() {
+        let service = PubSubService::new_with_durable_outbox_database_admission(
+            (),
+            2,
+            DurableOutboxDatabaseAdmission::for_primary_pool(2),
+        )
+        .with_time_sources(PubSubTimeSources::new(
+            Arc::new(FixedPubSubClock(DateTime::UNIX_EPOCH)),
+            Arc::new(SequentialPubSubIds::default()),
+        ));
+        let ids = service.time_sources();
+        let create =
+            Document::parse("<create xmlns='http://jabber.org/protocol/pubsub'/>").unwrap();
+        let items = Document::parse(
+            "<publish xmlns='http://jabber.org/protocol/pubsub' node='news'><item id='fixed'/><item/></publish>",
+        )
+        .unwrap();
+        let mut items = items.root_element().children().filter(Node::is_element);
+        let explicit_item = items.next().unwrap();
+        let generated_item = items.next().unwrap();
+
+        assert_eq!(create_node_name(Some("news"), ids).unwrap(), "news");
+        assert_eq!(
+            create_node_name(create.root_element().attribute("node"), ids).unwrap(),
+            "00000000-0000-0000-0000-000000000001",
+        );
+        assert_eq!(publish_item_id(explicit_item, ids).unwrap(), "fixed");
+        assert_eq!(
+            publish_item_id(generated_item, ids).unwrap(),
+            "00000000-0000-0000-0000-000000000002",
+        );
     }
 }

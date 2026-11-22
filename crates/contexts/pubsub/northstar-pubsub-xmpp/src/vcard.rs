@@ -7,7 +7,7 @@ use northstar_pubsub_application::profile::{
     LegacyVCardWrite, ProfileAudienceSnapshot, ProfilePublishStatus, ProfileRepository,
     ProfileService, PublicVCard,
 };
-use northstar_pubsub_core::{PepQuotas, PubSubAccount, PubSubBareJid};
+use northstar_pubsub_core::{PepQuotas, PubSubAccount, PubSubBareJid, PubSubTimeSources};
 use northstar_xml_builder::stanza::{iq_error, iq_error_from, iq_result, iq_result_from};
 use northstar_xml_builder::XmlElement;
 use northstar_xmpp_avatar::{
@@ -29,10 +29,13 @@ pub trait VCardSession: Sync {
     fn vcard_pep_quotas(&self) -> PepQuotas;
     /// The profile service, over the repository the composition root binds.
     fn vcard_profile_service(&self) -> &ProfileService<impl ProfileRepository>;
+    /// The PubSub service's clock and UUID source for profile notifications.
+    fn vcard_pubsub_time_sources(&self) -> &PubSubTimeSources;
     /// The PEP notifications of `event` on `node` for the profile audience, as (recipient,
     /// stanza) pairs; `publisher_full_jid` is the resource that published.
     fn vcard_profile_audience_messages(
         &self,
+        ids: &PubSubTimeSources,
         publisher_full_jid: Option<&str>,
         node: &str,
         event: &str,
@@ -367,6 +370,7 @@ pub async fn vcard_set<S: VCardSession>(
     let metadata_event = crate::events::profile_item_event(AVATAR_METADATA, &converted.metadata.1)?;
     let publisher_full_jid = session.vcard_full_jid();
     let quotas = session.vcard_pep_quotas();
+    let ids = session.vcard_pubsub_time_sources();
     let outcome = match session
         .vcard_profile_service()
         .set_legacy_vcard(
@@ -383,6 +387,7 @@ pub async fn vcard_set<S: VCardSession>(
             },
             &move |audience: &ProfileAudienceSnapshot| {
                 session.vcard_profile_audience_messages(
+                    ids,
                     publisher_full_jid,
                     AVATAR_METADATA,
                     &metadata_event,

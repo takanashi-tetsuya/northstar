@@ -2,7 +2,7 @@
 
 use crate::PubSubCollectionDiscoChild;
 use anyhow::Result;
-use northstar_pubsub_core::{PubSubNodeConfig, PubSubSubscription};
+use northstar_pubsub_core::{PubSubNodeConfig, PubSubSubscription, PubSubTimeSources};
 use northstar_xml_builder::XmlElement;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -24,12 +24,20 @@ pub enum CollectionDiscoItems {
 #[derive(Clone)]
 pub struct PubSubEventRenderer {
     pub(super) service_jid: String,
+    pub(super) time: PubSubTimeSources,
 }
 impl PubSubEventRenderer {
     pub fn new(domain: &str) -> Self {
         Self {
             service_jid: format!("pubsub.{domain}"),
+            time: PubSubTimeSources::default(),
         }
+    }
+
+    /// Use the same clock and UUID source as the service issuing the mutation.
+    pub fn with_time_sources(mut self, time: &PubSubTimeSources) -> Self {
+        self.time = time.clone();
+        self
     }
 }
 pub(super) const NS_PUBSUB_EVENT: &str = "http://jabber.org/protocol/pubsub#event";

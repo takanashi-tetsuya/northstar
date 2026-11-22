@@ -51,6 +51,7 @@ pub(super) fn pep_event_message(
 /// but can never add another principal.
 pub fn pep_audience_messages(
     routing: &(impl PepAudienceRouting + ?Sized),
+    ids: &PubSubTimeSources,
     publisher_full_jid: Option<&str>,
     node: &str,
     event: &str,
@@ -60,7 +61,7 @@ pub fn pep_audience_messages(
         pep_event_message(
             &audience.owner_bare_jid,
             recipient,
-            uuid::Uuid::new_v4(),
+            ids.new_uuid(),
             event,
             reply_to_publisher.then_some(publisher_full_jid).flatten(),
         )
@@ -126,6 +127,7 @@ pub fn pep_audience_messages(
 /// durable snapshot.
 pub fn profile_audience_messages(
     routing: &(impl PepAudienceRouting + ?Sized),
+    ids: &PubSubTimeSources,
     publisher_full_jid: Option<&str>,
     node: &str,
     event: &str,
@@ -135,7 +137,7 @@ pub fn profile_audience_messages(
         pep_event_message(
             &audience.owner_bare_jid,
             recipient,
-            uuid::Uuid::new_v4(),
+            ids.new_uuid(),
             event,
             reply_to_publisher.then_some(publisher_full_jid).flatten(),
         )
@@ -197,6 +199,7 @@ pub fn profile_audience_messages(
 
 pub(super) fn render_pep_direct_state_messages(
     snapshot: &PepDirectStateSnapshot,
+    ids: &PubSubTimeSources,
 ) -> Result<Vec<(String, String)>> {
     snapshot
         .transitions
@@ -228,7 +231,7 @@ pub(super) fn render_pep_direct_state_messages(
                 pep_event_message(
                     &snapshot.owner_bare_jid,
                     recipient,
-                    uuid::Uuid::new_v4(),
+                    ids.new_uuid(),
                     &event,
                     None,
                 )?,

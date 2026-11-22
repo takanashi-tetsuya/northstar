@@ -1,14 +1,17 @@
 use super::*;
+use crate::service::PubSubEventRenderer;
 use crate::{PubSubOwnerRead, PubSubOwnerReadKind};
 use northstar_pubsub_core::{
-    FixedPubSubClock, PubSubNode, PubSubNodeMetadata, PubSubSubscribeWrite, PubSubSubscription,
-    PubSubTimeSources, PubSubUnsubscribeWrite, RequestedSubId, SequentialPubSubIds,
-    SetSubscriptionsOutcome, SubscriptionOptionsPatch,
+    FixedPubSubClock, PubSubItem, PubSubNode, PubSubNodeMetadata, PubSubOutboxDeliveryKind,
+    PubSubOutboxInsert, PubSubSubscribeWrite, PubSubSubscription, PubSubTimeSources,
+    PubSubUnsubscribeWrite, RequestedSubId, SequentialPubSubIds, SetSubscriptionsOutcome,
+    SubscriptionOptionsPatch,
 };
 use northstar_time::DateTime;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+const OWNER: &str = "owner@example.test";
 const REQUESTER: &str = "reader@example.test";
 const SUBSCRIBER: &str = "reader@example.test/desktop";
 const NODE: &str = "news";
@@ -16,6 +19,18 @@ const NODE: &str = "news";
 struct SubscriptionRepository {
     node: PubSubNode,
     subscribe_outcome: PubSubSubscribeOutcome,
+    outbox: Mutex<Vec<PubSubOutboxInsert>>,
+}
+
+impl SubscriptionRepository {
+    fn pending_subscription(&self) -> Option<&PubSubSubscription> {
+        match &self.subscribe_outcome {
+            PubSubSubscribeOutcome::Subscribed(subscription) if subscription.state == "pending" => {
+                Some(subscription)
+            }
+            _ => None,
+        }
+    }
 }
 
 impl PubSubNodeQueryRepository for SubscriptionRepository {
@@ -36,8 +51,11 @@ impl PubSubNodeQueryRepository for SubscriptionRepository {
         panic!("unexpected child lookup");
     }
 
-    async fn is_owner(&self, _node_id: Uuid, _requester: &str) -> Result<bool> {
-        panic!("unexpected owner lookup");
+    async fn is_owner(&self, node_id: Uuid, requester: &str) -> Result<bool> {
+        assert!(self.pending_subscription().is_some());
+        assert_eq!(node_id, self.node.id);
+        assert_eq!(requester, OWNER);
+        Ok(true)
     }
 
     async fn node_metadata(&self, _node_id: Uuid) -> Result<PubSubNodeMetadata> {
@@ -51,6 +69,43 @@ impl PubSubNodeQueryRepository for SubscriptionRepository {
         _kind: PubSubOwnerReadKind,
     ) -> Result<PubSubOwnerRead> {
         panic!("unexpected owner read");
+    }
+}
+
+impl PubSubSubscriptionQueryRepository for SubscriptionRepository {
+    async fn is_subscribed(&self, _node_id: Uuid, _jid: &str) -> Result<bool> {
+        panic!("unexpected active subscription lookup");
+    }
+
+    async fn subscriptions_for_jid(
+        &self,
+        _jid: &str,
+        _node: Option<&str>,
+    ) -> Result<Vec<PubSubSubscription>> {
+        panic!("unexpected subscription list");
+    }
+
+    async fn subscriptions_addressing_jid_page(
+        &self,
+        _jid: &str,
+        _after: Option<(&str, &str)>,
+        _limit: i64,
+    ) -> Result<Vec<PubSubSubscription>> {
+        panic!("unexpected subscription page");
+    }
+
+    async fn get_subscription(
+        &self,
+        node_id: Uuid,
+        jid: &str,
+    ) -> Result<Option<PubSubSubscription>> {
+        assert_eq!(node_id, self.node.id);
+        assert_eq!(jid, SUBSCRIBER);
+        Ok(Some(
+            self.pending_subscription()
+                .expect("expected a pending subscription fixture")
+                .clone(),
+        ))
     }
 }
 
@@ -90,7 +145,7 @@ impl PubSubSubscriptionMutationRepository for SubscriptionRepository {
         max_subscriptions: i64,
         patch: Option<&SubscriptionOptionsPatch>,
         planned_subid: &str,
-        _time: &PubSubTimeSources,
+        time: &PubSubTimeSources,
     ) -> Result<PubSubSubscribeOutcome> {
         assert_eq!(node_id.get(), self.node.id);
         assert_eq!(requester.to_string(), REQUESTER);
@@ -98,6 +153,22 @@ impl PubSubSubscriptionMutationRepository for SubscriptionRepository {
         assert_eq!(max_subscriptions, 100);
         assert!(patch.is_none());
         assert_eq!(planned_subid, Uuid::from_u128(1).to_string());
+        if let Some(subscription) = self.pending_subscription() {
+            assert_eq!(subscription.subid, planned_subid);
+            let owners = [OWNER.to_owned()];
+            let rows = PubSubEventRenderer::new(self.local_domain())
+                .with_time_sources(time)
+                .render_subscription_transition(
+                    &self.node,
+                    subscription,
+                    &owners,
+                    &owners,
+                    None,
+                    time.new_uuid(),
+                    self.node.created_at,
+                )?;
+            self.outbox.lock().unwrap().extend(rows);
+        }
         Ok(self.subscribe_outcome.clone())
     }
 
@@ -126,19 +197,48 @@ impl PubSubSubscriptionMutationRepository for SubscriptionRepository {
         _node_id: Uuid,
         _requester: &str,
         _changes: &[(String, String, Option<String>)],
+        _time: &PubSubTimeSources,
     ) -> Result<SetSubscriptionsOutcome> {
         panic!("unexpected owner subscription write");
     }
 
     async fn resolve_pending_subscription(
         &self,
-        _node_id: Uuid,
-        _requester: &str,
-        _subscriber_jid: &str,
-        _expected_subid: &str,
-        _allow: bool,
+        node_id: Uuid,
+        requester: &str,
+        subscriber_jid: &str,
+        expected_subid: &str,
+        allow: bool,
+        time: &PubSubTimeSources,
     ) -> Result<SubscriptionAuthorizationOutcome> {
-        panic!("unexpected owner authorization");
+        let mut subscription = self
+            .pending_subscription()
+            .expect("expected a pending subscription fixture")
+            .clone();
+        assert_eq!(node_id, self.node.id);
+        assert_eq!(requester, OWNER);
+        assert_eq!(subscriber_jid, subscription.jid);
+        assert_eq!(expected_subid, subscription.subid);
+        assert!(allow);
+        subscription.state = "subscribed".to_owned();
+        let last_item = PubSubItem {
+            item_id: "latest".to_owned(),
+            xml_payload: "<item id='latest'/>".to_owned(),
+            created_at: self.node.created_at,
+        };
+        let rows = PubSubEventRenderer::new(self.local_domain())
+            .with_time_sources(time)
+            .render_subscription_transition(
+                &self.node,
+                &subscription,
+                &[subscriber_jid.to_owned()],
+                &[],
+                Some(&last_item),
+                Uuid::from_u128(100),
+                self.node.created_at,
+            )?;
+        self.outbox.lock().unwrap().extend(rows);
+        Ok(SubscriptionAuthorizationOutcome::Applied)
     }
 }
 
@@ -146,10 +246,11 @@ fn service(outcome: PubSubSubscribeOutcome) -> PubSubService<SubscriptionReposit
     PubSubService::new_with_durable_outbox_database_admission(
         SubscriptionRepository {
             subscribe_outcome: outcome,
+            outbox: Mutex::new(Vec::new()),
             node: PubSubNode {
                 id: Uuid::from_u128(2),
                 node: NODE.to_owned(),
-                creator_jid: "owner@example.test".to_owned(),
+                creator_jid: OWNER.to_owned(),
                 access_model: "whitelist".to_owned(),
                 publish_model: "publishers".to_owned(),
                 max_items: 100,
@@ -182,13 +283,12 @@ fn service(outcome: PubSubSubscribeOutcome) -> PubSubService<SubscriptionReposit
     ))
 }
 
-#[tokio::test]
-async fn subscribe_reports_the_repository_decision_and_injects_the_planned_subid() {
-    let existing = PubSubSubscription {
+fn subscription(state: &str, subid: &str) -> PubSubSubscription {
+    PubSubSubscription {
         node: NODE.to_owned(),
         jid: SUBSCRIBER.to_owned(),
-        state: "subscribed".to_owned(),
-        subid: "current".to_owned(),
+        state: state.to_owned(),
+        subid: subid.to_owned(),
         deliver: true,
         digest: false,
         digest_frequency: 86_400_000,
@@ -197,7 +297,12 @@ async fn subscribe_reports_the_repository_decision_and_injects_the_planned_subid
         show_values: Vec::new(),
         subscription_type: "items".to_owned(),
         subscription_depth: Some(1),
-    };
+    }
+}
+
+#[tokio::test]
+async fn subscribe_reports_the_repository_decision_and_injects_the_planned_subid() {
+    let existing = subscription("subscribed", "current");
     for expected in [
         PubSubSubscribeOutcome::Subscribed(existing.clone()),
         PubSubSubscribeOutcome::ExistingActive(existing),
@@ -221,6 +326,62 @@ async fn subscribe_reports_the_repository_decision_and_injects_the_planned_subid
             .unwrap();
         assert_eq!(result.outcome, expected);
     }
+}
+
+#[tokio::test]
+async fn approved_pending_subscription_uses_injected_authorization_and_last_item_ids() {
+    let subid = Uuid::from_u128(1).to_string();
+    // Stored subscriptions always carry at least one show value.
+    let mut pending_subscription = subscription("pending", &subid);
+    pending_subscription.show_values = vec!["online".to_owned()];
+    let pending = PubSubSubscribeOutcome::Subscribed(pending_subscription);
+    let service = service(pending.clone());
+    let result = service
+        .execute_pubsub_subscribe(PubSubSubscribeCommand::from(PubSubSubscribeWrite {
+            requester: REQUESTER,
+            subscriber_jid: SUBSCRIBER,
+            node: NODE,
+            options: None,
+            max_subscriptions: 100,
+        }))
+        .await
+        .unwrap();
+    assert_eq!(result.outcome, pending);
+
+    let approval = service
+        .execute_pubsub_authorize_subscription(PubSubAuthorizeSubscriptionCommand {
+            requester: OWNER,
+            node: NODE,
+            subscriber_jid: SUBSCRIBER,
+            echoed_subid: Some(&subid),
+            allow: true,
+        })
+        .await
+        .unwrap();
+    assert_eq!(approval.outcome, SubscriptionAuthorizationOutcome::Applied);
+
+    let rows = service.repository.outbox.lock().unwrap();
+    let [_, authorization, _, last_item] = rows.as_slice() else {
+        panic!("expected both subscription notifications, authorization form and last item");
+    };
+    assert_eq!(authorization.event_id, Uuid::from_u128(3));
+    assert_eq!(authorization.recipient_jid, OWNER);
+    let message = roxmltree::Document::parse(&authorization.payload_xml).unwrap();
+    assert_eq!(
+        message.root_element().attribute("id"),
+        Some("00000000-0000-0000-0000-000000000004"),
+    );
+    assert!(authorization
+        .payload_xml
+        .contains("pubsub#subscribe_authorization"));
+
+    assert_eq!(last_item.event_id, Uuid::from_u128(5));
+    assert_eq!(last_item.recipient_jid, SUBSCRIBER);
+    assert_eq!(
+        last_item.delivery_kind,
+        PubSubOutboxDeliveryKind::PubSubChildren
+    );
+    assert!(last_item.payload_xml.contains("<item id='latest'/>"));
 }
 
 #[tokio::test]

@@ -10,6 +10,7 @@ use northstar_pubsub_application::{
 };
 use northstar_pubsub_core::{
     PepAudienceSnapshot, PepBookmarkMutationOutcome, PepOutboxFactory, PepQuotas, PubSubAccount,
+    PubSubTimeSources,
 };
 use northstar_xml_builder::stanza::{iq_error, iq_result};
 use northstar_xml_builder::XmlElement;
@@ -39,6 +40,7 @@ pub trait PrivateXmlSession: Sync {
     /// `publisher_full_jid` is the resource that published.
     fn private_pep_audience_messages(
         &self,
+        ids: &PubSubTimeSources,
         publisher_full_jid: Option<&str>,
         node: &str,
         event: &str,
@@ -48,6 +50,7 @@ pub trait PrivateXmlSession: Sync {
 
 struct LegacyBookmarkOutboxFactory<'a, S> {
     session: &'a S,
+    ids: &'a PubSubTimeSources,
     publisher_full_jid: Option<&'a str>,
 }
 
@@ -68,6 +71,7 @@ impl<S: PrivateXmlSession> PepOutboxFactory for LegacyBookmarkOutboxFactory<'_, 
         }
         let event = bookmark_event_fragment(&plan)?;
         self.session.private_pep_audience_messages(
+            self.ids,
             self.publisher_full_jid,
             BOOKMARKS2,
             &event,
@@ -221,12 +225,13 @@ pub async fn private_set<S: PrivateXmlSession>(
             .await?;
         let (max_private_bytes, max_nodes, max_storage_bytes) =
             session.private_storage_service().legacy_bookmark_limits();
+        let service = session.private_pubsub_service();
         let factory = LegacyBookmarkOutboxFactory {
             session,
+            ids: service.time_sources(),
             publisher_full_jid: session.private_full_jid(),
         };
-        match session
-            .private_pubsub_service()
+        match service
             .commit_legacy_bookmarks(
                 PepCommitLegacyBookmarksCommand {
                     owner: &user,

@@ -188,7 +188,8 @@ pub async fn pep_owner_set<S: PepSession>(
             Some("nodeid-required"),
         ));
     };
-    let Some(current) = session.pep_pubsub_service().pep_node(user.id, node).await? else {
+    let service = session.pep_pubsub_service();
+    let Some(current) = service.pep_node(user.id, node).await? else {
         return Ok(iq_error_from_optional(
             id,
             iq.attribute("to"),
@@ -196,6 +197,7 @@ pub async fn pep_owner_set<S: PepSession>(
         ));
     };
     let owner = user.clone();
+    let ids = service.time_sources();
     match operation.tag_name().name() {
         "configure" => {
             if operation
@@ -236,14 +238,14 @@ pub async fn pep_owner_set<S: PepSession>(
             let factory = move |audience: &PepAudienceSnapshot| {
                 pep_audience_messages(
                     session.pep_audience_routing(),
+                    ids,
                     publisher_full_jid.as_deref(),
                     node,
                     &event,
                     audience,
                 )
             };
-            let outcome = session
-                .pep_pubsub_service()
+            let outcome = service
                 .execute_pep_configure_node(cmd, &factory)
                 .await?
                 .outcome;
@@ -262,17 +264,14 @@ pub async fn pep_owner_set<S: PepSession>(
             let factory = move |audience: &PepAudienceSnapshot| {
                 pep_audience_messages(
                     session.pep_audience_routing(),
+                    ids,
                     publisher_full_jid.as_deref(),
                     node,
                     &event,
                     audience,
                 )
             };
-            let outcome = session
-                .pep_pubsub_service()
-                .execute_pep_purge_node(cmd, &factory)
-                .await?
-                .outcome;
+            let outcome = service.execute_pep_purge_node(cmd, &factory).await?.outcome;
             if let Some(error) = pep_owner_mutation_error(id, iq.attribute("to"), outcome) {
                 return Ok(error);
             }
@@ -288,14 +287,14 @@ pub async fn pep_owner_set<S: PepSession>(
             let factory = move |audience: &PepAudienceSnapshot| {
                 pep_audience_messages(
                     session.pep_audience_routing(),
+                    ids,
                     publisher_full_jid.as_deref(),
                     node,
                     &event,
                     audience,
                 )
             };
-            let outcome = session
-                .pep_pubsub_service()
+            let outcome = service
                 .execute_pep_delete_node(cmd, &factory)
                 .await?
                 .outcome;
@@ -343,9 +342,10 @@ pub async fn pep_owner_set<S: PepSession>(
                 expected: &current,
                 changes: &changes,
             });
-            let outcome = session
-                .pep_pubsub_service()
-                .execute_pep_set_affiliations(cmd, &render_pep_direct_state_messages)
+            let outcome = service
+                .execute_pep_set_affiliations(cmd, &|snapshot: &PepDirectStateSnapshot| {
+                    render_pep_direct_state_messages(snapshot, ids)
+                })
                 .await?
                 .outcome;
             if let Some(error) = pep_owner_mutation_error(id, iq.attribute("to"), outcome) {
@@ -381,8 +381,7 @@ pub async fn pep_owner_set<S: PepSession>(
             }) else {
                 return Ok(iq_error(id, "bad-request"));
             };
-            let outcome = session
-                .pep_pubsub_service()
+            let outcome = service
                 .execute_pep_unsubscribe_batch(
                     PepUnsubscribeBatchCommand {
                         owner: &owner,
@@ -390,7 +389,9 @@ pub async fn pep_owner_set<S: PepSession>(
                         node,
                         changes: &changes,
                     },
-                    &render_pep_direct_state_messages,
+                    &|snapshot: &PepDirectStateSnapshot| {
+                        render_pep_direct_state_messages(snapshot, ids)
+                    },
                 )
                 .await?
                 .outcome;

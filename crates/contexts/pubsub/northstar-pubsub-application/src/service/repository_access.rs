@@ -196,7 +196,7 @@ impl<
     ) -> Result<SetSubscriptionsOutcome> {
         let _permit = self.admit_node_mutation(requester, node_id, false).await?;
         self.repository
-            .set_subscriptions(node_id, requester, changes)
+            .set_subscriptions(node_id, requester, changes, self.time_sources())
             .await
     }
     pub async fn set_affiliations(

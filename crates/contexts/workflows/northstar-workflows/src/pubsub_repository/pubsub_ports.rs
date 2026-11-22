@@ -440,6 +440,7 @@ impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
         planned_subid: &str,
         time: &PubSubTimeSources,
     ) -> Result<PubSubSubscribeOutcome> {
+        let renderer = self.renderer.clone().with_time_sources(time);
         northstar_pubsub_postgres::subscribe_checked_with_renderer(
             &self.pool,
             &self.domain,
@@ -450,7 +451,7 @@ impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
             options,
             planned_subid,
             time,
-            &self.renderer,
+            &renderer,
         )
         .await
         .map_err(map_database_busy)
@@ -482,15 +483,12 @@ impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
         node_id: Uuid,
         requester: &str,
         changes: &[(String, String, Option<String>)],
+        time: &PubSubTimeSources,
     ) -> Result<SetSubscriptionsOutcome> {
+        let renderer = self.renderer.clone().with_time_sources(time);
         let outcome: Result<_> = async {
             Ok(northstar_pubsub_postgres::set_subscriptions_with_renderer(
-                &self.pool,
-                node_id,
-                requester,
-                changes,
-                None,
-                &self.renderer,
+                &self.pool, node_id, requester, changes, None, &renderer,
             )
             .await?
             .into())
@@ -505,7 +503,9 @@ impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
         subscriber_jid: &str,
         expected_subid: &str,
         allow: bool,
+        time: &PubSubTimeSources,
     ) -> Result<SubscriptionAuthorizationOutcome> {
+        let renderer = self.renderer.clone().with_time_sources(time);
         let outcome: Result<_> = async {
             Ok(
                 northstar_pubsub_postgres::resolve_pending_subscription_with_renderer(
@@ -515,7 +515,7 @@ impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
                     subscriber_jid,
                     expected_subid,
                     allow,
-                    &self.renderer,
+                    &renderer,
                 )
                 .await?
                 .into(),

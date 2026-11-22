@@ -334,7 +334,7 @@ where
                         &digest.subscriber_jid,
                         children,
                         Some(&show_values),
-                        uuid::Uuid::new_v4(),
+                        context.service.time_sources().new_uuid(),
                     )
                     .await
                 {

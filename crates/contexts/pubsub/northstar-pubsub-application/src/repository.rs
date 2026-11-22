@@ -253,6 +253,7 @@ pub trait PubSubSubscriptionMutationRepository: Send + Sync {
         node_id: Uuid,
         requester: &str,
         changes: &[(String, String, Option<String>)],
+        time: &PubSubTimeSources,
     ) -> impl std::future::Future<Output = Result<SetSubscriptionsOutcome>> + Send;
     fn resolve_pending_subscription(
         &self,
@@ -261,6 +262,7 @@ pub trait PubSubSubscriptionMutationRepository: Send + Sync {
         subscriber_jid: &str,
         expected_subid: &str,
         allow: bool,
+        time: &PubSubTimeSources,
     ) -> impl std::future::Future<Output = Result<SubscriptionAuthorizationOutcome>> + Send;
 }
 pub trait PubSubAffiliationQueryRepository: Send + Sync {

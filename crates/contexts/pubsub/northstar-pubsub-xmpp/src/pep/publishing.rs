@@ -9,6 +9,7 @@ use northstar_pubsub_core::{
 
 pub(super) struct PepPublishedEventFactory<'a, S> {
     pub(super) session: &'a S,
+    pub(super) ids: &'a PubSubTimeSources,
     pub(super) publisher_full_jid: Option<String>,
     pub(super) node: &'a str,
     pub(super) event: Option<&'a str>,
@@ -22,6 +23,7 @@ impl<S: PepSession> PepPublishedEventFactory<'_, S> {
     ) -> Result<Vec<(String, String)>> {
         pep_audience_messages(
             self.session.pep_audience_routing(),
+            self.ids,
             self.publisher_full_jid.as_deref(),
             self.node,
             event,
@@ -250,14 +252,14 @@ pub async fn pep_publish<S: PepSession>(
         Some(event.finish())
     };
     let quotas = session.pep_quotas();
+    let ids = service.time_sources();
     let mut avatar_presence = AvatarPresenceUpdate::Unchanged;
     let (outcome, _content_changed) = if node == AVATAR_METADATA {
         let event = profile_event
             .as_deref()
             .expect("non-empty avatar metadata has a prepared event");
         let publisher_full_jid = session.pep_full_jid().map(str::to_owned);
-        let result = session
-            .pep_pubsub_service()
+        let result = service
             .publish_avatar_metadata(
                 session.pep_profile_service(),
                 PepProfileWrite {
@@ -274,6 +276,7 @@ pub async fn pep_publish<S: PepSession>(
                 &move |audience: &ProfileAudienceSnapshot| {
                     profile_audience_messages(
                         session.pep_audience_routing(),
+                        ids,
                         publisher_full_jid.as_deref(),
                         AVATAR_METADATA,
                         event,
@@ -292,8 +295,7 @@ pub async fn pep_publish<S: PepSession>(
             .as_deref()
             .expect("non-empty profile publication has a prepared event");
         let publisher_full_jid = session.pep_full_jid().map(str::to_owned);
-        let result: ProfilePublishResult = session
-            .pep_pubsub_service()
+        let result: ProfilePublishResult = service
             .publish_profile_items(
                 session.pep_profile_service(),
                 PepProfileWrite {
@@ -310,6 +312,7 @@ pub async fn pep_publish<S: PepSession>(
                 &move |audience: &ProfileAudienceSnapshot| {
                     profile_audience_messages(
                         session.pep_audience_routing(),
+                        ids,
                         publisher_full_jid.as_deref(),
                         node,
                         event,
@@ -326,12 +329,12 @@ pub async fn pep_publish<S: PepSession>(
     } else {
         let factory = PepPublishedEventFactory {
             session,
+            ids,
             publisher_full_jid: session.pep_full_jid().map(str::to_owned),
             node,
             event: generic_event.as_deref(),
         };
-        let result = session
-            .pep_pubsub_service()
+        let result = service
             .publish_pep_items(
                 PepPublishItemsCommand::new(
                     PepPublishWrite {
@@ -476,20 +479,19 @@ pub(super) async fn pep_retract<S: PepSession>(
         item_ids: &canonical_ids,
         notify,
     });
+    let service = session.pep_pubsub_service();
+    let ids = service.time_sources();
     let factory = move |audience: &PepAudienceSnapshot| {
         pep_audience_messages(
             session.pep_audience_routing(),
+            ids,
             publisher_full_jid.as_deref(),
             node,
             &event,
             audience,
         )
     };
-    let outcome = session
-        .pep_pubsub_service()
-        .execute_pep_retract(cmd, &factory)
-        .await?
-        .outcome;
+    let outcome = service.execute_pep_retract(cmd, &factory).await?.outcome;
     let retracted = match outcome {
         PepOwnerMutationOutcome::Applied(retracted) => retracted,
         PepOwnerMutationOutcome::NotFound => {

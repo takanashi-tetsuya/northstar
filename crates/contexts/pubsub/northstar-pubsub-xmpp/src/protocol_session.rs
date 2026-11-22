@@ -16,7 +16,7 @@ use northstar_pubsub_application::profile::ProfileAudienceSnapshot;
 use northstar_pubsub_application::profile::{ProfileRepository, ProfileService};
 use northstar_pubsub_application::PubSubService;
 use northstar_pubsub_core::PepAudienceSnapshot;
-use northstar_pubsub_core::{PepQuotas, PubSubAccount, PubSubBareJid};
+use northstar_pubsub_core::{PepQuotas, PubSubAccount, PubSubBareJid, PubSubTimeSources};
 use northstar_stream::protocol::{ProtocolSession, SessionHost};
 use northstar_stream::transport::Action;
 use northstar_xml_builder::stanza::{iq_error_from, iq_result_from};
@@ -185,12 +185,20 @@ impl<H: SessionHost + PubSubSessionHost> crate::private_xml::PrivateXmlSession
 
     fn private_pep_audience_messages(
         &self,
+        ids: &PubSubTimeSources,
         publisher_full_jid: Option<&str>,
         node: &str,
         event: &str,
         audience: &PepAudienceSnapshot,
     ) -> Result<Vec<(String, String)>> {
-        crate::pep::pep_audience_messages(&**self.host(), publisher_full_jid, node, event, audience)
+        crate::pep::pep_audience_messages(
+            &**self.host(),
+            ids,
+            publisher_full_jid,
+            node,
+            event,
+            audience,
+        )
     }
 }
 
@@ -268,8 +276,13 @@ impl<H: SessionHost + PubSubSessionHost> VCardSession for ProtocolSession<H> {
         self.host().profile_service()
     }
 
+    fn vcard_pubsub_time_sources(&self) -> &PubSubTimeSources {
+        self.host().pubsub_application_service().time_sources()
+    }
+
     fn vcard_profile_audience_messages(
         &self,
+        ids: &PubSubTimeSources,
         publisher_full_jid: Option<&str>,
         node: &str,
         event: &str,
@@ -277,6 +290,7 @@ impl<H: SessionHost + PubSubSessionHost> VCardSession for ProtocolSession<H> {
     ) -> Result<Vec<(String, String)>> {
         crate::pep::profile_audience_messages(
             &**self.host(),
+            ids,
             publisher_full_jid,
             node,
             event,

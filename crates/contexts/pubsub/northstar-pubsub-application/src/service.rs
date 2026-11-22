@@ -88,15 +88,6 @@ impl<R> PubSubService<R> {
     pub fn mutation_admission(&self) -> Arc<PubSubMutationAdmission> {
         Arc::clone(&self.mutation_admission)
     }
-    async fn admit_mutation(
-        &self,
-        keys: &[&str],
-        collection_graph: bool,
-    ) -> Result<PubSubMutationPermit> {
-        self.mutation_admission
-            .acquire(keys, collection_graph)
-            .await
-    }
     async fn durable_outbox_database_turn(&self) -> tokio::sync::OwnedSemaphorePermit {
         self.durable_outbox_database_admission.acquire().await
     }

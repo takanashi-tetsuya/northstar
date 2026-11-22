@@ -532,6 +532,7 @@ impl ServerNode {
             pubsub,
             room,
             roster,
+            avatar_presence_gate: northstar_roster_xmpp::AvatarPresenceGate::default(),
             message,
             federation,
             session,

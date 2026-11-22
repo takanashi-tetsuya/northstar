@@ -7,7 +7,7 @@ use northstar_pubsub_application::private_storage::{
 use northstar_pubsub_application::profile::{ProfileRepository, ProfileService};
 use northstar_pubsub_application::PubSubService;
 use northstar_pubsub_core::telemetry::PepTelemetry;
-use northstar_pubsub_core::PepQuotas;
+use northstar_pubsub_core::{PepQuotas, PubSubBareJid};
 use northstar_pubsub_xmpp::PubSubSessionHost;
 
 impl PubSubSessionHost for ServerNode {
@@ -53,11 +53,16 @@ impl PubSubSessionHost for ServerNode {
         .retrieved();
     }
 
-    fn refresh_avatar_presence(&self, owner_bare: &str, hash: Option<&str>) {
+    async fn refresh_avatar_presence(&self, owner_id: uuid::Uuid, owner_bare: &PubSubBareJid) {
+        let owner_bare = owner_bare.to_string();
         northstar_roster_xmpp::presence::refresh_avatar_presence(
-            self.session.live().sessions().sessions_for(owner_bare),
-            hash,
-        );
+            &self.avatar_presence_gate,
+            self.roster.presence_service(),
+            owner_id,
+            &owner_bare,
+            || self.session.live().sessions().sessions_for(&owner_bare),
+        )
+        .await;
     }
 }
 

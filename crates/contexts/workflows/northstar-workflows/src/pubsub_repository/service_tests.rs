@@ -1,19 +1,22 @@
 use crate::pubsub_repository::{
     db_outbox, pep_outbox_authorization_lock_plan, PepOutboxAuthorizationLockPlan,
+    PostgresPubSubRepository,
 };
 use anyhow::Result;
 use northstar_pubsub_application::{
     is_pubsub_mutation_busy, PepCreateNodeCommand, PepPublishItemsCommand, PepPublishItemsOutcome,
-    PubSubUpdateSubscriptionOptionsCommand,
+    PubSubService, PubSubUpdateSubscriptionOptionsCommand,
 };
 use northstar_pubsub_core::{
-    PepAudienceSnapshot, PepCreateOutcome, PepNodeConfig, PepOutboxAuthorizationMode,
-    PepOutboxAuthorizationOutcome, PepOutboxDropReason, PepOutboxEventKind, PepPublishWrite,
-    PepQuotas, PepSubscribeOutcome, PepSubscribeSnapshot, PepSubscribeWrite, PepSubscriptionActor,
-    PepUnsubscribeOutcome, PepUnsubscribeWrite, PubSubAccount, PubSubOutboxInsert,
-    PubSubSubscription, PubSubSubscriptionOptions, SubscriptionOptionsOutcome,
+    ClaimedPubSubOutboxDelivery, PepAudienceSnapshot, PepCreateOutcome, PepNodeConfig,
+    PepOutboxAuthorizationMode, PepOutboxAuthorizationOutcome, PepOutboxDropReason,
+    PepOutboxEventKind, PepPublishWrite, PepQuotas, PepSubscribeOutcome, PepSubscribeSnapshot,
+    PepSubscribeWrite, PepSubscriptionActor, PepUnsubscribeOutcome, PepUnsubscribeWrite,
+    PubSubAccount, PubSubOutboxInsert, PubSubSubscription, PubSubSubscriptionOptions,
+    SubscriptionOptionsOutcome,
 };
 use northstar_time::{TimeZone, Utc};
+use sqlx::PgPool;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 use uuid::Uuid;
@@ -406,9 +409,7 @@ fn outbox_request_mapping_preserves_recipient_order_and_kind() {
     assert_eq!(repository[0].event_id, repository[1].event_id);
 }
 
-#[tokio::test]
-#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
-async fn paused_pep_delivery_rechecks_block_privacy_disable_and_sensitive_acl() {
+async fn paused_pep_delivery_pool() -> PgPool {
     let url = std::env::var("TEST_DATABASE_URL")
         .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
     let pool = sqlx::postgres::PgPoolOptions::new()
@@ -419,44 +420,99 @@ async fn paused_pep_delivery_rechecks_block_privacy_disable_and_sensitive_acl() 
     crate::identity_migration::migrate_for_tests(&pool)
         .await
         .unwrap();
-    let suffix = Uuid::new_v4().simple().to_string();
-    let sender_id = Uuid::new_v4();
-    let recipient_id = Uuid::new_v4();
-    let sender_username = format!("pep-auth-s-{}", &suffix[..10]);
-    let recipient_username = format!("pep-auth-r-{}", &suffix[..10]);
-    for (id, username) in [
-        (sender_id, sender_username.as_str()),
-        (recipient_id, recipient_username.as_str()),
-    ] {
-        sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
-            .bind(id)
-            .bind(username)
-            .execute(&pool)
-            .await
-            .unwrap();
+    pool
+}
+
+async fn paused_pep_account(pool: &PgPool) -> PubSubAccount {
+    let id = Uuid::new_v4();
+    let username = format!("pep-auth-{}", &id.simple().to_string()[..10]);
+    let auth_generation = sqlx::query_scalar(
+        "INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')
+         RETURNING auth_generation",
+    )
+    .bind(id)
+    .bind(&username)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    PubSubAccount {
+        id,
+        username,
+        auth_generation,
     }
-    let sender_bare = format!("{sender_username}@example.test");
-    let recipient_bare = format!("{recipient_username}@example.test");
-    let recipient_full = format!("{recipient_bare}/phone");
-    let sender = PubSubAccount {
-        id: sender_id,
-        username: sender_username.clone(),
-        auth_generation: sqlx::query_scalar("SELECT auth_generation FROM users WHERE id=$1")
-            .bind(sender_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap(),
-    };
-    let node = format!("urn:xmpp:omemo:2:devices:{suffix}");
-    let mut config = northstar_pubsub_postgres::default_pep_node_config(&node);
+}
+
+async fn open_pep_node(
+    pool: &PgPool,
+    sender: &PubSubAccount,
+    node: &str,
+) -> northstar_pubsub_postgres::PepNodeConfig {
+    let mut config = northstar_pubsub_postgres::default_pep_node_config(node);
     config.access_model = "open".to_owned();
     config.deliver_notifications = true;
     assert_eq!(
-        northstar_pubsub_postgres::create_pep_node(&pool, &sender, &node, &config, 20)
+        northstar_pubsub_postgres::create_pep_node(pool, sender, node, &config, 20)
             .await
             .unwrap(),
         northstar_pubsub_postgres::PepCreateOutcome::Created
     );
+    config
+}
+
+async fn deny_pep_messages(pool: &PgPool, sender_id: Uuid) {
+    let privacy = northstar_xep_0016::PrivacyList {
+        name: "deny-pep".to_owned(),
+        items: vec![northstar_xep_0016::PrivacyItem {
+            order: 1,
+            action: northstar_xep_0016::PrivacyAction::Deny,
+            match_type: None,
+            match_value: None,
+            message: true,
+            iq: false,
+            presence_in: false,
+            presence_out: false,
+        }],
+    };
+    northstar_roster_postgres::privacy::replace_privacy_list(pool, sender_id, &privacy)
+        .await
+        .unwrap();
+    assert!(
+        northstar_roster_postgres::privacy::set_default_privacy_list(
+            pool,
+            sender_id,
+            Some(&privacy.name),
+        )
+        .await
+        .unwrap()
+    );
+}
+
+async fn clean_paused_pep_delivery(pool: PgPool, accounts: &[Uuid], streams: &[String]) {
+    sqlx::query("DELETE FROM users WHERE id=ANY($1)")
+        .bind(accounts)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM pubsub_event_streams WHERE ordering_key=ANY($1)")
+        .bind(streams)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn paused_pep_delivery_rechecks_block_privacy_disable_and_sensitive_acl() {
+    let pool = paused_pep_delivery_pool().await;
+    let sender = paused_pep_account(&pool).await;
+    let recipient = paused_pep_account(&pool).await;
+    let (sender_id, recipient_id) = (sender.id, recipient.id);
+    let sender_bare = format!("{}@example.test", sender.username);
+    let recipient_bare = format!("{}@example.test", recipient.username);
+    let recipient_full = format!("{recipient_bare}/phone");
+    let node = format!("urn:xmpp:omemo:2:devices:{}", sender_id.simple());
+    let mut config = open_pep_node(&pool, &sender, &node).await;
     let insert = northstar_pubsub_postgres::PubSubOutboxInsert::new_pep_stanza(
         Uuid::new_v4(),
         sender_id,
@@ -511,31 +567,7 @@ async fn paused_pep_delivery_rechecks_block_privacy_disable_and_sensitive_acl() 
     .await
     .unwrap();
 
-    let privacy = northstar_xep_0016::PrivacyList {
-        name: "deny-pep".to_owned(),
-        items: vec![northstar_xep_0016::PrivacyItem {
-            order: 1,
-            action: northstar_xep_0016::PrivacyAction::Deny,
-            match_type: None,
-            match_value: None,
-            message: true,
-            iq: false,
-            presence_in: false,
-            presence_out: false,
-        }],
-    };
-    northstar_roster_postgres::privacy::replace_privacy_list(&pool, sender_id, &privacy)
-        .await
-        .unwrap();
-    assert!(
-        northstar_roster_postgres::privacy::set_default_privacy_list(
-            &pool,
-            sender_id,
-            Some(&privacy.name)
-        )
-        .await
-        .unwrap()
-    );
+    deny_pep_messages(&pool, sender_id).await;
     assert_eq!(
         service.authorize_pep_outbox_delivery(&item).await.unwrap(),
         PepOutboxAuthorizationOutcome::Drop(PepOutboxDropReason::PrivacyDenied)
@@ -577,17 +609,305 @@ async fn paused_pep_delivery_rechecks_block_privacy_disable_and_sensitive_acl() 
         .acknowledge_pubsub_outbox(item.delivery_id, item.lease_token)
         .await
         .unwrap();
-    sqlx::query("DELETE FROM users WHERE id=ANY($1)")
-        .bind([sender_id, recipient_id])
-        .execute(&pool)
+    clean_paused_pep_delivery(pool, &[sender_id, recipient_id], &[ordering_key]).await;
+}
+
+struct CommittedPepAudience {
+    pool: PgPool,
+    service: PubSubService<PostgresPubSubRepository>,
+    sender: PubSubAccount,
+    recipient: PubSubAccount,
+    node: String,
+    config: northstar_pubsub_postgres::PepNodeConfig,
+}
+
+impl CommittedPepAudience {
+    async fn new(node_prefix: &str) -> Self {
+        let pool = paused_pep_delivery_pool().await;
+        let sender = paused_pep_account(&pool).await;
+        let recipient = paused_pep_account(&pool).await;
+        let node = format!("{node_prefix}:{}", sender.id.simple());
+        let config = open_pep_node(&pool, &sender, &node).await;
+        let service = crate::pubsub_repository::test_pubsub_service(pool.clone(), "example.test");
+        let fixture = Self {
+            pool,
+            service,
+            sender,
+            recipient,
+            node,
+            config,
+        };
+        fixture.subscribe(&fixture.recipient).await;
+        fixture
+    }
+
+    fn recipient_jid(&self) -> String {
+        format!("{}@example.test/phone", self.recipient.username)
+    }
+
+    async fn subscribe(&self, subscriber: &PubSubAccount) {
+        let jid = format!("{}@example.test/phone", subscriber.username);
+        let subid = Uuid::new_v4().to_string();
+        let result = self
+            .service
+            .subscribe_pep_node(
+                northstar_pubsub_application::PepSubscribeCommand::from(PepSubscribeWrite {
+                    owner: &self.sender,
+                    actor: PepSubscriptionActor {
+                        jid: &jid,
+                        local_account: Some(subscriber),
+                    },
+                    node: &self.node,
+                    subscriber_jid: &jid,
+                    max_subscriptions: 100,
+                    requested_subid: &subid,
+                }),
+                // The test renderer produces publish notifications only.
+                &|_: &PepSubscribeSnapshot| Ok(Vec::new()),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(result.outcome, PepSubscribeOutcome::Subscribed(_)));
+    }
+
+    async fn publish(&self, item_id: &str) {
+        let config = PepNodeConfig::from(self.config.clone());
+        let payload = format!("<item id='{item_id}'><value xmlns='urn:test'/></item>");
+        let result = self
+            .service
+            .publish_pep_items(
+                PepPublishItemsCommand::new(
+                    PepPublishWrite {
+                        user_id: self.sender.id,
+                        username: &self.sender.username,
+                        auth_generation: self.sender.auth_generation,
+                        connection_id: Uuid::new_v4(),
+                        node: &self.node,
+                        requested: &config,
+                        enforce_preconditions: false,
+                        items: &[(item_id, &payload)],
+                        quotas: PepQuotas {
+                            max_nodes: 10,
+                            max_storage_bytes: 1_000_000,
+                        },
+                    },
+                    false,
+                ),
+                &snapshot_deliveries,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.outcome, PepPublishItemsOutcome::Published);
+        assert!(result.content_changed);
+    }
+
+    async fn revoke_node_acl(&self) {
+        let mut config = self.config.clone();
+        config.access_model = "whitelist".to_owned();
+        config.access_whitelist.clear();
+        assert!(northstar_pubsub_postgres::update_pep_node_config(
+            &self.pool,
+            self.sender.id,
+            &self.node,
+            &config,
+        )
+        .await
+        .unwrap());
+    }
+
+    async fn claim(&self) -> Vec<ClaimedPubSubOutboxDelivery> {
+        self.service
+            .claim_pubsub_outbox(100)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|item| item.source_node == self.node)
+            .collect()
+    }
+
+    async fn assert_next_delivery(
+        &self,
+        mode: PepOutboxAuthorizationMode,
+        decision: PepOutboxAuthorizationOutcome,
+    ) -> ClaimedPubSubOutboxDelivery {
+        let [item]: [_; 1] = self
+            .claim()
+            .await
+            .try_into()
+            .expect("one committed event at stream head");
+        assert_eq!(item.recipient_jid, self.recipient_jid());
+        assert_eq!(item.pep_subject.as_ref().unwrap().authorization_mode, mode);
+        assert_eq!(
+            self.service
+                .authorize_pep_outbox_delivery(&item)
+                .await
+                .unwrap(),
+            decision
+        );
+        self.acknowledge(&item).await;
+        item
+    }
+
+    async fn acknowledge(&self, item: &ClaimedPubSubOutboxDelivery) {
+        assert!(self
+            .service
+            .acknowledge_pubsub_outbox(item.delivery_id, item.lease_token)
+            .await
+            .unwrap());
+        assert!(!sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM pubsub_event_outbox WHERE delivery_id=$1)",
+        )
+        .bind(item.delivery_id)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap());
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn committed_pep_publish_audience_excludes_a_late_subscriber() {
+    let fixture = CommittedPepAudience::new("urn:test:pep:frozen-audience").await;
+    fixture.publish("before-subscription").await;
+    let late = paused_pep_account(&fixture.pool).await;
+    fixture.subscribe(&late).await;
+
+    let original = fixture
+        .assert_next_delivery(
+            PepOutboxAuthorizationMode::CausalAudience,
+            PepOutboxAuthorizationOutcome::Deliver,
+        )
+        .await;
+    assert!(fixture.claim().await.is_empty());
+
+    fixture.publish("after-subscription").await;
+    let mut next = fixture.claim().await;
+    next.sort_unstable_by(|left, right| left.recipient_jid.cmp(&right.recipient_jid));
+    let mut expected = [
+        fixture.recipient_jid(),
+        format!("{}@example.test/phone", late.username),
+    ];
+    expected.sort_unstable();
+    assert_eq!(
+        next.iter()
+            .map(|item| item.recipient_jid.as_str())
+            .collect::<Vec<_>>(),
+        expected.each_ref().map(String::as_str)
+    );
+    assert_eq!(next[0].event_id, next[1].event_id);
+    assert_ne!(next[0].event_id, original.event_id);
+    let mut streams = Vec::new();
+    for item in next {
+        assert_eq!(
+            fixture
+                .service
+                .authorize_pep_outbox_delivery(&item)
+                .await
+                .unwrap(),
+            PepOutboxAuthorizationOutcome::Deliver
+        );
+        fixture.acknowledge(&item).await;
+        streams.push(item.ordering_key);
+    }
+    clean_paused_pep_delivery(
+        fixture.pool,
+        &[fixture.sender.id, fixture.recipient.id, late.id],
+        &streams,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn committed_causal_pep_delivers_after_acl_revocation_but_acks_live_denials() {
+    let fixture = CommittedPepAudience::new("urn:test:pep:causal-audience").await;
+    for id in ["acl", "block", "privacy", "disabled"] {
+        fixture.publish(id).await;
+    }
+    let mode = PepOutboxAuthorizationMode::CausalAudience;
+    fixture.revoke_node_acl().await;
+    let delivered = fixture
+        .assert_next_delivery(mode, PepOutboxAuthorizationOutcome::Deliver)
+        .await;
+
+    let recipient_bare = [format!("{}@example.test", fixture.recipient.username)];
+    northstar_roster_postgres::roster::block_jids(
+        &fixture.pool,
+        fixture.sender.id,
+        &recipient_bare,
+    )
+    .await
+    .unwrap();
+    fixture
+        .assert_next_delivery(
+            mode,
+            PepOutboxAuthorizationOutcome::Drop(PepOutboxDropReason::Blocked),
+        )
+        .await;
+    northstar_roster_postgres::roster::unblock_jids(
+        &fixture.pool,
+        fixture.sender.id,
+        Some(&recipient_bare),
+    )
+    .await
+    .unwrap();
+
+    deny_pep_messages(&fixture.pool, fixture.sender.id).await;
+    fixture
+        .assert_next_delivery(
+            mode,
+            PepOutboxAuthorizationOutcome::Drop(PepOutboxDropReason::PrivacyDenied),
+        )
+        .await;
+    assert!(
+        northstar_roster_postgres::privacy::set_default_privacy_list(
+            &fixture.pool,
+            fixture.sender.id,
+            None,
+        )
+        .await
+        .unwrap()
+    );
+
+    sqlx::query("UPDATE users SET is_disabled=TRUE WHERE id=$1")
+        .bind(fixture.recipient.id)
+        .execute(&fixture.pool)
         .await
         .unwrap();
-    sqlx::query("DELETE FROM pubsub_event_streams WHERE ordering_key=$1")
-        .bind(ordering_key)
-        .execute(&pool)
-        .await
-        .unwrap();
-    pool.close().await;
+    fixture
+        .assert_next_delivery(
+            mode,
+            PepOutboxAuthorizationOutcome::Drop(PepOutboxDropReason::RecipientUnavailable),
+        )
+        .await;
+    assert!(fixture.claim().await.is_empty());
+    clean_paused_pep_delivery(
+        fixture.pool,
+        &[fixture.sender.id, fixture.recipient.id],
+        &[delivered.ordering_key],
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn committed_sensitive_pep_publish_is_ack_dropped_after_acl_revocation() {
+    let fixture = CommittedPepAudience::new("urn:xmpp:omemo:2:devices").await;
+    fixture.publish("before-revocation").await;
+    fixture.revoke_node_acl().await;
+    let dropped = fixture
+        .assert_next_delivery(
+            PepOutboxAuthorizationMode::LiveNodeAccess,
+            PepOutboxAuthorizationOutcome::Drop(PepOutboxDropReason::NodeAccessRevoked),
+        )
+        .await;
+    assert!(fixture.claim().await.is_empty());
+    clean_paused_pep_delivery(
+        fixture.pool,
+        &[fixture.sender.id, fixture.recipient.id],
+        &[dropped.ordering_key],
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]

@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+mod avatar_presence;
 pub mod blocking;
 pub mod fanout;
 pub mod federated_presence;
@@ -14,6 +15,7 @@ pub mod roster;
 pub mod roster_push;
 mod session_host;
 
+pub use self::avatar_presence::AvatarPresenceGate;
 pub use self::protocol_session::PresenceHandlers;
 pub use self::protocol_session::{BlockingHandlers, PrivacyHandlers, RosterHandlers};
 pub use self::session_host::{

@@ -1,12 +1,13 @@
 //! XEP-0054 vcard-temp, which reads and writes the profile and mirrors the avatar into PEP.
 
 use crate::payload::xml_subtree_contains_unsafe_bidi_controls;
+use crate::session_host::refresh_changed_avatar;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use northstar_pubsub_application::profile::{
-    AvatarPresenceUpdate, LegacyVCardWrite, ProfileAudienceSnapshot, ProfilePublishStatus,
-    ProfileRepository, ProfileService, PublicVCard,
+    LegacyVCardWrite, ProfileAudienceSnapshot, ProfilePublishStatus, ProfileRepository,
+    ProfileService, PublicVCard,
 };
-use northstar_pubsub_core::{PepQuotas, PubSubAccount};
+use northstar_pubsub_core::{PepQuotas, PubSubAccount, PubSubBareJid};
 use northstar_xml_builder::stanza::{iq_error, iq_error_from, iq_result, iq_result_from};
 use northstar_xml_builder::XmlElement;
 use northstar_xmpp_avatar::{
@@ -37,9 +38,12 @@ pub trait VCardSession: Sync {
         event: &str,
         audience: &ProfileAudienceSnapshot,
     ) -> anyhow::Result<Vec<(String, String)>>;
-    /// Puts the new avatar hash (or none) into the last presence of every local session of
-    /// `owner_bare`.
-    fn vcard_refresh_avatar_presence(&self, owner_bare: &str, hash: Option<&str>);
+    /// Refreshes each local session's last presence from the owner's committed avatar.
+    fn vcard_refresh_avatar_presence(
+        &self,
+        owner_id: uuid::Uuid,
+        owner_bare: &PubSubBareJid,
+    ) -> impl std::future::Future<Output = ()> + Send;
 }
 
 struct ConvertedAvatarItems {
@@ -408,11 +412,19 @@ pub async fn vcard_set<S: VCardSession>(
             return Ok(iq_error(id, "resource-constraint"));
         }
     }
-    if let AvatarPresenceUpdate::Changed(hash) = outcome.avatar_presence {
-        session.vcard_refresh_avatar_presence(
-            &format!("{}@{}", user.username, session.vcard_local_domain()),
-            hash.as_deref(),
-        );
+    if let Err(error) = refresh_changed_avatar(
+        outcome.avatar_presence,
+        &user,
+        session.vcard_local_domain(),
+        |owner_id, owner_bare| async move {
+            session
+                .vcard_refresh_avatar_presence(owner_id, &owner_bare)
+                .await;
+        },
+    )
+    .await
+    {
+        tracing::warn!(?error, owner_id = %user.id, "invalid avatar presence owner");
     }
     Ok(iq_result(id, ""))
 }

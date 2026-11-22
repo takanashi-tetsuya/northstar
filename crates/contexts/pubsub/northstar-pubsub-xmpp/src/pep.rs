@@ -100,9 +100,12 @@ pub trait PepSession: Sync {
     fn pep_record_retracted(&self, count: u64);
     /// Counts one item retrieval.
     fn pep_record_retrieved(&self);
-    /// Puts the new avatar hash (or none) into the last presence of every local session of
-    /// `owner_bare`.
-    fn pep_refresh_avatar_presence(&self, owner_bare: &str, hash: Option<&str>);
+    /// Refreshes each local session's last presence from the owner's committed avatar.
+    fn pep_refresh_avatar_presence(
+        &self,
+        owner_id: uuid::Uuid,
+        owner_bare: &northstar_pubsub_core::PubSubBareJid,
+    ) -> impl std::future::Future<Output = ()> + Send;
 }
 
 /// What the server provides to the PEP send-last delivery that follows presence and entity

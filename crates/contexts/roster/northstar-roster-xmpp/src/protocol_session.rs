@@ -218,6 +218,10 @@ impl<H: SessionHost + RosterSessionHost> crate::presence::PresenceSession for Pr
         self.host().presence_service()
     }
 
+    fn avatar_presence_gate(&self) -> &crate::AvatarPresenceGate {
+        self.host().avatar_presence_gate()
+    }
+
     fn presence_is_available(&self) -> bool {
         self.available
             .as_ref()

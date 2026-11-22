@@ -349,6 +349,12 @@ run_exact_ignored \
 run_exact_ignored \
   pubsub_repository::service_tests::paused_pep_delivery_rechecks_block_privacy_disable_and_sensitive_acl northstar-workflows
 run_exact_ignored \
+  pubsub_repository::service_tests::committed_pep_publish_audience_excludes_a_late_subscriber northstar-workflows
+run_exact_ignored \
+  pubsub_repository::service_tests::committed_causal_pep_delivers_after_acl_revocation_but_acks_live_denials northstar-workflows
+run_exact_ignored \
+  pubsub_repository::service_tests::committed_sensitive_pep_publish_is_ack_dropped_after_acl_revocation northstar-workflows
+run_exact_ignored \
   pubsub_repository::service_tests::pep_publish_audience_is_linearizable_with_every_revocation_input northstar-workflows
 run_exact_ignored \
   pubsub_repository::service_tests::pep_subscription_admission_is_linearizable_and_principal_scoped northstar-workflows

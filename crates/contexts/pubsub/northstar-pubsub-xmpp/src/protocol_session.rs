@@ -16,7 +16,7 @@ use northstar_pubsub_application::profile::ProfileAudienceSnapshot;
 use northstar_pubsub_application::profile::{ProfileRepository, ProfileService};
 use northstar_pubsub_application::PubSubService;
 use northstar_pubsub_core::PepAudienceSnapshot;
-use northstar_pubsub_core::{PepQuotas, PubSubAccount};
+use northstar_pubsub_core::{PepQuotas, PubSubAccount, PubSubBareJid};
 use northstar_stream::protocol::{ProtocolSession, SessionHost};
 use northstar_stream::transport::Action;
 use northstar_xml_builder::stanza::{iq_error_from, iq_result_from};
@@ -72,8 +72,10 @@ impl<H: SessionHost + PubSubSessionHost> crate::pep::PepSession for ProtocolSess
         self.host().pep_record_retrieved();
     }
 
-    fn pep_refresh_avatar_presence(&self, owner_bare: &str, hash: Option<&str>) {
-        self.host().refresh_avatar_presence(owner_bare, hash);
+    async fn pep_refresh_avatar_presence(&self, owner_id: uuid::Uuid, owner_bare: &PubSubBareJid) {
+        self.host()
+            .refresh_avatar_presence(owner_id, owner_bare)
+            .await;
     }
 }
 
@@ -282,8 +284,14 @@ impl<H: SessionHost + PubSubSessionHost> VCardSession for ProtocolSession<H> {
         )
     }
 
-    fn vcard_refresh_avatar_presence(&self, owner_bare: &str, hash: Option<&str>) {
-        self.host().refresh_avatar_presence(owner_bare, hash);
+    async fn vcard_refresh_avatar_presence(
+        &self,
+        owner_id: uuid::Uuid,
+        owner_bare: &PubSubBareJid,
+    ) {
+        self.host()
+            .refresh_avatar_presence(owner_id, owner_bare)
+            .await;
     }
 }
 

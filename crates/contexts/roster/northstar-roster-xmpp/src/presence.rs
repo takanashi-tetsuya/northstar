@@ -16,10 +16,12 @@ use northstar_xmpp_types::jid::CanonicalJid;
 use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::Node;
 use std::future::Future;
+use uuid::Uuid;
 
 use crate::blocking::BlockingSession;
 use crate::privacy::PrivacySession;
 use crate::roster::RosterSession;
+use crate::AvatarPresenceGate;
 
 mod availability;
 mod subscriptions;
@@ -28,23 +30,59 @@ pub use self::availability::{full_jid_probe_available_response, presence_probe_s
 pub(crate) use northstar_xmpp_avatar::vcard_update::inject_vcard_avatar_hash;
 
 /// Refresh stored local presence with the owner's current vCard avatar hash.
-pub fn refresh_avatar_presence(
-    sessions: impl IntoIterator<Item = OnlineSession>,
-    hash: Option<&str>,
+pub async fn refresh_avatar_presence(
+    gate: &AvatarPresenceGate,
+    presence_service: &PresenceService<impl PresenceRepository>,
+    owner_id: Uuid,
+    owner_bare: &str,
+    sessions: impl FnOnce() -> Vec<OnlineSession>,
 ) {
-    for session in sessions {
-        let mut last_presence = session
-            .last_presence
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let refreshed = last_presence.as_deref().and_then(|raw| {
-            let document = roxmltree::Document::parse(raw).ok()?;
-            Some(inject_vcard_avatar_hash(raw, document.root_element(), hash))
-        });
-        if let Some(refreshed) = refreshed {
-            *last_presence = Some(refreshed);
-        }
+    if let Err(error) = refresh_avatar_presence_with_hash(
+        gate,
+        owner_bare,
+        presence_service.avatar_hash(owner_id),
+        sessions,
+    )
+    .await
+    {
+        tracing::warn!(?error, %owner_id, "could not refresh cached avatar presence");
     }
+}
+
+async fn refresh_avatar_presence_with_hash(
+    gate: &AvatarPresenceGate,
+    owner_bare: &str,
+    avatar_hash: impl Future<Output = Result<Option<String>>>,
+    sessions: impl FnOnce() -> Vec<OnlineSession>,
+) -> Result<()> {
+    project_avatar_presence(gate, owner_bare, avatar_hash, |hash| {
+        for session in sessions() {
+            let mut last_presence = session
+                .last_presence
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let refreshed = last_presence.as_deref().and_then(|raw| {
+                let document = roxmltree::Document::parse(raw).ok()?;
+                Some(inject_vcard_avatar_hash(raw, document.root_element(), hash))
+            });
+            if let Some(refreshed) = refreshed {
+                *last_presence = Some(refreshed);
+            }
+        }
+    })
+    .await
+}
+
+async fn project_avatar_presence<T>(
+    gate: &AvatarPresenceGate,
+    owner_bare: &str,
+    avatar_hash: impl Future<Output = Result<Option<String>>>,
+    project: impl FnOnce(Option<&str>) -> T,
+) -> Result<T> {
+    // Poll the database read only after admission and retain the guard through the cache update.
+    let _guard = gate.lock(owner_bare).await;
+    let hash = avatar_hash.await?;
+    Ok(project(hash.as_deref()))
 }
 
 use self::availability::{
@@ -97,6 +135,8 @@ struct RemoteSubscriptionRequest<'a> {
 pub trait PresenceSession: BlockingSession + PrivacySession + RosterSession {
     /// The presence service, over the repository the composition root binds.
     fn presence_service(&self) -> &PresenceService<impl PresenceRepository>;
+    /// The node's gate for projecting the current avatar into cached presence.
+    fn avatar_presence_gate(&self) -> &AvatarPresenceGate;
     /// Whether the session's resource is available.
     fn presence_is_available(&self) -> bool;
     /// Replaces the presence the session last broadcast.
@@ -588,6 +628,28 @@ pub fn announced_priority(root: Node<'_, '_>, kind: &str) -> i16 {
     }
 }
 
+async fn set_last_broadcast_presence(
+    gate: &AvatarPresenceGate,
+    root: Node<'_, '_>,
+    raw: &str,
+    available: bool,
+    from: &str,
+    avatar_hash: impl Future<Output = Result<Option<String>>>,
+    set_last: impl FnOnce(Option<String>),
+) -> Result<String> {
+    project_avatar_presence(gate, bare_jid(from), avatar_hash, |hash| {
+        let injected = if available {
+            inject_vcard_avatar_hash(raw, root, hash)
+        } else {
+            raw.to_owned()
+        };
+        let rewritten = set_from(&injected, from);
+        set_last(available.then(|| rewritten.clone()));
+        rewritten
+    })
+    .await
+}
+
 /// Broadcasts initial, status or unavailable presence to roster contacts, the account's other
 /// resources and directed presence targets.
 pub async fn broadcast_presence<S: PresenceSession>(
@@ -600,14 +662,23 @@ pub async fn broadcast_presence<S: PresenceSession>(
 ) -> Result<()> {
     let user = session.session_account().expect("authenticated session");
     let roster = session.blocking_service().roster(user.id).await?;
-    let injected = if kind == "available" {
-        let avatar_hash = session.presence_service().avatar_hash(user.id).await?;
-        inject_vcard_avatar_hash(raw, root, avatar_hash.as_deref())
-    } else {
-        raw.to_owned()
-    };
-    let rewritten = set_from(&injected, from);
-    session.presence_set_last((kind == "available").then(|| rewritten.clone()));
+    let available = kind == "available";
+    let rewritten = set_last_broadcast_presence(
+        session.avatar_presence_gate(),
+        root,
+        raw,
+        available,
+        from,
+        async {
+            if available {
+                session.presence_service().avatar_hash(user.id).await
+            } else {
+                Ok(None)
+            }
+        },
+        |presence| session.presence_set_last(presence),
+    )
+    .await?;
     let account = format!("{}@{}", user.username, session.session_local_domain());
     let active_privacy = session.privacy_active_list();
     for (jid, _, subscription, ask) in roster {

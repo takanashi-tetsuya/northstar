@@ -16,6 +16,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::AvatarPresenceGate;
+
 /// One post-commit delivery failure counter shared by roster, blocking and
 /// privacy pushes. Each caller retains its own recovery/disconnect decision.
 pub struct PostAcceptFailureTelemetry {
@@ -37,6 +39,8 @@ impl PostAcceptFailureTelemetry {
 /// What the node provides to the roster, blocking and privacy handlers of a client session, beyond the session
 /// core's host. The composition root implements it.
 pub trait RosterSessionHost: Send + Sync {
+    /// The node's gate for projecting the current avatar into cached presence.
+    fn avatar_presence_gate(&self) -> &AvatarPresenceGate;
     /// The roster service, over the repository the composition root binds.
     fn roster_service(&self) -> &RosterService<impl RosterRepository<Error = anyhow::Error>>;
     /// The blocking service, over the repository the composition root binds.

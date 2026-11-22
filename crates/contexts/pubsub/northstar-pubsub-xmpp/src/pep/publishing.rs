@@ -375,12 +375,17 @@ pub async fn pep_publish<S: PepSession>(
             return Ok(pep_error(id, None, "wait", "resource-constraint", None));
         }
     }
-    if let AvatarPresenceUpdate::Changed(hash) = avatar_presence {
-        session.pep_refresh_avatar_presence(
-            &canonical_account_jid(&user.username, session.pep_local_domain())?,
-            hash.as_deref(),
-        );
-    }
+    crate::session_host::refresh_changed_avatar(
+        avatar_presence,
+        &user,
+        session.pep_local_domain(),
+        |owner_id, owner_bare| async move {
+            session
+                .pep_refresh_avatar_presence(owner_id, &owner_bare)
+                .await;
+        },
+    )
+    .await?;
     session.pep_record_published(normalized.len() as u64);
 
     if assigned_ids.is_empty() {

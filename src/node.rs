@@ -118,6 +118,7 @@ pub struct ServerNode {
     room: RoomModule,
     /// The roster context; see [`RosterModule`].
     roster: RosterModule,
+    avatar_presence_gate: northstar_roster_xmpp::AvatarPresenceGate,
     /// The message context; see [`MessageModule`].
     message: MessageModule,
     /// The federation context; see [`FederationModule`].

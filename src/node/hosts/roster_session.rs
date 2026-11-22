@@ -24,6 +24,10 @@ use roxmltree::Node;
 use uuid::Uuid;
 
 impl RosterSessionHost for ServerNode {
+    fn avatar_presence_gate(&self) -> &northstar_roster_xmpp::AvatarPresenceGate {
+        &self.avatar_presence_gate
+    }
+
     fn roster_service(&self) -> &RosterService<impl RosterRepository<Error = anyhow::Error>> {
         self.roster.roster_service()
     }

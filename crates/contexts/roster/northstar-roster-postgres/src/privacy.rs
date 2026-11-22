@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 pub use northstar_xep_0016::{
@@ -48,12 +48,21 @@ pub async fn privacy_list(
     owner_id: Uuid,
     name: &str,
 ) -> Result<Option<PrivacyList>> {
+    let mut connection = pool.acquire().await?;
+    privacy_list_on(&mut connection, owner_id, name).await
+}
+
+async fn privacy_list_on(
+    connection: &mut PgConnection,
+    owner_id: Uuid,
+    name: &str,
+) -> Result<Option<PrivacyList>> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM privacy_lists WHERE owner_id=$1 AND name=$2)",
     )
     .bind(owner_id)
     .bind(name)
-    .fetch_one(pool)
+    .fetch_one(&mut *connection)
     .await?;
     if !exists {
         return Ok(None);
@@ -65,7 +74,7 @@ pub async fn privacy_list(
     )
     .bind(owner_id)
     .bind(name)
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await?;
     let mut items = Vec::with_capacity(rows.len());
     for row in rows {
@@ -382,6 +391,28 @@ pub async fn privacy_denies(
     candidate: &str,
     kind: PrivacyStanzaKind,
 ) -> Result<bool> {
+    let mut connection = pool.acquire().await?;
+    privacy_denies_on(&mut connection, owner_id, active_list, candidate, kind).await
+}
+
+/// Evaluate a session's selected list or the account default in a read snapshot.
+pub async fn privacy_denies_in_snapshot(
+    transaction: &mut Transaction<'_, Postgres>,
+    owner_id: Uuid,
+    active_list: Option<&str>,
+    candidate: &str,
+    kind: PrivacyStanzaKind,
+) -> Result<bool> {
+    privacy_denies_on(transaction, owner_id, active_list, candidate, kind).await
+}
+
+async fn privacy_denies_on(
+    connection: &mut PgConnection,
+    owner_id: Uuid,
+    active_list: Option<&str>,
+    candidate: &str,
+    kind: PrivacyStanzaKind,
+) -> Result<bool> {
     let selected = match active_list {
         Some(name) => Some(name.to_owned()),
         None => {
@@ -389,14 +420,14 @@ pub async fn privacy_denies(
                 "SELECT list_name FROM privacy_default_lists WHERE owner_id=$1",
             )
             .bind(owner_id)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *connection)
             .await?
         }
     };
     let Some(selected) = selected else {
         return Ok(false);
     };
-    let Some(list) = privacy_list(pool, owner_id, &selected).await? else {
+    let Some(list) = privacy_list_on(connection, owner_id, &selected).await? else {
         // A selected list is protected by a FK (or was an already-deleted
         // session-only selection). Missing policy must fail closed.
         return Ok(true);
@@ -408,7 +439,7 @@ pub async fn privacy_denies(
     )
     .bind(owner_id)
     .bind(&bare)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *connection)
     .await?;
     let subscription = roster
         .as_ref()

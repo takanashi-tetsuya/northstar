@@ -20,6 +20,15 @@ pub use self::blocking::*;
 pub use self::persistence::*;
 pub use self::presence::*;
 
+/// Read a block fact in an existing snapshot using the same lookup as the pool path.
+pub async fn is_blocked_in_snapshot(
+    transaction: &mut Transaction<'_, Postgres>,
+    owner_id: Uuid,
+    candidate: &str,
+) -> Result<bool> {
+    is_blocked(&mut **transaction, owner_id, candidate).await
+}
+
 #[derive(Clone)]
 pub struct PostgresRosterRepository<E> {
     pool: PgPool,

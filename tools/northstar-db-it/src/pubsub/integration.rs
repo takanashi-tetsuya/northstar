@@ -37,6 +37,8 @@ mod mutation_transaction;
 mod pep_policy_lock;
 #[path = "integration/pep_snapshot_tests.rs"]
 mod pep_snapshot;
+#[path = "integration/presence_replay_tests.rs"]
+mod presence_replay;
 #[path = "integration/read_only_disco_tests.rs"]
 mod read_only_disco;
 #[path = "integration/subscription_lock_wait_tests.rs"]

@@ -1,6 +1,57 @@
 //! Durable outbox authorization, lifecycle and digest operations, plus transactional notification rendering.
 
 use super::*;
+use crate::{
+    presence_replay::PRESENCE_REPLAY_PAGE_LIMIT, PresenceReplayAdmission,
+    PresenceReplayAdmissionOutcome, PresenceReplayAdmissionRequest, PubSubAdmissionKey,
+    PubSubPresenceReplayQueryRepository, PubSubReplayDigestRepository, ReplayDigestIntent,
+    ReplayDigestOutcome,
+};
+use northstar_pubsub_core::{PresenceReplayPage, PresenceReplayQuery, PubSubNodeId};
+
+impl<R: PresenceReplayAdmission> PubSubService<R> {
+    pub async fn admit_presence_replay(
+        &self,
+        request: PresenceReplayAdmissionRequest,
+    ) -> Result<PresenceReplayAdmissionOutcome> {
+        self.repository.admit_presence_replay(request).await
+    }
+}
+
+impl<R: PubSubPresenceReplayQueryRepository> PubSubService<R> {
+    pub async fn presence_replay_page(
+        &self,
+        query: &PresenceReplayQuery,
+    ) -> Result<PresenceReplayPage> {
+        if query.limit == 0 {
+            let query = PresenceReplayQuery {
+                limit: PRESENCE_REPLAY_PAGE_LIMIT,
+                ..query.clone()
+            };
+            return self.repository.presence_replay_page(&query).await;
+        }
+        self.repository.presence_replay_page(query).await
+    }
+}
+
+impl<R: PubSubReplayDigestRepository> PubSubService<R> {
+    pub async fn enqueue_replay_digest(
+        &self,
+        intent: ReplayDigestIntent,
+    ) -> Result<ReplayDigestOutcome> {
+        let admission = self.mutation_admission();
+        let _permit = admission
+            .acquire_keys(
+                &[
+                    PubSubAdmissionKey::Address(&intent.subscriber_jid),
+                    PubSubAdmissionKey::NodeId(PubSubNodeId::new(intent.node_id)),
+                ],
+                false,
+            )
+            .await?;
+        self.repository.enqueue_replay_digest(intent).await
+    }
+}
 
 impl<R: PubSubOutboxRepository> PubSubService<R> {
     pub async fn outbox_get_subscription(
@@ -18,17 +69,6 @@ impl<R: PubSubOutboxRepository> PubSubService<R> {
     pub async fn local_account_blocks_pubsub(&self, username: &str, service: &str) -> Result<bool> {
         self.repository
             .local_account_blocks_pubsub(username, service)
-            .await
-    }
-    pub async fn presence_delivery_denied(
-        &self,
-        recipient_id: Uuid,
-        active_privacy_list: Option<&str>,
-        connection_id: Uuid,
-        service: &str,
-    ) -> Result<bool> {
-        self.repository
-            .presence_delivery_denied(recipient_id, active_privacy_list, connection_id, service)
             .await
     }
     pub async fn authorize_pep_outbox_delivery(

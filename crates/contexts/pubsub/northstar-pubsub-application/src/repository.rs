@@ -311,13 +311,6 @@ pub trait PubSubOutboxRepository: Send + Sync {
         username: &str,
         service: &str,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
-    fn presence_delivery_denied(
-        &self,
-        recipient_id: Uuid,
-        active_privacy_list: Option<&str>,
-        connection_id: Uuid,
-        service: &str,
-    ) -> impl std::future::Future<Output = Result<bool>> + Send;
     fn authorize_pep_outbox_delivery(
         &self,
         item: &ClaimedPubSubOutboxDelivery,

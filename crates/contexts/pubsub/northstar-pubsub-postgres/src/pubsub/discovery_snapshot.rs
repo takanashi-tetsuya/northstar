@@ -26,7 +26,7 @@ pub async fn node_info(pool: &PgPool, query: &PubSubNodeInfoQuery<'_>) -> Result
     let mut transaction = begin_discovery_read(pool).await?;
     let result = if let Some(node) = get_node_with_executor(&mut *transaction, query.node).await? {
         let (affiliation, subscribed) =
-            node_authorization_facts_on(&mut *transaction, node.id, query.requester).await?;
+            node_authorization_facts_on(&mut *transaction, node.id, query.requester, None).await?;
         if can_retrieve(&node.access_model, affiliation.as_deref(), subscribed)? {
             let metadata = node_metadata_on(&mut *transaction, node.id).await?;
             PubSubNodeInfo::Info {

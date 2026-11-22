@@ -2,9 +2,14 @@
 
 use anyhow::Result;
 use northstar_pubsub_application::service::subscription_event_children;
-use northstar_pubsub_application::{PubSubOutboxRepository, PubSubService};
+use northstar_pubsub_application::{
+    PresenceReplayAdmission, PresenceReplayAdmissionOutcome, PresenceReplayAdmissionRequest,
+    PubSubOutboxRepository, PubSubPresenceReplayQueryRepository, PubSubReplayDigestRepository,
+    PubSubService,
+};
 use northstar_pubsub_core::{
     ClaimedPubSubOutboxDelivery, DuePubSubDigest, PepOutboxAuthorizationOutcome,
+    PresenceReplayCandidate, PresenceReplayQuery, PubSubAddress, PubSubBareJid,
     PubSubOutboxDeliveryKind,
 };
 use northstar_telemetry::metrics::{DurationHistogram, DurationTimer};
@@ -102,11 +107,11 @@ impl<R: PubSubOutboxRepository, N: PubSubDeliveryRoutes> PubSubDigestWorkerConte
         node_id: Uuid,
         subscriber_jid: &str,
     ) -> Result<Option<Vec<String>>> {
+        let now = self.service.time_sources().now();
         let subscription = self
             .service
             .outbox_get_subscription(node_id, subscriber_jid)
             .await?;
-        let now = northstar_time::Utc::now();
         Ok(subscription
             .filter(|subscription| subscription.deliver && subscription.is_active_at(now))
             .map(|subscription| subscription.show_values))
@@ -483,97 +488,81 @@ pub async fn deliver_last_items_on_presence<R>(
     show: &'static str,
 ) -> Result<()>
 where
-    R: crate::PubSubRepositories + PubSubOutboxRepository,
+    R: PresenceReplayAdmission + PubSubPresenceReplayQueryRepository + PubSubReplayDigestRepository,
 {
-    let requester_bare = northstar_xmpp_types::jid::canonical_bare_key(&recipient)?;
+    let replay_recipient = PubSubAddress::parse(&recipient)?;
+    let replay_service = PubSubBareJid::parse(&service)?;
     if pubsub
-        .presence_delivery_denied(
+        .admit_presence_replay(PresenceReplayAdmissionRequest {
             recipient_id,
-            active_privacy_list.as_deref(),
+            active_privacy_list: active_privacy_list.clone(),
             connection_id,
-            &service,
-        )
+            service: replay_service.clone(),
+        })
         .await?
+        == PresenceReplayAdmissionOutcome::Blocked
     {
         return Ok(());
     }
-    let mut cursor: Option<(String, String)> = None;
-    loop {
-        let page = pubsub
-            .subscriptions_addressing_jid_page(
-                &recipient,
-                cursor
-                    .as_ref()
-                    .map(|(node, jid)| (node.as_str(), jid.as_str())),
-                100,
-            )
-            .await?;
-        if page.is_empty() {
-            break;
-        }
-        let page_len = page.len();
-        for subscription in page {
-            cursor = Some((subscription.node.clone(), subscription.jid.clone()));
-            if subscription.state != "subscribed"
-                || !subscription.deliver
-                || !subscription.show_values.iter().any(|value| value == show)
-            {
-                continue;
-            }
-            let Some(node) = pubsub.get_node(&subscription.node).await? else {
-                continue;
-            };
-            if node.send_last_published_item != "on_sub_and_presence"
-                || !pubsub.can_retrieve_node(&node, &requester_bare).await?
-            {
-                continue;
-            }
-            let Some(item) = pubsub.get_items(node.id, &[], 1).await?.into_iter().next() else {
-                continue;
-            };
-            let mut event = XmlElement::new("items").attr("node", &node.node);
-            if node.deliver_payloads {
-                event.push_validated_fragment(&crate::pubsub::event_item_xml(&item.xml_payload))?;
-            } else {
-                event.push_child(XmlElement::new("item").attr("id", &item.item_id));
-            }
-            let event = event.finish();
-            let children =
-                subscription_event_children(&subscription, &event, None, Some(item.created_at))?;
-            if subscription.digest
-                && pubsub
-                    .enqueue_pubsub_digest(
-                        node.id,
-                        &subscription.jid,
-                        &children,
-                        subscription.digest_frequency,
-                    )
-                    .await?
-            {
-                continue;
-            }
-            let message = XmlElement::namespaced("message", "jabber:client")
-                .attr("type", "headline")
-                .attr("id", uuid::Uuid::new_v4())
-                .attr("from", &service)
-                .attr("to", &recipient)
-                .validated_fragment(&children)?
-                .finish();
-            if outbound.send(message).await.is_err() {
-                return Ok(());
-            }
-        }
-        if page_len < 100 {
-            break;
-        }
+    let query = PresenceReplayQuery {
+        recipient: replay_recipient,
+        recipient_id,
+        active_privacy_list,
+        service: replay_service,
+        show: show.to_owned(),
+        after: None,
+        limit: 0,
+    };
+    let outbound = &outbound;
+    let service = service.as_str();
+    let recipient = recipient.as_str();
+    pubsub
+        .replay_presence_pages(
+            query,
+            replay_event_children,
+            |children: String| async move {
+                let message = XmlElement::namespaced("message", "jabber:client")
+                    .attr("type", "headline")
+                    .attr("id", pubsub.time_sources().new_uuid())
+                    .attr("from", service)
+                    .attr("to", recipient)
+                    .validated_fragment(&children)?
+                    .finish();
+                Ok(outbound.send(message).await.is_ok())
+            },
+        )
+        .await
+}
+
+fn replay_event_children(candidate: &PresenceReplayCandidate) -> Result<String> {
+    let mut event = XmlElement::new("items").attr("node", &candidate.node);
+    if candidate.deliver_payloads {
+        event
+            .push_validated_fragment(&crate::pubsub::event_item_xml(&candidate.item.xml_payload))?;
+    } else {
+        event.push_child(XmlElement::new("item").attr("id", &candidate.item.item_id));
     }
-    Ok(())
+    subscription_event_children(
+        &candidate.subscription,
+        &event.finish(),
+        None,
+        Some(candidate.item.created_at),
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::PubSubOutboxTelemetry;
+    use super::*;
+    use northstar_pubsub_application::{ReplayDigestIntent, ReplayDigestOutcome};
+    use northstar_pubsub_core::{
+        FixedPubSubClock, PresenceReplayPage, PubSubItem, PubSubSubscription, PubSubTimeSources,
+        SequentialPubSubIds,
+    };
+    use northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission;
+    use northstar_stream::outbound::OutboundSender;
+    use northstar_time::{DateTime, Utc};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
 
     #[test]
     fn pubsub_snapshot_clamps_negative_database_counts() {
@@ -586,5 +575,132 @@ mod tests {
         assert_eq!(pending_rows.load(Ordering::Relaxed), 0);
         assert_eq!(pending_bytes.load(Ordering::Relaxed), i64::MAX as u64);
         assert_eq!(dead_letters.load(Ordering::Relaxed), 0);
+    }
+
+    struct ReplayRepository(Mutex<Option<PresenceReplayPage>>);
+
+    impl PresenceReplayAdmission for ReplayRepository {
+        async fn admit_presence_replay(
+            &self,
+            request: PresenceReplayAdmissionRequest,
+        ) -> Result<PresenceReplayAdmissionOutcome> {
+            assert_eq!(request.active_privacy_list.as_deref(), Some("allow"));
+            assert_eq!(request.service.to_string(), "pubsub.example.test");
+            Ok(PresenceReplayAdmissionOutcome::Admitted)
+        }
+    }
+
+    impl PubSubPresenceReplayQueryRepository for ReplayRepository {
+        async fn presence_replay_page(
+            &self,
+            query: &PresenceReplayQuery,
+        ) -> Result<PresenceReplayPage> {
+            assert_eq!(query.limit, 100);
+            assert_eq!(query.recipient.to_string(), "reader@example.test/mobile");
+            assert_eq!(query.show, "online");
+            assert_eq!(query.active_privacy_list.as_deref(), Some("allow"));
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .take()
+                .expect("unexpected replay page"))
+        }
+    }
+
+    impl PubSubReplayDigestRepository for ReplayRepository {
+        async fn enqueue_replay_digest(
+            &self,
+            _: ReplayDigestIntent,
+        ) -> Result<ReplayDigestOutcome> {
+            panic!("unexpected digest enqueue")
+        }
+    }
+
+    #[tokio::test]
+    async fn presence_replay_preserves_exact_stanza_bytes_with_injected_ids() {
+        let stored_at = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let candidate = |node: &str, subid: &str, deliver_payloads| PresenceReplayCandidate {
+            subscription: PubSubSubscription {
+                node: node.into(),
+                jid: "reader@example.test".into(),
+                state: "subscribed".into(),
+                subid: subid.into(),
+                deliver: true,
+                digest: false,
+                digest_frequency: 1_000,
+                expire: None,
+                include_body: false,
+                show_values: vec!["online".into()],
+                subscription_type: "items".into(),
+                subscription_depth: Some(1),
+            },
+            node_id: Uuid::from_u128(99),
+            node: node.into(),
+            deliver_payloads,
+            item: PubSubItem {
+                item_id: "latest".into(),
+                xml_payload: concat!(
+                    "<item xmlns='http://jabber.org/protocol/pubsub' id='latest'>",
+                    "<entry xmlns='urn:test'>payload</entry></item>"
+                )
+                .into(),
+                created_at: stored_at,
+            },
+        };
+        let pubsub = PubSubService::new_with_durable_outbox_database_admission(
+            ReplayRepository(Mutex::new(Some(PresenceReplayPage::Candidates {
+                candidates: vec![
+                    candidate("first", "s1", true),
+                    candidate("second", "s2", false),
+                ],
+                next: None,
+                scanned: 2,
+            }))),
+            2,
+            DurableOutboxDatabaseAdmission::for_primary_pool(2),
+        )
+        .with_time_sources(PubSubTimeSources::new(
+            Arc::new(FixedPubSubClock(
+                DateTime::<Utc>::from_timestamp(1_800_000_000, 0).unwrap(),
+            )),
+            Arc::new(SequentialPubSubIds::default()),
+        ));
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+        deliver_last_items_on_presence(
+            &pubsub,
+            "pubsub.example.test".into(),
+            OutboundSender::new(sender),
+            Uuid::from_u128(8),
+            Some("allow".into()),
+            Uuid::from_u128(9),
+            "reader@example.test/mobile".into(),
+            "online",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            receiver.try_recv().unwrap().stanza,
+            concat!(
+                "<message xmlns='jabber:client' type='headline' id='00000000-0000-0000-0000-000000000001'",
+                " from='pubsub.example.test' to='reader@example.test/mobile'>",
+                "<event xmlns='http://jabber.org/protocol/pubsub#event'><items node='first'>",
+                "<item id='latest'><entry xmlns='urn:test'>payload</entry></item></items></event>",
+                "<headers xmlns='http://jabber.org/protocol/shim'><header name='SubID'>s1</header></headers>",
+                "<delay xmlns='urn:xmpp:delay' stamp='2023-11-14T22:13:20+00:00'/></message>",
+            ),
+        );
+        assert_eq!(
+            receiver.try_recv().unwrap().stanza,
+            concat!(
+                "<message xmlns='jabber:client' type='headline' id='00000000-0000-0000-0000-000000000002'",
+                " from='pubsub.example.test' to='reader@example.test/mobile'>",
+                "<event xmlns='http://jabber.org/protocol/pubsub#event'><items node='second'>",
+                "<item id='latest'/></items></event>",
+                "<headers xmlns='http://jabber.org/protocol/shim'><header name='SubID'>s2</header></headers>",
+                "<delay xmlns='urn:xmpp:delay' stamp='2023-11-14T22:13:20+00:00'/></message>",
+            ),
+        );
+        assert!(receiver.try_recv().is_err());
     }
 }

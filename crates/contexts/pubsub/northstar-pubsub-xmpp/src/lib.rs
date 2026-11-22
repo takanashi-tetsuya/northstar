@@ -23,10 +23,11 @@ mod session_host;
 use northstar_pubsub_application::{
     PepAffiliationRepository, PepItemMutationRepository, PepItemQueryRepository,
     PepNodeMutationRepository, PepNodeQueryRepository, PepSnapshotRepository,
-    PepSubscriptionMutationRepository, PepSubscriptionQueryRepository,
+    PepSubscriptionMutationRepository, PepSubscriptionQueryRepository, PresenceReplayAdmission,
     PubSubAffiliationMutationRepository, PubSubAffiliationQueryRepository,
     PubSubDiscoverySnapshotRepository, PubSubItemMutationRepository, PubSubItemQueryRepository,
     PubSubItemSnapshotRepository, PubSubNodeMutationRepository, PubSubNodeQueryRepository,
+    PubSubPresenceReplayQueryRepository, PubSubReplayDigestRepository,
     PubSubRootDiscoveryQueryRepository, PubSubSubscriptionMutationRepository,
     PubSubSubscriptionQueryRepository,
 };
@@ -39,6 +40,9 @@ pub trait PubSubRepositories:
     + PubSubDiscoverySnapshotRepository
     + PubSubItemQueryRepository
     + PubSubItemSnapshotRepository
+    + PresenceReplayAdmission
+    + PubSubPresenceReplayQueryRepository
+    + PubSubReplayDigestRepository
     + PubSubItemMutationRepository
     + PubSubSubscriptionQueryRepository
     + PubSubSubscriptionMutationRepository
@@ -62,6 +66,9 @@ impl<R> PubSubRepositories for R where
         + PubSubDiscoverySnapshotRepository
         + PubSubItemQueryRepository
         + PubSubItemSnapshotRepository
+        + PresenceReplayAdmission
+        + PubSubPresenceReplayQueryRepository
+        + PubSubReplayDigestRepository
         + PubSubItemMutationRepository
         + PubSubSubscriptionQueryRepository
         + PubSubSubscriptionMutationRepository

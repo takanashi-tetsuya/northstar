@@ -1,6 +1,9 @@
 //! PubSub digest queue persistence.
 
 use super::*;
+use northstar_pubsub_core::{ReplayDigestIntent, ReplayDigestOutcome};
+
+const LOCK_DIGEST_RECIPIENT: &str = "SELECT pg_advisory_xact_lock(hashtextextended($1, 3))";
 
 #[derive(Debug)]
 pub struct DuePubSubDigest {
@@ -31,7 +34,7 @@ pub async fn enqueue_pubsub_digest_snapshot(
     }
     let subscriber_jid = northstar_xmpp_types::jid::canonicalize(subscriber_jid)?;
     let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 3))")
+    sqlx::query(LOCK_DIGEST_RECIPIENT)
         .bind(&subscriber_jid)
         .execute(&mut *transaction)
         .await?;
@@ -112,7 +115,7 @@ pub async fn enqueue_pubsub_digest(
     // One subscriber can have many digest-enabled nodes.  Serialize and cap
     // the aggregate as well as each node so an attacker cannot multiply the
     // per-node queue allowance into unbounded database growth.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 3))")
+    sqlx::query(LOCK_DIGEST_RECIPIENT)
         .bind(&subscriber_jid)
         .execute(&mut *transaction)
         .await?;
@@ -133,37 +136,121 @@ pub async fn enqueue_pubsub_digest(
         // delivery would violate both cancellation and digest timing.
         return Ok(true);
     }
+    if let Err(error) = insert_legacy_digest(
+        &mut transaction,
+        node_id,
+        &subscriber_jid,
+        event_xml,
+        frequency_ms,
+    )
+    .await
+    {
+        transaction.rollback().await?;
+        return Err(error);
+    }
+    transaction.commit().await?;
+    Ok(true)
+}
+
+pub async fn enqueue_replay_digest(
+    pool: &PgPool,
+    intent: &ReplayDigestIntent,
+) -> Result<ReplayDigestOutcome> {
+    if intent.children.is_empty() || intent.children.len() > 4_000_000 {
+        anyhow::bail!("PubSub digest event violates the durable queue size bound");
+    }
+    let subscriber_jid = intent.subscriber_jid.to_string();
+    let mut transaction = begin_bounded_pubsub_mutation(pool).await?;
+    sqlx::query(LOCK_DIGEST_RECIPIENT)
+        .bind(&subscriber_jid)
+        .execute(&mut *transaction)
+        .await?;
+    // Item mutations lock the node FOR UPDATE. Key share also allows account
+    // teardown to prune the node's whitelist after it deletes subscriptions.
+    let node =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM pubsub_nodes WHERE id=$1 FOR KEY SHARE")
+            .bind(intent.node_id)
+            .fetch_optional(&mut *transaction)
+            .await?;
+    if node.is_none() {
+        transaction.commit().await?;
+        return Ok(ReplayDigestOutcome::Stale);
+    }
+    let current = sqlx::query_as::<_, (bool, Option<DateTime<Utc>>)>(
+        "SELECT digest, expire FROM pubsub_subscriptions
+          WHERE node_id=$1 AND jid=$2 AND subid=$3 AND state='subscribed'
+            AND deliver AND digest_frequency=$4
+          FOR SHARE",
+    )
+    .bind(intent.node_id)
+    .bind(&subscriber_jid)
+    .bind(&intent.subid)
+    .bind(intent.digest_frequency)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    let Some((digest, expire)) = current else {
+        transaction.commit().await?;
+        return Ok(ReplayDigestOutcome::Stale);
+    };
+    let now = locked_event_time(&mut transaction).await?;
+    let outcome = if expire.is_some_and(|expire| expire <= now)
+        || !latest_item_in_transaction(&mut transaction, intent.node_id)
+            .await?
+            .is_some_and(|item| item.item_id == intent.item_id)
+    {
+        ReplayDigestOutcome::Stale
+    } else if !digest {
+        ReplayDigestOutcome::NotDigest
+    } else {
+        insert_legacy_digest(
+            &mut transaction,
+            intent.node_id,
+            &subscriber_jid,
+            &intent.children,
+            intent.digest_frequency,
+        )
+        .await?;
+        ReplayDigestOutcome::Enqueued
+    };
+    transaction.commit().await?;
+    Ok(outcome)
+}
+
+async fn insert_legacy_digest(
+    transaction: &mut Transaction<'_, Postgres>,
+    node_id: Uuid,
+    subscriber_jid: &str,
+    event_xml: &str,
+    frequency_ms: i32,
+) -> Result<()> {
     let (subscriber_count, subscriber_bytes): (i64, i64) = sqlx::query_as(
         "SELECT COUNT(*), COALESCE(SUM(octet_length(event_xml)), 0)::BIGINT FROM pubsub_digest_queue WHERE subscriber_jid = $1",
     )
-    .bind(&subscriber_jid)
-    .fetch_one(&mut *transaction)
+    .bind(subscriber_jid)
+    .fetch_one(&mut **transaction)
     .await?;
     if subscriber_count >= 10_000
         || subscriber_bytes.saturating_add(event_xml.len() as i64) > 64 * 1_048_576
     {
-        transaction.rollback().await?;
         anyhow::bail!("PubSub digest subscriber queue limit exceeded");
     }
     let (count, bytes): (i64, i64) = sqlx::query_as("SELECT COUNT(*), COALESCE(SUM(octet_length(event_xml)), 0)::BIGINT FROM pubsub_digest_queue WHERE subscription_node_id = $1 AND subscriber_jid = $2")
         .bind(node_id)
-        .bind(&subscriber_jid)
-        .fetch_one(&mut *transaction)
+        .bind(subscriber_jid)
+        .fetch_one(&mut **transaction)
         .await?;
     if count >= 1_000 || bytes.saturating_add(event_xml.len() as i64) > 16 * 1_048_576 {
-        transaction.rollback().await?;
         anyhow::bail!("PubSub digest node queue limit exceeded");
     }
     sqlx::query("INSERT INTO pubsub_digest_queue (id, subscription_node_id, subscriber_jid, event_xml, deliver_after) VALUES ($1, $2, $3, $4, COALESCE((SELECT MIN(deliver_after) FROM pubsub_digest_queue WHERE subscription_node_id = $2 AND subscriber_jid = $3), NOW() + ($5::TEXT || ' milliseconds')::INTERVAL))")
         .bind(Uuid::new_v4())
         .bind(node_id)
-        .bind(&subscriber_jid)
+        .bind(subscriber_jid)
         .bind(event_xml)
         .bind(frequency_ms.clamp(1_000, 86_400_000))
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
-    transaction.commit().await?;
-    Ok(true)
+    Ok(())
 }
 
 pub async fn claim_due_pubsub_digests(pool: &PgPool, limit: i64) -> Result<Vec<DuePubSubDigest>> {

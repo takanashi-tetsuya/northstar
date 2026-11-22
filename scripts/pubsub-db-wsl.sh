@@ -249,6 +249,14 @@ run_exact_ignored \
 run_exact_ignored \
   pubsub::integration::item_snapshot::item_and_options_snapshots_succeed_on_read_only_connections
 run_exact_ignored \
+  pubsub::integration::presence_replay::presence_replay_page_reads_candidates_from_one_snapshot
+run_exact_ignored \
+  pubsub::integration::presence_replay::presence_replay_page_succeeds_on_read_only_connections
+run_exact_ignored \
+  pubsub::integration::presence_replay::replay_digest_enqueue_rejects_a_changed_subscription_or_newer_item
+run_exact_ignored \
+  pubsub::integration::presence_replay::presence_replay_admission_refreshes_lease_only_when_not_blocked
+run_exact_ignored \
   pubsub::integration::access_policy::node_metadata_keeps_affiliation_order_and_live_subscription_scope
 run_exact_ignored \
   pubsub::integration::access_policy::restricted_open_publish_is_denied_by_locked_publish_and_retract

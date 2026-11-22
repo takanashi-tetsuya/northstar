@@ -1,6 +1,20 @@
 //! PostgreSQL implementation of the PubSub outbox repository port.
 
 use super::*;
+use northstar_pubsub_application::{
+    PubSubReplayDigestRepository, ReplayDigestIntent, ReplayDigestOutcome,
+};
+
+impl PubSubReplayDigestRepository for PostgresPubSubRepository {
+    async fn enqueue_replay_digest(
+        &self,
+        intent: ReplayDigestIntent,
+    ) -> Result<ReplayDigestOutcome> {
+        northstar_pubsub_postgres::enqueue_replay_digest(&self.pool, &intent)
+            .await
+            .map_err(map_database_busy)
+    }
+}
 
 impl PubSubOutboxRepository for PostgresPubSubRepository {
     async fn cleanup_idle_pubsub_event_streams(&self, limit: i64) -> Result<u64> {
@@ -43,39 +57,6 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
                 return Ok(false);
             };
             northstar_roster_postgres::roster::is_blocked(&self.pool, user.id, service).await
-        }
-        .await;
-        outcome.map_err(map_database_busy)
-    }
-    async fn presence_delivery_denied(
-        &self,
-        recipient_id: Uuid,
-        active_privacy_list: Option<&str>,
-        connection_id: Uuid,
-        service: &str,
-    ) -> Result<bool> {
-        let outcome: Result<_> = async {
-            if northstar_roster_postgres::roster::is_blocked(&self.pool, recipient_id, service)
-                .await?
-            {
-                return Ok(true);
-            }
-            if active_privacy_list.is_some() {
-                northstar_roster_postgres::privacy::refresh_active_privacy_session(
-                    &self.pool,
-                    recipient_id,
-                    connection_id,
-                )
-                .await?;
-            }
-            northstar_roster_postgres::privacy::privacy_denies(
-                &self.pool,
-                recipient_id,
-                active_privacy_list,
-                service,
-                northstar_xep_0016::PrivacyStanzaKind::Message,
-            )
-            .await
         }
         .await;
         outcome.map_err(map_database_busy)

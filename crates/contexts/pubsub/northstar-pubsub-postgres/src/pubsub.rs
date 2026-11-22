@@ -19,6 +19,7 @@ mod locked;
 mod node;
 mod outbox_commands;
 mod renderer;
+mod replay_snapshot;
 mod subscription;
 mod types;
 
@@ -51,6 +52,7 @@ pub use self::outbox_commands::{
 #[cfg(any(test, feature = "test-support"))]
 pub use self::renderer::NoopMutationOutboxRenderer;
 pub use self::renderer::PubSubMutationOutboxRenderer;
+pub use self::replay_snapshot::read_presence_replay_candidates;
 pub use self::subscription::*;
 pub use self::types::{
     CollectionUpdateOutcome, CollectionVisibleItem, CreateNodeOutcome, OwnerMutationOutcome,

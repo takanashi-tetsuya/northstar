@@ -24,13 +24,14 @@ pub async fn node_authorization_facts(
     node_id: Uuid,
     requester: &str,
 ) -> Result<(Option<String>, bool)> {
-    node_authorization_facts_on(pool, node_id, requester).await
+    node_authorization_facts_on(pool, node_id, requester, None).await
 }
 
 pub(super) async fn node_authorization_facts_on<'e>(
     executor: impl sqlx::Executor<'e, Database = Postgres>,
     node_id: Uuid,
     requester: &str,
+    read_at: Option<DateTime<Utc>>,
 ) -> Result<(Option<String>, bool)> {
     let full = northstar_xmpp_types::jid::canonicalize(requester)?;
     let bare = northstar_xmpp_types::jid::canonical_bare_key(&full)?;
@@ -41,11 +42,12 @@ pub(super) async fn node_authorization_facts_on<'e>(
                        WHERE node_id = $1 \
                          AND (jid = $3 OR split_part(jid, '/', 1) = $2) \
                          AND state = 'subscribed' \
-                         AND (expire IS NULL OR expire > NOW())) AS subscribed",
+                         AND (expire IS NULL OR expire > COALESCE($4::TIMESTAMPTZ, NOW()))) AS subscribed",
     )
     .bind(node_id)
     .bind(bare)
     .bind(full)
+    .bind(read_at)
     .fetch_one(executor)
     .await?;
     Ok((row.try_get("affiliation")?, row.try_get("subscribed")?))
@@ -93,16 +95,27 @@ pub async fn subscriptions_addressing_jid_page(
     after: Option<(&str, &str)>,
     limit: i64,
 ) -> Result<Vec<PubSubSubscription>> {
+    subscriptions_addressing_jid_page_on(pool, jid, after, limit, None).await
+}
+
+pub(super) async fn subscriptions_addressing_jid_page_on<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    jid: &str,
+    after: Option<(&str, &str)>,
+    limit: i64,
+    read_at: Option<DateTime<Utc>>,
+) -> Result<Vec<PubSubSubscription>> {
     let jid = northstar_xmpp_types::jid::canonicalize(jid)?;
     let bare = northstar_xmpp_types::jid::canonical_bare_key(&jid)?;
     let (after_node, after_jid) = after.unzip();
-    let rows = sqlx::query("SELECT n.node, s.jid, s.state, s.subid, s.deliver, s.digest, s.digest_frequency, s.expire, s.include_body, s.show_values, s.subscription_type, s.subscription_depth FROM pubsub_subscriptions s JOIN pubsub_nodes n ON n.id = s.node_id WHERE (s.jid = $1 OR s.jid = $2) AND (s.expire IS NULL OR s.expire > NOW()) AND ($3::TEXT IS NULL OR (n.node, s.jid) > ($3, $4)) ORDER BY n.node, s.jid LIMIT $5")
+    let rows = sqlx::query("SELECT n.node, s.jid, s.state, s.subid, s.deliver, s.digest, s.digest_frequency, s.expire, s.include_body, s.show_values, s.subscription_type, s.subscription_depth FROM pubsub_subscriptions s JOIN pubsub_nodes n ON n.id = s.node_id WHERE (s.jid = $1 OR s.jid = $2) AND (s.expire IS NULL OR s.expire > COALESCE($6::TIMESTAMPTZ, NOW())) AND ($3::TEXT IS NULL OR (n.node, s.jid) > ($3, $4)) ORDER BY n.node, s.jid LIMIT $5")
         .bind(jid)
         .bind(bare)
         .bind(after_node)
         .bind(after_jid)
         .bind(limit.clamp(1, 100))
-        .fetch_all(pool)
+        .bind(read_at)
+        .fetch_all(executor)
         .await?;
     Ok(rows.iter().map(row_to_subscription).collect())
 }

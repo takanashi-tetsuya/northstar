@@ -40,8 +40,7 @@ pub use commands::*;
 
 #[cfg(test)]
 use northstar_pubsub_core::{
-    PepDeleteNodeWrite, PepQuotas, PepRetractWrite, PubSubSubscriptionOptions,
-    SubscriptionAuthorizationOutcome,
+    PepDeleteNodeWrite, PepQuotas, PepRetractWrite, SubscriptionAuthorizationOutcome,
 };
 #[cfg(test)]
 use uuid::Uuid;

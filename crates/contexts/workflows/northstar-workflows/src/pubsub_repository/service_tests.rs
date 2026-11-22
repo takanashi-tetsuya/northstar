@@ -12,8 +12,8 @@ use northstar_pubsub_core::{
     PepOutboxAuthorizationMode, PepOutboxAuthorizationOutcome, PepOutboxDropReason,
     PepOutboxEventKind, PepPublishWrite, PepQuotas, PepSubscribeOutcome, PepSubscribeSnapshot,
     PepSubscribeWrite, PepSubscriptionActor, PepUnsubscribeOutcome, PepUnsubscribeWrite,
-    PubSubAccount, PubSubOutboxInsert, PubSubSubscription, PubSubSubscriptionOptions,
-    SubscriptionOptionsOutcome,
+    PubSubAccount, PubSubNodeId, PubSubOutboxInsert, PubSubSubscription, PubSubSubscriptionOptions,
+    SubscriptionOptionsOutcome, SubscriptionOptionsPatch,
 };
 use northstar_time::{TimeZone, Utc};
 use sqlx::PgPool;
@@ -30,26 +30,28 @@ async fn remote_subscription_options_fail_before_mutation_admission() {
         .connect_lazy("postgres://unused:unused@localhost/unused")
         .unwrap();
     let service = crate::pubsub_repository::test_pubsub_service(pool, "example.test");
-    let mut options = PubSubSubscriptionOptions::for_node_type("leaf");
-    options.show_values = vec!["online".to_owned()];
+    let patch = SubscriptionOptionsPatch {
+        show_values: Some(vec!["online".to_owned()]),
+        ..SubscriptionOptionsPatch::default()
+    };
     let result = service
         .execute_pubsub_update_subscription_options(PubSubUpdateSubscriptionOptionsCommand {
-            node_id: Uuid::new_v4(),
+            node_id: PubSubNodeId::new(Uuid::new_v4()),
             requester: "reader@remote.test",
             subscriber_jid: "reader@remote.test/phone",
             expected_subid: "current",
-            options: &options,
+            patch: &patch,
         })
         .await
         .unwrap();
     assert_eq!(result.outcome, SubscriptionOptionsOutcome::InvalidOptions);
     let result = service
         .execute_pubsub_update_subscription_options(PubSubUpdateSubscriptionOptionsCommand {
-            node_id: Uuid::new_v4(),
+            node_id: PubSubNodeId::new(Uuid::new_v4()),
             requester: "other@remote.test",
             subscriber_jid: "reader@remote.test/phone",
             expected_subid: "current",
-            options: &options,
+            patch: &patch,
         })
         .await
         .unwrap();

@@ -1,5 +1,7 @@
 use super::*;
-use northstar_pubsub_core::{PubSubAccount, PubSubPublishWrite, PubSubSubscribeWrite};
+use northstar_pubsub_core::{
+    PubSubAccount, PubSubNodeId, PubSubPublishWrite, PubSubSubscribeWrite, SubscriptionOptionsPatch,
+};
 
 #[test]
 fn bookmark_plan_uses_locked_snapshot_and_orders_retractions() {
@@ -251,13 +253,13 @@ fn subscription_options_precheck_keeps_expiry_before_subid_errors() {
 
 #[test]
 fn subscription_options_update_requires_a_snapshot_subid() {
-    let options = PubSubSubscriptionOptions::for_node_type("leaf");
+    let patch = SubscriptionOptionsPatch::default();
     let valid = PubSubUpdateSubscriptionOptionsCommand {
-        node_id: Uuid::new_v4(),
+        node_id: PubSubNodeId::new(Uuid::new_v4()),
         requester: "owner@example.test",
         subscriber_jid: "owner@example.test/phone",
         expected_subid: "current",
-        options: &options,
+        patch: &patch,
     };
     assert!(validate_pubsub_update_subscription_options_command(&valid).is_ok());
     assert!(validate_pubsub_update_subscription_options_command(

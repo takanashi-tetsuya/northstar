@@ -1,8 +1,12 @@
 use super::super::create_default_test_node;
-use super::{subscribe, Scenario, DOMAIN};
+use super::{Scenario, DOMAIN};
+use northstar_pubsub_core::{
+    PubSubAddress, PubSubNodeId, PubSubSubscribeOutcome, PubSubTimeSources,
+    PubSubUnsubscribeOutcome, RequestedSubId, SubscriptionOptionsPatch,
+};
 use northstar_pubsub_postgres::{
-    unsubscribe_checked_with_outbox, update_subscription_options_checked,
-    PubSubSubscriptionOptions, SubscribeOutcome, SubscriptionOptionsOutcome, UnsubscribeOutcome,
+    patch_subscription_options_checked, subscribe_checked_with_renderer,
+    unsubscribe_current_with_renderer, NoopMutationOutboxRenderer, SubscriptionOptionsOutcome,
 };
 use uuid::Uuid;
 
@@ -22,10 +26,10 @@ async fn measure_subscription_contention() {
         let jid = format!("{subid}@{DOMAIN}");
         (jid, subid)
     };
-    let node_id = node.id;
-    let options = PubSubSubscriptionOptions {
-        deliver: false,
-        ..PubSubSubscriptionOptions::for_node_type(&node.node_type)
+    let node_id = PubSubNodeId::new(node.id);
+    let patch = SubscriptionOptionsPatch {
+        deliver: Some(false),
+        ..SubscriptionOptionsPatch::default()
     };
 
     scenario
@@ -38,12 +42,26 @@ async fn measure_subscription_contention() {
                 let identity = identity.clone();
                 move |worker, _| {
                     let pool = pool.clone();
-                    let node = node.clone();
                     let (jid, subid) = identity(worker);
-                    async move { subscribe(&pool, &node, &jid, &jid, &subid).await }
+                    async move {
+                        let subscriber = PubSubAddress::parse(&jid)?;
+                        subscribe_checked_with_renderer(
+                            &pool,
+                            DOMAIN,
+                            node_id,
+                            &subscriber.bare(),
+                            &subscriber,
+                            1_000,
+                            Some(&SubscriptionOptionsPatch::default()),
+                            &subid,
+                            &PubSubTimeSources::default(),
+                            &NoopMutationOutboxRenderer,
+                        )
+                        .await
+                    }
                 }
             },
-            |outcome| matches!(outcome, SubscribeOutcome::Subscribed(_)),
+            |outcome| matches!(outcome, PubSubSubscribeOutcome::Subscribed(_)),
         )
         .await;
 
@@ -58,16 +76,17 @@ async fn measure_subscription_contention() {
                 move |worker, _| {
                     let pool = pool.clone();
                     let (jid, subid) = identity(worker);
-                    let options = options.clone();
+                    let patch = patch.clone();
                     async move {
-                        update_subscription_options_checked(
+                        let subscriber = PubSubAddress::parse(&jid)?;
+                        patch_subscription_options_checked(
                             &pool,
                             DOMAIN,
                             node_id,
-                            &jid,
-                            &jid,
+                            &subscriber.bare(),
+                            &subscriber,
                             Some(&subid),
-                            &options,
+                            &patch,
                         )
                         .await
                     }
@@ -86,10 +105,25 @@ async fn measure_subscription_contention() {
                 let pool = pool.clone();
                 let (jid, subid) = identity(worker);
                 async move {
-                    unsubscribe_checked_with_outbox(&pool, node_id, &jid, &jid, &subid, &[]).await
+                    let subscriber = PubSubAddress::parse(&jid)?;
+                    unsubscribe_current_with_renderer(
+                        &pool,
+                        node_id,
+                        &subscriber.bare(),
+                        &subscriber,
+                        RequestedSubId(Some(&subid)),
+                        &PubSubTimeSources::default(),
+                        &NoopMutationOutboxRenderer,
+                    )
+                    .await
                 }
             },
-            |outcome| *outcome == UnsubscribeOutcome::Unsubscribed,
+            |outcome| {
+                matches!(
+                    outcome,
+                    PubSubUnsubscribeOutcome::Unsubscribed { subid: Some(_) }
+                )
+            },
         )
         .await;
 

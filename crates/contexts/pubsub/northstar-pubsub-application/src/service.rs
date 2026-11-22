@@ -15,9 +15,8 @@ use northstar_pubsub_core::{
     PubSubAccount, PubSubAffiliation, PubSubConfigOutcome, PubSubItem, PubSubNode,
     PubSubNodeConfig, PubSubNodeMetadata, PubSubNotificationDelivery, PubSubOutboxDeliveryKind,
     PubSubOutboxFailureDisposition, PubSubOutboxInsert, PubSubOutboxSnapshot, PubSubOutboxSource,
-    PubSubSubscription, PubSubSubscriptionOptions, PubSubTimeSources, PublishItemsOutcome,
-    RetractItemsOutcome, SetAffiliationsOutcome, SetSubscriptionsOutcome, SubscribeOutcome,
-    UnsubscribeOutcome,
+    PubSubSubscription, PubSubTimeSources, PublishItemsOutcome, RetractItemsOutcome,
+    SetAffiliationsOutcome, SetSubscriptionsOutcome,
 };
 use northstar_xml_builder::XmlElement;
 use std::sync::Arc;

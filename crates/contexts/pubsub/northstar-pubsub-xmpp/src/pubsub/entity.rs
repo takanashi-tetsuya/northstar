@@ -5,7 +5,7 @@ use northstar_pubsub_application::{
     PubSubCollectionItemSelection, PubSubItemQuery, PubSubItemRead, PubSubLeafItemSelection,
     PubSubOptionsNode, PubSubOptionsQuery, PubSubOptionsRead,
 };
-use northstar_pubsub_core::CollectionVisibleItem;
+use northstar_pubsub_core::{CollectionVisibleItem, PubSubNodeId, RequestedSubId};
 use northstar_xep_0060::supports_include_body;
 
 const MAX_COLLECTION_READ_ITEMS: i64 = 100;
@@ -461,11 +461,11 @@ pub(super) async fn handle_entity_set<H: PubSubHost>(
                     PubSubReply::Error("bad-request")
                 });
             }
-            let options = match parse_subscription_options(
+            let patch = match parse_subscription_options(
                 form,
-                subscription_options(&subscription),
                 &node.node_type,
                 supports_include_body(node.payload_type.as_deref()),
+                host.pubsub_application_service().time_sources().now(),
             ) {
                 Ok(options) => options,
                 Err(error) => return Ok(error),
@@ -474,11 +474,11 @@ pub(super) async fn handle_entity_set<H: PubSubHost>(
                 .pubsub_application_service()
                 .execute_pubsub_update_subscription_options(
                     PubSubUpdateSubscriptionOptionsCommand {
-                        node_id: node.id,
+                        node_id: PubSubNodeId::new(node.id),
                         requester: &requester,
                         subscriber_jid: &requested_jid,
                         expected_subid: &subscription.subid,
-                        options: &options,
+                        patch: &patch,
                     },
                 )
                 .await?
@@ -787,19 +787,22 @@ pub(super) async fn handle_entity_set<H: PubSubHost>(
                     .expect("subscribe-and-configure structure was validated above");
                 let parsed = match parse_subscription_options(
                     form,
-                    PubSubSubscriptionOptions::for_node_type(&node.node_type),
                     &node.node_type,
                     supports_include_body(node.payload_type.as_deref()),
+                    host.pubsub_application_service().time_sources().now(),
                 ) {
                     Ok(options) => options,
                     Err(error) => return Ok(error),
                 };
-                if !northstar_xep_0060::subscription_show_values_allowed(
-                    northstar_xmpp_types::jid::CanonicalJid::parse_bare(&requester)?.domainpart(),
-                    host.pubsub_local_domain(),
-                    &parsed.show_values,
-                ) {
-                    return Ok(invalid_subscription_options());
+                if let Some(values) = &parsed.show_values {
+                    if !northstar_xep_0060::subscription_show_values_allowed(
+                        northstar_xmpp_types::jid::CanonicalJid::parse_bare(&requester)?
+                            .domainpart(),
+                        host.pubsub_local_domain(),
+                        values,
+                    ) {
+                        return Ok(invalid_subscription_options());
+                    }
                 }
                 Some(parsed)
             } else {
@@ -811,7 +814,8 @@ pub(super) async fn handle_entity_set<H: PubSubHost>(
                 node: node_name,
                 options: subscription_options.as_ref(),
                 max_subscriptions: 1_000,
-            });
+            })
+            .with_node_id(PubSubNodeId::new(node.id));
             let result = host
                 .pubsub_application_service()
                 .execute_pubsub_subscribe(cmd)
@@ -883,7 +887,7 @@ pub(super) async fn handle_entity_set<H: PubSubHost>(
                 requester: &requester,
                 subscriber_jid: &requested_jid,
                 node: node_name,
-                subid: supplied_subid,
+                requested_subid: RequestedSubId(supplied_subid),
             });
             let result = host
                 .pubsub_application_service()

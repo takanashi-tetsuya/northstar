@@ -1,6 +1,5 @@
 use anyhow::Result;
 use northstar_pubsub_application::{PubSubOwnerRead, PubSubOwnerReadKind};
-use northstar_pubsub_core::{pubsub_subscribe_policy, PubSubSubscribePolicy};
 use northstar_time::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::BTreeSet;
@@ -22,6 +21,7 @@ mod owner_preflight;
 mod renderer;
 mod replay_snapshot;
 mod subscription;
+mod subscription_patch;
 mod types;
 
 use self::locked::{
@@ -56,6 +56,7 @@ pub use self::renderer::NoopMutationOutboxRenderer;
 pub use self::renderer::PubSubMutationOutboxRenderer;
 pub use self::replay_snapshot::read_presence_replay_candidates;
 pub use self::subscription::*;
+pub use self::subscription_patch::*;
 pub use self::types::{
     CollectionUpdateOutcome, CollectionVisibleItem, CreateNodeOutcome, OwnerMutationOutcome,
     PubSubAffiliation, PubSubConfigOutcome, PubSubItem, PubSubNotificationDelivery,

@@ -1,7 +1,8 @@
 use super::*;
 use northstar_pubsub_core::{
-    AutoCreatePublishOutcome, PublishItemsOutcome, RetractItemsOutcome, SubscribeOutcome,
-    SubscriptionAuthorizationOutcome, UnsubscribeOutcome,
+    AutoCreatePublishOutcome, PubSubAddress, PubSubNodeId, PubSubSubscribeOutcome,
+    PubSubTimeSources, PubSubUnsubscribeOutcome, PublishItemsOutcome, RequestedSubId,
+    RetractItemsOutcome, SubscriptionAuthorizationOutcome, SubscriptionOptionsPatch,
 };
 use northstar_runtime::durable_outbox::DurableOutboxDatabaseAdmission;
 use northstar_time::DateTime;
@@ -110,12 +111,12 @@ impl PubSubSubscriptionMutationRepository for OwnerRepository<'_> {
     }
 
     unexpected_calls! {
-        fn update_subscription_options_checked(_node_id: Uuid, _requester: &str, _subscriber: &str, _subid: Option<&str>, _options: &PubSubSubscriptionOptions)
+        fn update_subscription_options_checked(_node_id: PubSubNodeId, _requester: &PubSubBareJid, _subscriber: &PubSubAddress, _subid: &str, _patch: &SubscriptionOptionsPatch)
             -> SubscriptionOptionsOutcome;
-        fn set_subscription_limited_with_options(_node_id: Uuid, _requester: &str, _jid: &str, _state: &str, _node_type: &str, _access_model: &str, _max: i64, _options: Option<&PubSubSubscriptionOptions>, _subid: &str)
-            -> SubscribeOutcome;
-        fn unsubscribe_checked(_node_id: Uuid, _requester: &str, _subscriber: &str, _subid: &str)
-            -> UnsubscribeOutcome;
+        fn subscribe_checked(_node_id: PubSubNodeId, _requester: &PubSubBareJid, _subscriber: &PubSubAddress, _max: i64, _patch: Option<&SubscriptionOptionsPatch>, _subid: &str, _time: &PubSubTimeSources)
+            -> PubSubSubscribeOutcome;
+        fn unsubscribe_checked(_node_id: PubSubNodeId, _requester: &PubSubBareJid, _subscriber: &PubSubAddress, _subid: RequestedSubId<'_>, _time: &PubSubTimeSources)
+            -> PubSubUnsubscribeOutcome;
         fn set_subscriptions(_node_id: Uuid, _requester: &str, _changes: &[(String, String, Option<String>)])
             -> SetSubscriptionsOutcome;
         fn resolve_pending_subscription(_node_id: Uuid, _requester: &str, _subscriber: &str, _subid: &str, _allow: bool)

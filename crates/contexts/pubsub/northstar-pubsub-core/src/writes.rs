@@ -1,6 +1,6 @@
 //! Generic PubSub write inputs.
 
-use crate::{PubSubNode, PubSubNodeConfig, PubSubNodeId, PubSubSubscriptionOptions};
+use crate::{PubSubNode, PubSubNodeConfig, PubSubNodeId, RequestedSubId, SubscriptionOptionsPatch};
 
 pub struct PubSubPublishWrite<'a> {
     pub publisher_jid: &'a str,
@@ -15,7 +15,7 @@ pub struct PubSubSubscribeWrite<'a> {
     pub requester: &'a str,
     pub subscriber_jid: &'a str,
     pub node: &'a str,
-    pub options: Option<&'a PubSubSubscriptionOptions>,
+    pub options: Option<&'a SubscriptionOptionsPatch>,
     pub max_subscriptions: i64,
 }
 
@@ -23,7 +23,7 @@ pub struct PubSubUnsubscribeWrite<'a> {
     pub requester: &'a str,
     pub subscriber_jid: &'a str,
     pub node: &'a str,
-    pub subid: Option<&'a str>,
+    pub requested_subid: RequestedSubId<'a>,
 }
 
 pub struct PubSubRetractWrite<'a> {

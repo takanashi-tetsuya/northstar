@@ -323,6 +323,18 @@ run_exact_ignored \
 run_exact_ignored \
   pubsub::integration::subscription_lock_wait::subscribe_options_recheck_remote_show_values_after_lock_wait
 run_exact_ignored \
+  pubsub::integration::subscription_command::disjoint_option_patches_both_survive_concurrent_updates
+run_exact_ignored \
+  pubsub::integration::subscription_command::subscribe_fast_paths_are_decided_under_the_lock
+run_exact_ignored \
+  pubsub::integration::subscription_command::unsubscribe_without_subid_removes_the_replacement_row
+run_exact_ignored \
+  pubsub::integration::subscription_command::stale_echoed_subid_is_rejected_after_lock_wait
+run_exact_ignored \
+  pubsub::integration::subscription_command::lease_expiry_is_evaluated_after_subscribe_lock_wait
+run_exact_ignored \
+  pubsub::integration::subscription_command::subscribe_sees_affiliation_and_access_model_change_atomically
+run_exact_ignored \
   pubsub::integration::bookmarks::bookmarks2_outbox_uses_locked_item_diff_after_lock_wait
 run_exact_ignored \
   pubsub::integration::bookmarks::legacy_bookmark_commit_conflict_is_atomic_and_success_uses_locked_diff

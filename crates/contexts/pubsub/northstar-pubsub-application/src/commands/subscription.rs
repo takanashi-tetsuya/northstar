@@ -2,19 +2,30 @@
 
 use anyhow::Result;
 use northstar_pubsub_core::{
-    PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubSubscriptionOptions,
-    PubSubUnsubscribeOutcome, PubSubUnsubscribeWrite, SubscriptionAuthorizationOutcome,
-    SubscriptionOptionsOutcome,
+    PubSubNodeId, PubSubSubscribeOutcome, PubSubSubscribeWrite, PubSubUnsubscribeOutcome,
+    PubSubUnsubscribeWrite, SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome,
+    SubscriptionOptionsPatch,
 };
-use uuid::Uuid;
 
 pub struct PubSubSubscribeCommand<'a> {
     pub write: PubSubSubscribeWrite<'a>,
+    pub(crate) resolved_node_id: Option<PubSubNodeId>,
+}
+
+impl PubSubSubscribeCommand<'_> {
+    /// Reuse the identity resolved for node-dependent form validation.
+    pub fn with_node_id(mut self, node_id: PubSubNodeId) -> Self {
+        self.resolved_node_id = Some(node_id);
+        self
+    }
 }
 
 impl<'a> From<PubSubSubscribeWrite<'a>> for PubSubSubscribeCommand<'a> {
     fn from(write: PubSubSubscribeWrite<'a>) -> Self {
-        Self { write }
+        Self {
+            write,
+            resolved_node_id: None,
+        }
     }
 }
 
@@ -65,11 +76,11 @@ pub struct PubSubAuthorizeSubscriptionResult {
 }
 
 pub struct PubSubUpdateSubscriptionOptionsCommand<'a> {
-    pub node_id: Uuid,
+    pub node_id: PubSubNodeId,
     pub requester: &'a str,
     pub subscriber_jid: &'a str,
     pub expected_subid: &'a str,
-    pub options: &'a PubSubSubscriptionOptions,
+    pub patch: &'a SubscriptionOptionsPatch,
 }
 
 #[derive(Debug)]
@@ -162,7 +173,7 @@ pub fn validate_pubsub_authorize_subscription_command(
 pub fn validate_pubsub_update_subscription_options_command(
     command: &PubSubUpdateSubscriptionOptionsCommand<'_>,
 ) -> Result<()> {
-    if command.node_id.is_nil()
+    if command.node_id.get().is_nil()
         || command.requester.trim().is_empty()
         || command.subscriber_jid.trim().is_empty()
         || command.expected_subid.is_empty()

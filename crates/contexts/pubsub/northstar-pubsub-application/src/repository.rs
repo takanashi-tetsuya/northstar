@@ -223,32 +223,31 @@ pub trait PubSubSubscriptionMutationRepository: Send + Sync {
     fn local_domain(&self) -> &str;
     fn update_subscription_options_checked(
         &self,
-        node_id: Uuid,
-        requester: &str,
-        subscriber_jid: &str,
-        expected_subid: Option<&str>,
-        options: &PubSubSubscriptionOptions,
+        node_id: PubSubNodeId,
+        requester: &PubSubBareJid,
+        subscriber: &PubSubAddress,
+        expected_subid: &str,
+        patch: &SubscriptionOptionsPatch,
     ) -> impl std::future::Future<Output = Result<SubscriptionOptionsOutcome>> + Send;
     #[allow(clippy::too_many_arguments)]
-    fn set_subscription_limited_with_options(
+    fn subscribe_checked(
         &self,
-        node_id: Uuid,
-        requester: &str,
-        jid: &str,
-        state: &str,
-        expected_node_type: &str,
-        expected_access_model: &str,
+        node_id: PubSubNodeId,
+        requester: &PubSubBareJid,
+        subscriber: &PubSubAddress,
         max_subscriptions: i64,
-        options: Option<&PubSubSubscriptionOptions>,
-        requested_subid: &str,
-    ) -> impl std::future::Future<Output = Result<SubscribeOutcome>> + Send;
+        options: Option<&SubscriptionOptionsPatch>,
+        planned_subid: &str,
+        time: &PubSubTimeSources,
+    ) -> impl std::future::Future<Output = Result<PubSubSubscribeOutcome>> + Send;
     fn unsubscribe_checked(
         &self,
-        node_id: Uuid,
-        requester: &str,
-        subscriber_jid: &str,
-        expected_subid: &str,
-    ) -> impl std::future::Future<Output = Result<UnsubscribeOutcome>> + Send;
+        node_id: PubSubNodeId,
+        requester: &PubSubBareJid,
+        subscriber: &PubSubAddress,
+        requested_subid: RequestedSubId<'_>,
+        time: &PubSubTimeSources,
+    ) -> impl std::future::Future<Output = Result<PubSubUnsubscribeOutcome>> + Send;
     fn set_subscriptions(
         &self,
         node_id: Uuid,

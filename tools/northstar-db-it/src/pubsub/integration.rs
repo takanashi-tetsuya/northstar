@@ -45,6 +45,8 @@ mod presence_replay;
 mod publish_precondition;
 #[path = "integration/read_only_disco_tests.rs"]
 mod read_only_disco;
+#[path = "integration/subscription_command_tests.rs"]
+mod subscription_command;
 #[path = "integration/subscription_lock_wait_tests.rs"]
 mod subscription_lock_wait;
 

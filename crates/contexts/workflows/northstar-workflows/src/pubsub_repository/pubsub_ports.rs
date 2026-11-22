@@ -2,6 +2,10 @@
 
 use super::*;
 use northstar_pubsub_application::AutoCreatePublishOutcome;
+use northstar_pubsub_core::{
+    PubSubAddress, PubSubBareJid, PubSubNodeId, PubSubSubscribeOutcome, PubSubTimeSources,
+    PubSubUnsubscribeOutcome, RequestedSubId, SubscriptionOptionsPatch,
+};
 
 impl PubSubNodeMutationRepository for PostgresPubSubRepository {
     async fn delete_node_as_owner_with_redirect_and_outbox(
@@ -405,92 +409,74 @@ impl PubSubSubscriptionMutationRepository for PostgresPubSubRepository {
 
     async fn update_subscription_options_checked(
         &self,
-        node_id: Uuid,
-        requester: &str,
-        subscriber_jid: &str,
-        expected_subid: Option<&str>,
-        options: &PubSubSubscriptionOptions,
+        node_id: PubSubNodeId,
+        requester: &PubSubBareJid,
+        subscriber: &PubSubAddress,
+        expected_subid: &str,
+        patch: &SubscriptionOptionsPatch,
     ) -> Result<SubscriptionOptionsOutcome> {
-        let outcome: Result<_> = async {
-            let options = northstar_pubsub_postgres::PubSubSubscriptionOptions::from(options);
-            Ok(
-                northstar_pubsub_postgres::update_subscription_options_checked(
-                    &self.pool,
-                    &self.domain,
-                    node_id,
-                    requester,
-                    subscriber_jid,
-                    expected_subid,
-                    &options,
-                )
-                .await?
-                .into(),
-            )
-        }
-        .await;
-        outcome.map_err(map_database_busy)
+        northstar_pubsub_postgres::patch_subscription_options_checked(
+            &self.pool,
+            &self.domain,
+            node_id,
+            requester,
+            subscriber,
+            Some(expected_subid),
+            patch,
+        )
+        .await
+        .map(Into::into)
+        .map_err(map_database_busy)
     }
+
     #[allow(clippy::too_many_arguments)]
-    async fn set_subscription_limited_with_options(
+    async fn subscribe_checked(
         &self,
-        node_id: Uuid,
-        requester: &str,
-        jid: &str,
-        state: &str,
-        expected_node_type: &str,
-        expected_access_model: &str,
+        node_id: PubSubNodeId,
+        requester: &PubSubBareJid,
+        subscriber: &PubSubAddress,
         max_subscriptions: i64,
-        options: Option<&PubSubSubscriptionOptions>,
-        requested_subid: &str,
-    ) -> Result<SubscribeOutcome> {
-        let outcome: Result<_> = async {
-            let options = options.map(northstar_pubsub_postgres::PubSubSubscriptionOptions::from);
-            Ok(
-                northstar_pubsub_postgres::set_subscription_limited_with_options_and_renderer(
-                    &self.pool,
-                    &self.domain,
-                    node_id,
-                    requester,
-                    jid,
-                    state,
-                    expected_node_type,
-                    expected_access_model,
-                    max_subscriptions,
-                    options.as_ref(),
-                    requested_subid,
-                    &self.renderer,
-                )
-                .await?
-                .into(),
-            )
-        }
-        .await;
-        outcome.map_err(map_database_busy)
+        options: Option<&SubscriptionOptionsPatch>,
+        planned_subid: &str,
+        time: &PubSubTimeSources,
+    ) -> Result<PubSubSubscribeOutcome> {
+        northstar_pubsub_postgres::subscribe_checked_with_renderer(
+            &self.pool,
+            &self.domain,
+            node_id,
+            requester,
+            subscriber,
+            max_subscriptions,
+            options,
+            planned_subid,
+            time,
+            &self.renderer,
+        )
+        .await
+        .map_err(map_database_busy)
     }
+
     async fn unsubscribe_checked(
         &self,
-        node_id: Uuid,
-        requester: &str,
-        subscriber_jid: &str,
-        expected_subid: &str,
-    ) -> Result<UnsubscribeOutcome> {
-        let outcome: Result<_> = async {
-            Ok(
-                northstar_pubsub_postgres::unsubscribe_checked_with_renderer(
-                    &self.pool,
-                    node_id,
-                    requester,
-                    subscriber_jid,
-                    expected_subid,
-                    &self.renderer,
-                )
-                .await?
-                .into(),
-            )
-        }
-        .await;
-        outcome.map_err(map_database_busy)
+        node_id: PubSubNodeId,
+        requester: &PubSubBareJid,
+        subscriber: &PubSubAddress,
+        requested_subid: RequestedSubId<'_>,
+        time: &PubSubTimeSources,
+    ) -> Result<PubSubUnsubscribeOutcome> {
+        northstar_pubsub_postgres::unsubscribe_current_with_renderer(
+            &self.pool,
+            node_id,
+            requester,
+            subscriber,
+            requested_subid,
+            time,
+            &self.renderer,
+        )
+        .await
+        .map_err(map_database_busy)
     }
+
     async fn set_subscriptions(
         &self,
         node_id: Uuid,

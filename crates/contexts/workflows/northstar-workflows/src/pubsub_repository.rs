@@ -26,10 +26,9 @@ use northstar_pubsub_core::{
     PepSubscription, PepSubscriptionActor, PepUnsubscribeOutcome, PubSubAccount, PubSubAffiliation,
     PubSubConfigOutcome, PubSubItem, PubSubNode, PubSubNodeConfig, PubSubNodeMetadata,
     PubSubOutboxDeliveryKind, PubSubOutboxFailureDisposition, PubSubOutboxInsert,
-    PubSubOutboxSnapshot, PubSubOutboxSource, PubSubSubscription, PubSubSubscriptionOptions,
-    PublishItemsOutcome, RetractItemsOutcome, SetAffiliationsOutcome, SetSubscriptionsOutcome,
-    SubscribeOutcome, SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome,
-    UnsubscribeOutcome,
+    PubSubOutboxSnapshot, PubSubOutboxSource, PubSubSubscription, PublishItemsOutcome,
+    RetractItemsOutcome, SetAffiliationsOutcome, SetSubscriptionsOutcome,
+    SubscriptionAuthorizationOutcome, SubscriptionOptionsOutcome,
 };
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{BTreeMap, HashMap, HashSet};

@@ -1,6 +1,8 @@
 //! Parse and render subscription options and node configuration forms.
 
 use super::*;
+use northstar_pubsub_core::{SubscriptionLeasePatch, SubscriptionOptionsPatch};
+use northstar_time::{DateTime, Utc};
 
 pub(super) fn subscription_options(subscription: &PubSubSubscription) -> PubSubSubscriptionOptions {
     PubSubSubscriptionOptions {
@@ -17,10 +19,10 @@ pub(super) fn subscription_options(subscription: &PubSubSubscription) -> PubSubS
 
 pub(super) fn parse_subscription_options(
     form: Node<'_, '_>,
-    mut options: PubSubSubscriptionOptions,
     node_type: &str,
     supports_include_body: bool,
-) -> std::result::Result<PubSubSubscriptionOptions, PubSubReply> {
+    now: DateTime<Utc>,
+) -> std::result::Result<SubscriptionOptionsPatch, PubSubReply> {
     if !valid_submit_form_structure(form) || has_duplicate_fields(form) {
         return Err(PubSubReply::Error("bad-request"));
     }
@@ -42,45 +44,49 @@ pub(super) fn parse_subscription_options(
             return Err(invalid_subscription_options());
         }
     }
+    let mut patch = SubscriptionOptionsPatch::default();
     for (field, target) in [
-        ("pubsub#deliver", &mut options.deliver),
-        ("pubsub#digest", &mut options.digest),
-        ("pubsub#include_body", &mut options.include_body),
+        ("pubsub#deliver", &mut patch.deliver),
+        ("pubsub#digest", &mut patch.digest),
+        ("pubsub#include_body", &mut patch.include_body),
     ] {
         if let Some(value) = first_field(&fields, field) {
-            *target = parse_bool(Some(value)).ok_or_else(invalid_subscription_options)?;
+            *target = Some(parse_bool(Some(value)).ok_or_else(invalid_subscription_options)?);
         }
     }
-    if options.include_body && !supports_include_body {
+    if patch.include_body == Some(true) && !supports_include_body {
         return Err(invalid_subscription_options());
     }
     if let Some(value) = first_field(&fields, "pubsub#digest_frequency") {
-        options.digest_frequency = value
-            .parse::<i32>()
-            .ok()
-            .filter(|value| (1_000..=86_400_000).contains(value))
-            .ok_or_else(invalid_subscription_options)?;
+        patch.digest_frequency = Some(
+            value
+                .parse::<i32>()
+                .ok()
+                .filter(|value| (1_000..=86_400_000).contains(value))
+                .ok_or_else(invalid_subscription_options)?,
+        );
     }
     if let Some(value) = first_field(&fields, "pubsub#expire") {
-        options.expire = if value.is_empty() {
-            None
+        patch.expire = Some(if value.is_empty() {
+            SubscriptionLeasePatch::Clear
         } else if value == "presence" {
             // Presence-scoped leases require full-JID subscription state,
             // which this service intentionally does not advertise.
             return Err(invalid_subscription_options());
         } else {
-            let now = northstar_time::Utc::now();
-            let expiry = northstar_time::DateTime::parse_from_rfc3339(value)
+            let expiry = DateTime::parse_from_rfc3339(value)
                 .map_err(|_| invalid_subscription_options())?
-                .with_timezone(&northstar_time::Utc);
+                .with_timezone(&Utc);
             if expiry <= now {
                 return Err(invalid_subscription_options());
             }
             // XEP-0060 requires a service with a maximum lease term to clamp
             // an overlong request rather than reject it. A finite policy also
             // prevents effectively immortal rows chosen by remote entities.
-            Some(expiry.min(now + northstar_time::Duration::days(MAX_SUBSCRIPTION_LEASE_DAYS)))
-        };
+            SubscriptionLeasePatch::Until(
+                expiry.min(now + northstar_time::Duration::days(MAX_SUBSCRIPTION_LEASE_DAYS)),
+            )
+        });
     }
     if let Some(values) = fields.get("pubsub#show-values") {
         if values.is_empty()
@@ -93,7 +99,7 @@ pub(super) fn parse_subscription_options(
         }
         let mut unique = BTreeSet::new();
         unique.extend(values.iter().cloned());
-        options.show_values = unique.into_iter().collect();
+        patch.show_values = Some(unique.into_iter().collect());
     }
     if let Some(value) = first_field(&fields, "pubsub#subscription_type") {
         let valid = if node_type == "collection" {
@@ -104,13 +110,13 @@ pub(super) fn parse_subscription_options(
         if !valid {
             return Err(invalid_subscription_options());
         }
-        options.subscription_type = value.to_owned();
+        patch.subscription_type = Some(value.to_owned());
     }
     if let Some(value) = first_field(&fields, "pubsub#subscription_depth") {
         if node_type != "collection" {
             return Err(invalid_subscription_options());
         }
-        options.subscription_depth = if value == "all" {
+        patch.subscription_depth = Some(if value == "all" {
             None
         } else {
             Some(
@@ -120,9 +126,9 @@ pub(super) fn parse_subscription_options(
                     .filter(|value| *value >= 0)
                     .ok_or_else(invalid_subscription_options)?,
             )
-        };
+        });
     }
-    Ok(options)
+    Ok(patch)
 }
 
 pub(super) fn subscription_options_form(

@@ -31,6 +31,7 @@ mod pep;
 mod pep_replay;
 mod replay;
 mod subscription;
+mod subscription_patch;
 mod writes;
 
 pub use node::*;
@@ -40,6 +41,7 @@ pub use pep::*;
 pub use pep_replay::*;
 pub use replay::*;
 pub use subscription::*;
+pub use subscription_patch::*;
 pub use writes::*;
 
 #[cfg(test)]

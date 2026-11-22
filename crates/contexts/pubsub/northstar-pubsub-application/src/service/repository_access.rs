@@ -4,6 +4,27 @@ use super::*;
 use crate::{PubSubAdmissionKey, PubSubOwnerPreflightRepository};
 use northstar_pubsub_core::{PubSubBareJid, PubSubNodeId, PubSubNodeName, PubSubOwnerPreflight};
 
+impl<R> PubSubService<R> {
+    pub(super) async fn admit_subscription_mutation(
+        &self,
+        node_id: PubSubNodeId,
+        requester: &str,
+        subscriber: &str,
+    ) -> Result<PubSubMutationPermit> {
+        // Preserve the original JID text used to choose stripes.
+        self.mutation_admission
+            .acquire_keys(
+                &[
+                    PubSubAdmissionKey::Text(requester),
+                    PubSubAdmissionKey::Text(subscriber),
+                    PubSubAdmissionKey::NodeId(node_id),
+                ],
+                false,
+            )
+            .await
+    }
+}
+
 impl<R: PepNodeQueryRepository> PubSubService<R> {
     pub async fn pep_node(&self, owner_id: Uuid, node: &str) -> Result<Option<PepNodeConfig>> {
         self.repository.pep_node(owner_id, node).await
@@ -139,52 +160,6 @@ impl<
                 publish_options,
                 max_storage_bytes_per_owner,
             )
-            .await
-    }
-    #[allow(clippy::too_many_arguments)]
-    pub async fn set_subscription_limited_with_options(
-        &self,
-        node_id: Uuid,
-        requester: &str,
-        jid: &str,
-        state: &str,
-        expected_node_type: &str,
-        expected_access_model: &str,
-        max_subscriptions: i64,
-        options: Option<&PubSubSubscriptionOptions>,
-        requested_subid: &str,
-    ) -> Result<SubscribeOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self
-            .admit_mutation(&[requester, jid, &node_key], false)
-            .await?;
-        self.repository
-            .set_subscription_limited_with_options(
-                node_id,
-                requester,
-                jid,
-                state,
-                expected_node_type,
-                expected_access_model,
-                max_subscriptions,
-                options,
-                requested_subid,
-            )
-            .await
-    }
-    pub async fn unsubscribe_checked(
-        &self,
-        node_id: Uuid,
-        requester: &str,
-        subscriber_jid: &str,
-        expected_subid: &str,
-    ) -> Result<UnsubscribeOutcome> {
-        let node_key = node_id.to_string();
-        let _permit = self
-            .admit_mutation(&[requester, subscriber_jid, &node_key], false)
-            .await?;
-        self.repository
-            .unsubscribe_checked(node_id, requester, subscriber_jid, expected_subid)
             .await
     }
     pub async fn retract_items(

@@ -17,7 +17,8 @@ use northstar_pubsub_application::{
 };
 use northstar_pubsub_core::{
     CollectionUpdateOutcome, CollectionVisibleItem, PubSubAffiliation, PubSubItem,
-    PubSubNodeConfig, PubSubSubscription, PubSubSubscriptionOptions,
+    PubSubNodeConfig, PubSubSubscription, PubSubSubscriptionOptions, SubscriptionLeasePatch,
+    SubscriptionOptionsPatch,
 };
 use northstar_time::{DateTime, Utc};
 use roxmltree::Document;
@@ -668,11 +669,12 @@ fn subscription_options_round_trip_collection_fields() {
     let document = Document::parse(&form).unwrap();
     let parsed = parse_subscription_options(
         document.root_element(),
-        PubSubSubscriptionOptions::for_node_type("collection"),
         "collection",
         true,
+        DateTime::UNIX_EPOCH,
     )
-    .unwrap();
+    .unwrap()
+    .apply_to(&PubSubSubscriptionOptions::for_node_type("collection"));
     assert!(parsed.digest);
     assert_eq!(parsed.digest_frequency, 60_000);
     assert!(parsed.include_body);
@@ -684,9 +686,9 @@ fn subscription_options_round_trip_collection_fields() {
     let document = Document::parse(&invalid).unwrap();
     let reply = parse_subscription_options(
         document.root_element(),
-        PubSubSubscriptionOptions::for_node_type("collection"),
         "collection",
         true,
+        DateTime::UNIX_EPOCH,
     )
     .unwrap_err();
     assert_eq!(error_condition(&reply), Some("bad-request"));
@@ -702,17 +704,86 @@ fn subscription_leases_are_clamped_to_the_service_maximum() {
         "<x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE'><value>{SUBSCRIBE_OPTIONS_FORM}</value></field><field var='pubsub#expire'><value>2099-01-01T00:00:00Z</value></field></x>"
     );
     let document = Document::parse(&xml).unwrap();
-    let before = Utc::now();
-    let parsed = parse_subscription_options(
-        document.root_element(),
-        PubSubSubscriptionOptions::for_node_type("leaf"),
-        "leaf",
-        false,
-    )
-    .unwrap();
-    let expiry = parsed.expire.unwrap();
+    let before = DateTime::UNIX_EPOCH;
+    let parsed =
+        parse_subscription_options(document.root_element(), "leaf", false, before).unwrap();
+    let Some(SubscriptionLeasePatch::Until(expiry)) = parsed.expire else {
+        panic!("expected a deadline in the subscription patch");
+    };
     assert!(expiry > before);
     assert!(expiry <= before + northstar_time::Duration::days(366));
+    assert_eq!(
+        expiry,
+        before + northstar_time::Duration::days(super::MAX_SUBSCRIPTION_LEASE_DAYS)
+    );
+}
+
+#[test]
+fn subscription_options_parser_preserves_omitted_fields() {
+    let xml = format!(
+        "<x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE'><value>{SUBSCRIBE_OPTIONS_FORM}</value></field><field var='pubsub#deliver'><value>false</value></field><field var='pubsub#expire'><value/></field></x>"
+    );
+    let document = Document::parse(&xml).unwrap();
+    let patch =
+        parse_subscription_options(document.root_element(), "leaf", false, DateTime::UNIX_EPOCH)
+            .unwrap();
+    assert_eq!(
+        patch,
+        SubscriptionOptionsPatch {
+            deliver: Some(false),
+            expire: Some(SubscriptionLeasePatch::Clear),
+            ..SubscriptionOptionsPatch::default()
+        }
+    );
+}
+
+#[test]
+fn subscription_options_parser_rejects_expiry_at_or_before_request_time() {
+    for deadline in ["1969-12-31T23:59:59Z", "1970-01-01T00:00:00Z"] {
+        let xml = format!(
+            "<x xmlns='jabber:x:data' type='submit'><field var='FORM_TYPE'><value>{SUBSCRIBE_OPTIONS_FORM}</value></field><field var='pubsub#expire'><value>{deadline}</value></field></x>"
+        );
+        let document = Document::parse(&xml).unwrap();
+        let reply = parse_subscription_options(
+            document.root_element(),
+            "leaf",
+            false,
+            DateTime::UNIX_EPOCH,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            &reply,
+            PubSubReply::ExtendedError(error)
+                if error == &PubSubError::new("bad-request", "invalid-options")
+        ));
+        for xml in [
+            super::pubsub_iq_error("lease", "pubsub.example.test", &reply),
+            super::pubsub_s2s_iq_error("lease", "pubsub.example.test", "remote.test", &reply),
+        ] {
+            let document = Document::parse(&xml).unwrap();
+            let error = document
+                .root_element()
+                .children()
+                .find(|child| child.is_element() && child.tag_name().name() == "error")
+                .unwrap();
+            assert_eq!(error.attribute("type"), Some("modify"));
+            let conditions: Vec<_> = error
+                .children()
+                .filter(|node| node.is_element())
+                .map(|node| (node.tag_name().namespace(), node.tag_name().name()))
+                .collect();
+            assert_eq!(
+                conditions,
+                [
+                    (Some("urn:ietf:params:xml:ns:xmpp-stanzas"), "bad-request"),
+                    (
+                        Some("http://jabber.org/protocol/pubsub#errors"),
+                        "invalid-options"
+                    ),
+                ]
+            );
+        }
+    }
 }
 
 #[test]

@@ -35,12 +35,15 @@ use roxmltree::Node;
 
 pub mod admin;
 pub mod iq;
+mod mam;
 pub mod message;
 pub mod moderate;
 pub mod owner;
 pub mod presence;
 
 pub use self::iq::federated_muc_iq;
+#[cfg(feature = "test-support")]
+pub use self::mam::render_federated_mam_stream;
 pub use self::message::federated_muc_message;
 pub use self::presence::federated_muc_presence;
 

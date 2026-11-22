@@ -7,6 +7,7 @@ use northstar_archive_application::{
     MamRoomReadAuthority,
 };
 use northstar_message_core::{OfflineStoreOutcome, OfflineStorePolicy};
+use northstar_muc_xmpp::federated_muc::render_federated_mam_stream;
 use std::sync::Arc;
 use tokio::sync::Barrier;
 
@@ -41,6 +42,113 @@ fn page_query() -> MamArchiveQuery {
         ids: Vec::new(),
         page: MamRsmPage::First,
         max: 50,
+    }
+}
+
+const SNAPSHOT_ROOM_JID: &str = "snapshot-room@conference.local.test";
+const SNAPSHOT_MAM_VIEWER: &str = "remote@remote.test/phone";
+const HIDE_MAM_ROOM_IDENTITIES: &str = "UPDATE muc_rooms SET non_anonymous=FALSE WHERE id=$1";
+
+fn render_snapshot_mam(
+    page: &northstar_archive_application::FederatedMamStreamPage,
+) -> Result<Vec<String>> {
+    render_federated_mam_stream(
+        page,
+        SNAPSHOT_ROOM_JID,
+        SNAPSHOT_MAM_VIEWER,
+        "i",
+        Some("q"),
+        false,
+        Uuid::from_u128(9),
+    )
+}
+
+async fn snapshot_mam_outbox(pool: &PgPool) -> Vec<(Uuid, String, String)> {
+    sqlx::query_as("SELECT id,target_domain,stanza FROM s2s_outbox ORDER BY enqueue_sequence")
+        .fetch_all(pool)
+        .await
+        .unwrap()
+}
+
+fn assert_snapshot_mam_pair(entries: &[(Uuid, String, String)], archive_id: Uuid, reveal: bool) {
+    assert_eq!(entries.len(), 2);
+    assert!(entries.iter().all(|(_, domain, _)| domain == "remote.test"));
+    let (outbox_id, _, stored) = &entries[0];
+    assert!(!stored.contains("forged"));
+    let document = roxmltree::Document::parse(stored).unwrap();
+    let outer = document.root_element();
+    assert_eq!(outer.tag_name().name(), "message");
+    assert_eq!(outer.attribute("from"), Some(SNAPSHOT_ROOM_JID));
+    assert_eq!(outer.attribute("to"), Some(SNAPSHOT_MAM_VIEWER));
+    let result = outer.first_element_child().unwrap();
+    assert!(result.has_tag_name(("urn:xmpp:mam:2", "result")));
+    let archive_id = archive_id.to_string();
+    assert_eq!(result.attribute("id"), Some(archive_id.as_str()));
+    assert_eq!(result.attribute("queryid"), Some("q"));
+    let inner = result
+        .first_element_child()
+        .unwrap()
+        .children()
+        .find(|node| node.has_tag_name(("jabber:client", "message")))
+        .unwrap();
+    assert!(inner.attributes().all(|attr| attr.name() != "to"));
+    assert_eq!(
+        inner.attribute("from"),
+        Some("snapshot-room@conference.local.test/Sender")
+    );
+    for (message, uid) in [(outer, outbox_id.to_string()), (inner, archive_id.clone())] {
+        let mut sids = message
+            .children()
+            .filter(|node| node.has_tag_name(("urn:xmpp:sid:0", "stanza-id")));
+        let sid = sids.next().unwrap();
+        assert_eq!(sid.attribute("by"), Some(SNAPSHOT_ROOM_JID));
+        assert_eq!(sid.attribute("id"), Some(uid.as_str()));
+        assert!(sids.next().is_none());
+    }
+    let identities: Vec<_> = inner
+        .descendants()
+        .filter(|node| {
+            node.is_element()
+                && node.tag_name().namespace() == Some("http://jabber.org/protocol/muc#user")
+        })
+        .collect();
+    if reveal {
+        assert_eq!(identities.len(), 2);
+        assert_eq!(identities[0].tag_name().name(), "x");
+        assert_eq!(identities[1].tag_name().name(), "item");
+        assert_eq!(
+            identities[1].attribute("jid"),
+            Some("sender@remote.test/Phone")
+        );
+    } else {
+        assert!(identities.is_empty());
+        assert!(!stored.contains("sender@remote.test"));
+    }
+
+    let terminal = roxmltree::Document::parse(&entries[1].2).unwrap();
+    let iq = terminal.root_element();
+    assert_eq!(iq.tag_name().name(), "iq");
+    assert_eq!(iq.attribute("type"), Some("result"));
+    assert_eq!(iq.attribute("id"), Some("i"));
+    assert_eq!(iq.attribute("to"), Some(SNAPSHOT_MAM_VIEWER));
+    let fin = iq.first_element_child().unwrap();
+    assert!(fin.has_tag_name(("urn:xmpp:mam:2", "fin")));
+    assert_eq!(fin.attribute("complete"), Some("true"));
+    let rsm = fin.first_element_child().unwrap();
+    assert!(rsm.has_tag_name(("http://jabber.org/protocol/rsm", "set")));
+    for (name, value) in [
+        ("first", archive_id.as_str()),
+        ("last", archive_id.as_str()),
+        ("count", "1"),
+    ] {
+        let field = rsm
+            .children()
+            .find(|node| node.has_tag_name(("http://jabber.org/protocol/rsm", name)))
+            .unwrap();
+        assert_eq!(field.text(), Some(value));
+        if name == "first" {
+            assert_eq!(field.attribute("index"), Some("0"));
+        }
     }
 }
 
@@ -224,7 +332,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         occupancy: None,
     };
     let federated_viewer = MamRoomReadAuthority {
-        full_jid: "remote@remote.test/phone".to_owned(),
+        full_jid: SNAPSHOT_MAM_VIEWER.to_owned(),
         occupancy: None,
     };
     sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test')")
@@ -506,19 +614,33 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         Some(federated_secret)
     );
     let message_id = Uuid::new_v4();
+    let fixtures = roxmltree::Document::parse(include_str!(
+        "../../../../crates/contexts/room/northstar-room-core/src/stanza/mam_projection/fixtures.xml"
+    ))
+    .unwrap();
+    let stored = fixtures
+        .root_element()
+        .children()
+        .find(|node| node.attribute("name") == Some("poisoned"))
+        .unwrap()
+        .first_element_child()
+        .unwrap()
+        .text()
+        .unwrap();
     sqlx::query(
         "INSERT INTO muc_messages
              (id,room_id,sender_jid,nick,stanza,encrypted,message_kind,actor_scope)
-             VALUES($1,$2,'sender@remote.test/Phone','Sender','<message/>',FALSE,
+             VALUES($1,$2,'sender@remote.test/Phone','Sender',$3,FALSE,
                     'discussion','sender@remote.test')",
     )
     .bind(message_id)
     .bind(room_id)
+    .bind(stored)
     .execute(&pool)
     .await
     .unwrap();
 
-    sqlx::query("UPDATE muc_rooms SET non_anonymous=FALSE WHERE id=$1")
+    sqlx::query(HIDE_MAM_ROOM_IDENTITIES)
         .bind(room_id)
         .execute(&pool)
         .await
@@ -831,7 +953,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
     .await
     .expect("federated MAM read did not wait for the writer's advisory lock");
     tokio::time::timeout(Duration::from_secs(5), async {
-        sqlx::query("UPDATE muc_rooms SET non_anonymous=FALSE WHERE id=$1")
+        sqlx::query(HIDE_MAM_ROOM_IDENTITIES)
             .bind(race_room_id)
             .execute(&mut *authority_writer)
             .await
@@ -907,7 +1029,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
         FederatedMamAdmissionOutcome, FederatedMamOutboxLimits, FederatedMamStreamRequest,
         MamService,
     };
-    let (wake, mut receiver) = tokio::sync::mpsc::channel(1);
+    let (wake, mut receiver) = tokio::sync::mpsc::channel(2);
     let limits = FederatedMamOutboxLimits {
         ttl_seconds: 300,
         max_rows: 1,
@@ -922,12 +1044,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
     let query = page_query();
     let request =
         FederatedMamStreamRequest::new("remote.test", "snapshot-room", &federated_viewer, &query);
-    let render = |_: &northstar_archive_application::FederatedMamStreamPage| {
-        Ok(vec![
-                "<message xmlns='jabber:server' from='snapshot-room@conference.local.test' to='remote@remote.test' id='first'/>".to_owned(),
-                "<iq xmlns='jabber:server' type='result' id='fin'/>".to_owned(),
-            ])
-    };
+    let render = render_snapshot_mam;
     assert_eq!(
         service
             .admit_federated_room_stream(request, render)
@@ -963,7 +1080,7 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
     );
     assert!(receiver.try_recv().is_err());
 
-    let service = MamService::new(
+    let service = Arc::new(MamService::new(
         northstar_workflows::mam_repository::PostgresMamRepository::new(pool.clone()),
         FederatedMamOutboxLimits {
             max_rows: 8,
@@ -971,23 +1088,100 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
             ..limits
         },
         wake,
-    );
+    ));
+    let before = super::mam_read_authority_tests::room_mam_evidence(&pool, room_id).await;
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0]["stanza"], stored);
+    assert!(before[0]["retracted_at"].is_null());
+    assert_eq!(before[0]["message_kind"], "discussion");
+    let mut terminal_gate = pool.begin().await.unwrap();
+    sqlx::query(
+        "CREATE FUNCTION pause_mam_fin() RETURNS trigger LANGUAGE plpgsql AS $$
+         BEGIN
+            IF left(NEW.stanza, 4) = '<iq ' AND position('<fin ' IN NEW.stanza) > 0 THEN
+                PERFORM pg_advisory_xact_lock(hashtext(current_schema()), 689);
+            END IF;
+            RETURN NEW;
+         END; $$",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER pause_mam_fin BEFORE INSERT ON s2s_outbox
+         FOR EACH ROW EXECUTE FUNCTION pause_mam_fin()",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext(current_schema()), 689)")
+        .execute(&mut *terminal_gate)
+        .await
+        .unwrap();
+    let gate_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *terminal_gate)
+        .await
+        .unwrap();
+    let waiting_stream = {
+        let service = Arc::clone(&service);
+        let authority = federated_viewer.clone();
+        let query = query.clone();
+        tokio::spawn(async move {
+            service
+                .admit_federated_room_stream(
+                    FederatedMamStreamRequest::new(
+                        "remote.test",
+                        "snapshot-room",
+                        &authority,
+                        &query,
+                    ),
+                    render_snapshot_mam,
+                )
+                .await
+        })
+    };
+    let stream_pid = crate::support::blocked_backend(&pool, gate_pid).await;
+    let revocation = {
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            sqlx::query(HIDE_MAM_ROOM_IDENTITIES)
+                .bind(room_id)
+                .execute(&pool)
+                .await
+                .unwrap()
+        })
+    };
+    crate::support::blocked_backend(&pool, stream_pid).await;
+    assert!(snapshot_mam_outbox(&pool).await.is_empty());
+    assert!(receiver.try_recv().is_err());
+    terminal_gate.commit().await.unwrap();
     assert_eq!(
-        service
-            .admit_federated_room_stream(request, render)
+        tokio::time::timeout(Duration::from_secs(5), waiting_stream)
             .await
+            .unwrap()
+            .unwrap()
             .unwrap(),
         FederatedMamAdmissionOutcome::Queued
     );
     receiver
         .try_recv()
         .expect("committed stream wakes delivery");
+    assert!(receiver.try_recv().is_err());
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM s2s_outbox")
             .fetch_one(&pool)
             .await
             .unwrap(),
         2
+    );
+    assert_snapshot_mam_pair(&snapshot_mam_outbox(&pool).await, message_id, true);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), revocation)
+            .await
+            .unwrap()
+            .unwrap()
+            .rows_affected(),
+        1
     );
     drop(receiver);
     assert_eq!(
@@ -1004,6 +1198,11 @@ async fn mam_policy_and_room_reads_keep_one_authorization_snapshot() {
             .unwrap(),
         4,
         "a closed wake channel cannot undo committed delivery"
+    );
+    assert_snapshot_mam_pair(&snapshot_mam_outbox(&pool).await[2..], message_id, false);
+    assert_eq!(
+        super::mam_read_authority_tests::room_mam_evidence(&pool, room_id).await,
+        before
     );
 
     // The exact room UUID remains fenced until the authorized projection

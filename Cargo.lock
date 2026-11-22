@@ -2103,6 +2103,7 @@ dependencies = [
  "northstar-message-application",
  "northstar-message-core",
  "northstar-message-postgres",
+ "northstar-muc-xmpp",
  "northstar-operations-application",
  "northstar-operations-core",
  "northstar-operations-postgres",

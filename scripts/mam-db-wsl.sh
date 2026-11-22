@@ -66,22 +66,23 @@ if [[ "${XMPP_TEST_SYSTEM_TOOLCHAIN:-false}" != "true" ]]; then
   export CARGO_TARGET_DIR="$project_dir/target-wsl"
 fi
 
-TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$runner_schema" \
-  cargo test --locked --offline -p northstar-db-it \
-  archive::history_identity_pg_tests:: \
-  -- --ignored --nocapture --test-threads=1 2>&1 | tee "$test_log"
-
-# The archive prefix below runs all of these snapshot checks:
-# muc_mam_requires_the_exact_live_occupancy_on_all_read_surfaces
-# muc_mam_leave_during_page_read_keeps_a_serial_result
-# muc_mam_hides_locked_rooms_without_initializing_their_secret
-# federated_mam_keeps_the_visible_legacy_repair_when_response_admission_fails
-# mam_stale_local_account_denies_reads_and_preference_writes
-# personal_mam_reads_work_on_read_only_connections
-TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$runner_schema" \
-  cargo test --locked --offline -p northstar-db-it \
-  archive::mam_read_authority_tests:: \
-  -- --ignored --nocapture --test-threads=1 2>&1 | tee -a "$test_log"
+for test_name in \
+  history_identity_pg_tests::personal_message_admission_accepts_maximum_scope_with_bounded_identity_index \
+  history_identity_pg_tests::mam_policy_and_room_reads_keep_one_authorization_snapshot \
+  history_identity_pg_tests::mix_source_dedupe_and_mam_visibility_share_one_snapshot_scope \
+  mam_read_authority_tests::muc_mam_requires_the_exact_live_occupancy_on_all_read_surfaces \
+  mam_read_authority_tests::muc_mam_leave_during_page_read_keeps_a_serial_result \
+  mam_read_authority_tests::muc_mam_hides_locked_rooms_without_initializing_their_secret \
+  mam_read_authority_tests::federated_mam_keeps_the_visible_legacy_repair_when_response_admission_fails \
+  mam_read_authority_tests::mam_stale_local_account_denies_reads_and_preference_writes \
+  mam_read_authority_tests::personal_mam_reads_work_on_read_only_connections \
+  mam_read_authority_tests::federated_mam_projection_failure_never_admits_a_prefix
+do
+  TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$runner_schema" \
+    cargo test --locked --offline -p northstar-db-it \
+    "archive::$test_name" \
+    -- --ignored --exact --nocapture --test-threads=1 2>&1 | tee -a "$test_log"
+done
 
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$runner_schema" \
   cargo test --locked --offline -p northstar-db-it \

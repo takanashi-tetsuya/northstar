@@ -1,28 +1,9 @@
 use crate::muc_service::SerializableMucOccupant;
 use northstar_room_core::stanza::{
-    add_muc_user_status, mam_muc_stanza, muc_occupant_id, muc_occupant_key,
-    muc_presence_stanza_with_status, prepare_muc_nick, set_muc_occupant_id, valid_muc_nick,
+    add_muc_user_status, muc_occupant_id, muc_occupant_key, muc_presence_stanza_with_status,
+    prepare_muc_nick, set_muc_occupant_id, valid_muc_nick,
 };
 use roxmltree::Document;
-
-#[test]
-fn muc_mam_payload_never_trusts_archived_identity_extensions() {
-    let archived = "<message xmlns='jabber:client' from='room@conference.example.test/nick' to='alice@example.test/phone'><body>hi</body><x xmlns='http://jabber.org/protocol/muc#user'><item jid='forged@example.test'/></x><x xmlns='urn:northstar:muc:sender:0' jid='forged@example.test'/></message>";
-    let hidden = mam_muc_stanza(archived, "real@example.test/phone", false);
-    assert!(!hidden.contains(" to="));
-    assert!(!hidden.contains("forged@example.test"));
-    assert!(!hidden.contains("real@example.test"));
-
-    let revealed = mam_muc_stanza(archived, "real@example.test/phone", true);
-    assert!(!revealed.contains("forged@example.test"));
-    assert!(revealed.contains("<item jid='real@example.test/phone'/>"));
-    assert_eq!(
-        revealed
-            .matches("http://jabber.org/protocol/muc#user")
-            .count(),
-        1
-    );
-}
 
 #[test]
 fn occupant_ids_are_stable_and_scoped_to_a_room_secret() {

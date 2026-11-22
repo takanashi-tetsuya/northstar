@@ -3298,6 +3298,10 @@
     ],
     [
       "northstar-db-it",
+      "northstar-muc-xmpp"
+    ],
+    [
+      "northstar-db-it",
       "northstar-operations-application"
     ],
     [

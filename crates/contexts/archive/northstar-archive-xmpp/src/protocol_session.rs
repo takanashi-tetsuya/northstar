@@ -5,10 +5,8 @@
 use crate::ArchiveSessionHost;
 use anyhow::Result;
 use northstar_archive_application::{
-    ArchiveRow, MamLocalAuthority, MamOccupancyProof, MamPreferencesWriter, MamQueryRepository,
-    MamRoomAccess, MamService,
+    MamLocalAuthority, MamOccupancyProof, MamPreferencesWriter, MamQueryRepository, MamService,
 };
-use northstar_room_core::stanza::{mam_muc_stanza, muc_occupant_id, set_muc_occupant_id};
 use northstar_stream::protocol::{ProtocolSession, SessionHost};
 use northstar_stream::transport::Action;
 use roxmltree::Node;
@@ -51,12 +49,6 @@ impl<H: SessionHost + ArchiveSessionHost> crate::MamSession for ProtocolSession<
         impl MamQueryRepository<Error = anyhow::Error> + MamPreferencesWriter<Error = anyhow::Error>,
     > {
         self.host().mam_service()
-    }
-
-    fn mam_room_stanza(&self, access: &MamRoomAccess, item: &ArchiveRow) -> String {
-        let occupant_id = muc_occupant_id(access.occupant_id_secret(), &item.peer_jid);
-        let authoritative = set_muc_occupant_id(&item.stanza, &occupant_id);
-        mam_muc_stanza(&authoritative, &item.peer_jid, access.reveal_real_jid())
     }
 }
 

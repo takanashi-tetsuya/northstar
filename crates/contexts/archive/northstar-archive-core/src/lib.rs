@@ -20,6 +20,13 @@ pub struct ArchiveBoundary {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct MamMucRowMetadata {
+    pub nick: String,
+    pub message_kind: String,
+    pub retracted: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ArchiveRow {
     pub id: Uuid,
     pub peer_jid: String,
@@ -29,6 +36,8 @@ pub struct ArchiveRow {
     /// This is distinct from `id`, which is the immutable MAM archive UID.
     pub stanza_id: Option<String>,
     pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muc: Option<MamMucRowMetadata>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -426,6 +435,10 @@ pub struct FederatedMamStreamRow {
     pub peer_jid: String,
     pub stanza: String,
     pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub encrypted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muc: Option<MamMucRowMetadata>,
 }
 
 impl FederatedMamStreamRow {
@@ -435,6 +448,8 @@ impl FederatedMamStreamRow {
             peer_jid,
             stanza,
             created_at,
+            encrypted: false,
+            muc: None,
         }
     }
 
@@ -452,6 +467,14 @@ impl FederatedMamStreamRow {
 
     pub fn created_at(&self) -> &DateTime<Utc> {
         &self.created_at
+    }
+
+    pub fn encrypted(&self) -> bool {
+        self.encrypted
+    }
+
+    pub fn muc(&self) -> Option<&MamMucRowMetadata> {
+        self.muc.as_ref()
     }
 }
 

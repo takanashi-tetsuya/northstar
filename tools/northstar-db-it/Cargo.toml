@@ -53,6 +53,7 @@ northstar-pubsub-xmpp = { path = "../../crates/contexts/pubsub/northstar-pubsub-
 northstar-room-application = { path = "../../crates/contexts/room/northstar-room-application", features = ["test-support"] }
 northstar-room-core = { path = "../../crates/contexts/room/northstar-room-core" }
 northstar-room-postgres = { path = "../../crates/contexts/room/northstar-room-postgres", features = ["test-support"] }
+northstar-muc-xmpp = { path = "../../crates/contexts/room/northstar-muc-xmpp", features = ["test-support"] }
 northstar-roster-application = { path = "../../crates/contexts/roster/northstar-roster-application" }
 northstar-roster-core = { path = "../../crates/contexts/roster/northstar-roster-core" }
 northstar-roster-postgres = { path = "../../crates/contexts/roster/northstar-roster-postgres", features = ["test-support"] }

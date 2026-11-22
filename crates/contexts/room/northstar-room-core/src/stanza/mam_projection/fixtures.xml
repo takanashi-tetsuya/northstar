@@ -1,0 +1,81 @@
+<fixtures room='room@conference.local.test' secret-byte='7' secret-length='32'
+          sender='alice@local.test/Phone' nick='Alice' id='00000000-0000-4000-8000-000000000001'>
+  <case name='discussion-hidden' kind='discussion'>
+    <stored><![CDATA[<message xmlns='jabber:client' to='room@conference.local.test' id='d'><body>Hello</body><origin-id xmlns='urn:xmpp:sid:0' id='origin'/></message>]]></stored>
+    <expected><message xmlns='jabber:client' from='room@conference.local.test/Alice' type='groupchat' id='d'><body>Hello</body><origin-id xmlns='urn:xmpp:sid:0' id='origin'/><stanza-id xmlns='urn:xmpp:sid:0' id='00000000-0000-4000-8000-000000000001' by='room@conference.local.test'/><occupant-id xmlns='urn:xmpp:occupant-id:0' id='5483a906da414be60273ccc19e3a41f9fea387da067520243cb8badb8e12a664'/></message></expected>
+  </case>
+  <case name='discussion-disclosed' kind='discussion' sender='Alice@LOCAL.test/Phone' reveal='true'>
+    <stored><![CDATA[<message xmlns='jabber:client' to='room@conference.local.test' id='d'><body>Hello</body><origin-id xmlns='urn:xmpp:sid:0' id='origin'/></message>]]></stored>
+    <expected><message xmlns='jabber:client' from='room@conference.local.test/Alice' type='groupchat' id='d'><body>Hello</body><origin-id xmlns='urn:xmpp:sid:0' id='origin'/><stanza-id xmlns='urn:xmpp:sid:0' id='00000000-0000-4000-8000-000000000001' by='room@conference.local.test'/><occupant-id xmlns='urn:xmpp:occupant-id:0' id='5483a906da414be60273ccc19e3a41f9fea387da067520243cb8badb8e12a664'/><x xmlns='http://jabber.org/protocol/muc#user'><item jid='alice@local.test/Phone'/></x></message></expected>
+  </case>
+  <case name='subject' kind='subject'>
+    <stored><![CDATA[<message xmlns='jabber:server' to='room@conference.local.test' id='s'><subject>Updates</subject></message>]]></stored>
+    <expected><message xmlns='jabber:client' from='room@conference.local.test/Alice' type='groupchat' id='s'><subject>Updates</subject><stanza-id xmlns='urn:xmpp:sid:0' id='00000000-0000-4000-8000-000000000001' by='room@conference.local.test'/><occupant-id xmlns='urn:xmpp:occupant-id:0' id='5483a906da414be60273ccc19e3a41f9fea387da067520243cb8badb8e12a664'/></message></expected>
+  </case>
+  <case name='author-tombstone' kind='discussion' encrypted='true' retracted='true'>
+    <stored><![CDATA[<message xmlns='jabber:client' id='original'><body>must not be forwarded</body><encrypted xmlns='urn:xmpp:omemo:2'/><retracted xmlns='urn:xmpp:message-retract:1' id='action' stamp='2026-01-01T00:00:00Z' actor='ignored'><extra/></retracted></message>]]></stored>
+    <expected><message xmlns='jabber:client' from='room@conference.local.test/Alice' type='groupchat' id='original'><retracted xmlns='urn:xmpp:message-retract:1' id='action' stamp='2026-01-01T00:00:00Z'/><stanza-id xmlns='urn:xmpp:sid:0' id='00000000-0000-4000-8000-000000000001' by='room@conference.local.test'/><occupant-id xmlns='urn:xmpp:occupant-id:0' id='5483a906da414be60273ccc19e3a41f9fea387da067520243cb8badb8e12a664'/></message></expected>
+  </case>
+  <case name='moderation-tombstone' kind='discussion' retracted='true'>
+    <stored><![CDATA[<message xmlns='jabber:client'><retracted xmlns='urn:xmpp:message-retract:1' stamp='2026-01-01T00:00:00Z'><moderated xmlns='urn:xmpp:message-moderate:1' by='room@conference.local.test/Mod' actor='ignored'><occupant-id xmlns='urn:xmpp:occupant-id:0' id='c1e6c72c0eac2a7ceec59fa2b9e28191357435ab41f075ea4e50cf97f9498c1f'/><x xmlns='http://jabber.org/protocol/muc#user'/></moderated><reason>Off &amp; away</reason></retracted></message>]]></stored>
+    <expected><message xmlns='jabber:client' from='room@conference.local.test/Alice' type='groupchat'><retracted xmlns='urn:xmpp:message-retract:1' stamp='2026-01-01T00:00:00Z'><moderated xmlns='urn:xmpp:message-moderate:1' by='room@conference.local.test/Mod'><occupant-id xmlns='urn:xmpp:occupant-id:0' id='c1e6c72c0eac2a7ceec59fa2b9e28191357435ab41f075ea4e50cf97f9498c1f'/></moderated><reason>Off &amp; away</reason></retracted><stanza-id xmlns='urn:xmpp:sid:0' id='00000000-0000-4000-8000-000000000001' by='room@conference.local.test'/><occupant-id xmlns='urn:xmpp:occupant-id:0' id='5483a906da414be60273ccc19e3a41f9fea387da067520243cb8badb8e12a664'/></message></expected>
+  </case>
+  <case name='author-action' kind='retraction' id='00000000-0000-4000-8000-000000000002'>
+    <stored><![CDATA[<message xmlns='jabber:client' id='r'><retract xmlns='urn:xmpp:message-retract:1' id='00000000-0000-4000-8000-000000000001'><moderated xmlns='urn:xmpp:message-moderate:1' by='forged@local.test/Phone'/></retract></message>]]></stored>
+    <expected><message xmlns='jabber:client' from='room@conference.local.test/Alice' type='groupchat' id='r'><retract xmlns='urn:xmpp:message-retract:1' id='00000000-0000-4000-8000-000000000001'/><stanza-id xmlns='urn:xmpp:sid:0' id='00000000-0000-4000-8000-000000000002' by='room@conference.local.test'/><occupant-id xmlns='urn:xmpp:occupant-id:0' id='5483a906da414be60273ccc19e3a41f9fea387da067520243cb8badb8e12a664'/></message></expected>
+  </case>
+  <case name='moderation-action' kind='moderation' sender='mod@local.test/Desktop' nick='Mod' reveal='true' id='00000000-0000-4000-8000-000000000002'>
+    <stored><![CDATA[<message xmlns='jabber:client' from='room@conference.local.test/Mod' to='room@conference.local.test' id='00000000-0000-4000-8000-000000000002'><retract xmlns='urn:xmpp:message-retract:1' id='00000000-0000-4000-8000-000000000001'><moderated xmlns='urn:xmpp:message-moderate:1' by='room@conference.local.test/Mod'><occupant-id xmlns='urn:xmpp:occupant-id:0' id='c1e6c72c0eac2a7ceec59fa2b9e28191357435ab41f075ea4e50cf97f9498c1f'/></moderated></retract></message>]]></stored>
+    <expected><message xmlns='jabber:client' from='room@conference.local.test' type='groupchat' id='00000000-0000-4000-8000-000000000002'><retract xmlns='urn:xmpp:message-retract:1' id='00000000-0000-4000-8000-000000000001'><moderated xmlns='urn:xmpp:message-moderate:1' by='room@conference.local.test/Mod'><occupant-id xmlns='urn:xmpp:occupant-id:0' id='c1e6c72c0eac2a7ceec59fa2b9e28191357435ab41f075ea4e50cf97f9498c1f'/></moderated></retract><stanza-id xmlns='urn:xmpp:sid:0' id='00000000-0000-4000-8000-000000000002' by='room@conference.local.test'/><occupant-id xmlns='urn:xmpp:occupant-id:0' id='c1e6c72c0eac2a7ceec59fa2b9e28191357435ab41f075ea4e50cf97f9498c1f'/><x xmlns='http://jabber.org/protocol/muc#user'><item jid='mod@local.test/Desktop'/></x></message></expected>
+  </case>
+  <case name='invalid-moderator-pseudonym' kind='discussion' retracted='true'>
+    <stored><![CDATA[<message><retracted xmlns='urn:xmpp:message-retract:1' stamp='2026-01-01T00:00:00Z'><moderated xmlns='urn:xmpp:message-moderate:1' by='room@conference.local.test/Mod'><occupant-id xmlns='urn:xmpp:occupant-id:0' id='mod@local.test/Desktop'/></moderated></retracted></message>]]></stored>
+    <expected><message xmlns='jabber:client' from='room@conference.local.test/Alice' type='groupchat'><retracted xmlns='urn:xmpp:message-retract:1' stamp='2026-01-01T00:00:00Z'><moderated xmlns='urn:xmpp:message-moderate:1' by='room@conference.local.test/Mod'/></retracted><stanza-id xmlns='urn:xmpp:sid:0' id='00000000-0000-4000-8000-000000000001' by='room@conference.local.test'/><occupant-id xmlns='urn:xmpp:occupant-id:0' id='5483a906da414be60273ccc19e3a41f9fea387da067520243cb8badb8e12a664'/></message></expected>
+  </case>
+  <case name='omemo2' kind='discussion' encrypted='true'>
+    <stored><![CDATA[<message xmlns='jabber:client'>unexpected clear text<body>fallback</body><encrypted xmlns='urn:xmpp:omemo:2'><payload>AA==</payload></encrypted><store xmlns='urn:xmpp:hints'/></message>]]></stored>
+    <expected><message xmlns='jabber:client' from='room@conference.local.test/Alice' type='groupchat'><encrypted xmlns='urn:xmpp:omemo:2'><payload>AA==</payload></encrypted><store xmlns='urn:xmpp:hints'/><stanza-id xmlns='urn:xmpp:sid:0' id='00000000-0000-4000-8000-000000000001' by='room@conference.local.test'/><occupant-id xmlns='urn:xmpp:occupant-id:0' id='5483a906da414be60273ccc19e3a41f9fea387da067520243cb8badb8e12a664'/></message></expected>
+  </case>
+  <case name='legacy-encrypted' kind='discussion'>
+    <stored><![CDATA[<message><body>old cleartext</body><x xmlns='jabber:x:encrypted'>AA==</x><body>another fallback</body></message>]]></stored>
+    <expected><message xmlns='jabber:client' from='room@conference.local.test/Alice' type='groupchat'><x xmlns='jabber:x:encrypted'>AA==</x><body>This message is end-to-end encrypted.</body><stanza-id xmlns='urn:xmpp:sid:0' id='00000000-0000-4000-8000-000000000001' by='room@conference.local.test'/><occupant-id xmlns='urn:xmpp:occupant-id:0' id='5483a906da414be60273ccc19e3a41f9fea387da067520243cb8badb8e12a664'/></message></expected>
+  </case>
+  <case name='legacy-bare' kind='discussion' sender='alice@local.test' reveal='true'>
+    <stored><![CDATA[<message id='old'><body>Legacy</body></message>]]></stored>
+    <expected><message xmlns='jabber:client' from='room@conference.local.test/Alice' type='groupchat' id='old'><body>Legacy</body><stanza-id xmlns='urn:xmpp:sid:0' id='00000000-0000-4000-8000-000000000001' by='room@conference.local.test'/><occupant-id xmlns='urn:xmpp:occupant-id:0' id='5483a906da414be60273ccc19e3a41f9fea387da067520243cb8badb8e12a664'/><x xmlns='http://jabber.org/protocol/muc#user'><item jid='alice@local.test'/></x></message></expected>
+  </case>
+  <case name='poisoned' kind='discussion'>
+    <stored><![CDATA[<c:message xmlns:c='jabber:client' xmlns='urn:app' xmlns:m='http://jabber.org/protocol/muc#user' xmlns:s='urn:northstar:muc:sender:0' from='forged@remote.test/Phone' to='forged@remote.test' m:to='forged@remote.test' m:id='ignore' type='chat' id='' xml:lang='en'><c:body>Hello</c:body><widget><m:x><s:actor jid='forged@remote.test'/><m:item jid='forged@remote.test'/></m:x><value>keep</value><s:x jid='forged@remote.test'/></widget><m:x/><m:x/><stanza-id xmlns='urn:xmpp:sid:0' by='room@conference.local.test' id='forged'/><occupant-id xmlns='urn:xmpp:occupant-id:0' id='forged'/><retracted xmlns='urn:xmpp:message-retract:1'/><moderated xmlns='urn:xmpp:message-moderate:1' by='forged@remote.test'/></c:message>]]></stored>
+    <expected><message xmlns='jabber:client' from='room@conference.local.test/Alice' type='groupchat' id='' xml:lang='en'><body>Hello</body><widget xmlns='urn:app'><value>keep</value></widget><stanza-id xmlns='urn:xmpp:sid:0' id='00000000-0000-4000-8000-000000000001' by='room@conference.local.test'/><occupant-id xmlns='urn:xmpp:occupant-id:0' id='5483a906da414be60273ccc19e3a41f9fea387da067520243cb8badb8e12a664'/></message></expected>
+  </case>
+  <case name='malformed' kind='discussion' error='Xml'>
+    <stored><![CDATA[<message><body>]]></stored>
+  </case>
+  <case name='restricted-xml' kind='discussion' error='Xml'>
+    <stored><![CDATA[<message><!-- not permitted --></message>]]></stored>
+  </case>
+  <case name='foreign-root' kind='discussion' error='Envelope'>
+    <stored><![CDATA[<message xmlns='urn:not-xmpp'/>]]></stored>
+  </case>
+  <case name='bad-sender' kind='discussion' sender='not a jid' error='Identity'>
+    <stored><![CDATA[<message/>]]></stored>
+  </case>
+  <case name='bad-nick' kind='discussion' nick='' error='Identity'>
+    <stored><![CDATA[<message/>]]></stored>
+  </case>
+  <case name='unknown-kind' kind='other' error='Payload'>
+    <stored><![CDATA[<message/>]]></stored>
+  </case>
+  <case name='missing-ciphertext' kind='discussion' encrypted='true' error='Payload'>
+    <stored><![CDATA[<message><body>clear</body></message>]]></stored>
+  </case>
+  <case name='missing-tombstone' kind='discussion' retracted='true' error='Payload'>
+    <stored><![CDATA[<message><body>clear</body></message>]]></stored>
+  </case>
+  <case name='duplicate-action' kind='retraction' error='Payload'>
+    <stored><![CDATA[<message><retract xmlns='urn:xmpp:message-retract:1' id='00000000-0000-4000-8000-000000000001'/><retract xmlns='urn:xmpp:message-retract:1' id='00000000-0000-4000-8000-000000000002'/></message>]]></stored>
+  </case>
+  <case name='bad-moderator' kind='moderation' error='Payload'>
+    <stored><![CDATA[<message><retract xmlns='urn:xmpp:message-retract:1' id='00000000-0000-4000-8000-000000000001'><moderated xmlns='urn:xmpp:message-moderate:1' by='mod@local.test/Desktop'/></retract></message>]]></stored>
+  </case>
+</fixtures>

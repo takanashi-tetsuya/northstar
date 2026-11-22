@@ -434,6 +434,8 @@ fn map_federated_stream_page(
                 peer_jid: row.peer_jid,
                 stanza: row.stanza,
                 created_at: row.created_at,
+                encrypted: row.encrypted,
+                muc: row.muc,
             })
             .collect(),
         total: page.total,

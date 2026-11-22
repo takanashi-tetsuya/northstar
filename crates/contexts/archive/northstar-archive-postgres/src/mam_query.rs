@@ -4,7 +4,7 @@ use super::*;
 use crate::personal_display::{
     project_personal_archive_content, PERSONAL_DISPLAY_JOIN, PERSONAL_DISPLAY_SELECT,
 };
-use northstar_archive_core::{MamAccountOutcome, MamLocalAuthority};
+use northstar_archive_core::{MamAccountOutcome, MamLocalAuthority, MamMucRowMetadata};
 
 #[derive(Clone, Copy)]
 pub enum MamArchiveSource {
@@ -42,7 +42,8 @@ impl MamArchiveSource {
             // personal archive's optional client id. Expose no client id
             // through the shared row type instead of conflating the two.
             Self::Muc(_) => {
-                "id, sender_jid AS peer_jid, stanza, encrypted, NULL::TEXT AS stanza_id, created_at"
+                "id, sender_jid AS peer_jid, stanza, encrypted, NULL::TEXT AS stanza_id, created_at, \
+                 nick AS muc_nick, message_kind AS muc_kind, (retracted_at IS NOT NULL) AS muc_retracted"
             }
         }
     }
@@ -348,7 +349,7 @@ pub async fn mam_archive_page_for_in_transaction(
             .iter()
             .map(|row| {
                 if !personal {
-                    return archive_from_row(row);
+                    return archive_from_row(source, row);
                 }
                 let (stanza, encrypted) = project_personal_archive_content(row);
                 ArchiveRow {
@@ -358,6 +359,7 @@ pub async fn mam_archive_page_for_in_transaction(
                     encrypted,
                     stanza_id: row.get("stanza_id"),
                     created_at: row.get("created_at"),
+                    muc: None,
                 }
             })
             .collect(),
@@ -475,7 +477,7 @@ pub async fn mam_muc_archive_page_visible(
     mam_archive_page_for(pool, MamArchiveSource::Muc(room_id), Some(viewer_id), query).await
 }
 
-pub fn archive_from_row(row: &sqlx::postgres::PgRow) -> ArchiveRow {
+pub fn archive_from_row(source: MamArchiveSource, row: &sqlx::postgres::PgRow) -> ArchiveRow {
     ArchiveRow {
         id: row.get("id"),
         peer_jid: row.get("peer_jid"),
@@ -483,5 +485,13 @@ pub fn archive_from_row(row: &sqlx::postgres::PgRow) -> ArchiveRow {
         encrypted: row.get("encrypted"),
         stanza_id: row.get("stanza_id"),
         created_at: row.get("created_at"),
+        muc: match source {
+            MamArchiveSource::User(_) => None,
+            MamArchiveSource::Muc(_) => Some(MamMucRowMetadata {
+                nick: row.get("muc_nick"),
+                message_kind: row.get("muc_kind"),
+                retracted: row.get("muc_retracted"),
+            }),
+        },
     }
 }

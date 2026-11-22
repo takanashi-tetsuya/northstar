@@ -4,6 +4,7 @@ use super::admin::{
     federated_muc_admin_get, federated_muc_admin_set, publish_occupant_change,
     FederatedMucAdminActor, OccupantChange,
 };
+use super::mam::render_federated_mam_stream;
 use super::moderate::federated_muc_moderate;
 use super::owner::{
     federated_muc_owner, parse_federated_registration_action, FederatedRegistrationAction,
@@ -1074,8 +1075,7 @@ async fn federated_muc_mam(
 ) -> Result<Option<String>> {
     let (room_localpart, authority) = authorization;
     let (room_jid, recipient) = delivery;
-    let flip_page = query.flip_page;
-    let query_id = query.query_id.clone();
+    let result_id_seed = uuid::Uuid::new_v4();
     let outcome = state
         .admit_federated_room_stream(
             northstar_archive_core::FederatedMamStreamRequest::new(
@@ -1085,63 +1085,29 @@ async fn federated_muc_mam(
                 &query.query,
             ),
             |page| {
-                let access = page.access();
-                let rows: Box<dyn Iterator<Item = _>> = if flip_page {
-                    Box::new(page.rows().iter().rev())
-                } else {
-                    Box::new(page.rows().iter())
-                };
-                let mut responses = Vec::with_capacity(page.rows().len() + 1);
-                for item in rows {
-                    let occupant_id = muc_occupant_id(access.occupant_id_secret(), item.peer_jid());
-                    let authoritative = set_muc_occupant_id(item.stanza(), &occupant_id);
-                    let archived = if access.reveal_real_jid() {
-                        add_muc_sender(&authoritative, item.peer_jid())
-                    } else {
-                        authoritative
-                    };
-                    let forwarded = XmlElement::namespaced("forwarded", "urn:xmpp:forward:0")
-                        .child(
-                            XmlElement::namespaced("delay", "urn:xmpp:delay").attr(
-                                "stamp",
-                                item.created_at()
-                                    .to_rfc3339_opts(northstar_time::SecondsFormat::Millis, true),
-                            ),
-                        )
-                        .validated_fragment(&archived)?;
-                    let result = XmlElement::namespaced("result", "urn:xmpp:mam:2")
-                        .attr("id", item.id())
-                        .optional_attr("queryid", query_id.as_deref())
-                        .child(forwarded);
-                    responses.push(
-                        XmlElement::namespaced("message", "jabber:client")
-                            .attr("from", room_jid)
-                            .attr("to", recipient)
-                            .attr("id", uuid::Uuid::new_v4())
-                            .child(result)
-                            .finish(),
-                    );
-                }
-                let mut rsm = XmlElement::namespaced("set", "http://jabber.org/protocol/rsm");
-                if let (Some(first), Some(last)) = (page.rows().first(), page.rows().last()) {
-                    rsm.push_child(
-                        XmlElement::new("first")
-                            .attr("index", page.first_index())
-                            .text(first.id().to_string()),
-                    );
-                    rsm.push_child(XmlElement::new("last").text(last.id().to_string()));
-                }
-                rsm.push_child(XmlElement::new("count").text(page.total().to_string()));
-                let fin = XmlElement::namespaced("fin", "urn:xmpp:mam:2")
-                    .attr("complete", page.complete())
-                    .attr("stable", "true")
-                    .child(rsm)
-                    .finish();
-                responses.push(federated_iq_result(stanza, room_jid, recipient, &fin));
-                Ok(responses)
+                render_federated_mam_stream(
+                    page,
+                    room_jid,
+                    recipient,
+                    stanza.id.as_deref().unwrap_or_default(),
+                    query.query_id.as_deref(),
+                    query.flip_page,
+                    result_id_seed,
+                )
             },
         )
-        .await?;
+        .await;
+    let outcome = match outcome {
+        Err(error) if error.is::<MucMamProjectionError>() => {
+            return Ok(federated_error(
+                stanza,
+                &stanza.from,
+                "wait",
+                "internal-server-error",
+            ));
+        }
+        result => result?,
+    };
     match outcome {
         northstar_archive_core::FederatedMamAdmissionOutcome::Queued => Ok(None),
         northstar_archive_core::FederatedMamAdmissionOutcome::Missing

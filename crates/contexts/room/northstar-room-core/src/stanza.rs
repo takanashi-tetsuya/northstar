@@ -1,14 +1,15 @@
 //! Provides MUC identity helpers, presence and error rendering, and MUC archive projections.
 
 use hmac::{Hmac, Mac};
-use northstar_xml_builder::rewrite::{
-    append_element_child, append_root_element, remove_root_attribute,
-};
+use northstar_xml_builder::rewrite::{append_element_child, append_root_element};
 use northstar_xml_builder::stanza::stanza_condition_element;
 use northstar_xml_builder::XmlElement;
 use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::{Document, Node};
 use sha2::Sha256;
+
+mod mam_projection;
+pub use mam_projection::{project_muc_mam_message, MucMamProjectionError, MucMamStoredRow};
 
 pub fn valid_muc_room(value: &str) -> bool {
     northstar_xep_0045::is_valid_room_name(value)
@@ -329,39 +330,4 @@ pub fn add_muc_sender(stanza: &str, sender_jid: &str) -> String {
             .attr("jid", bare_jid(sender_jid)),
     )
     .unwrap_or_else(|| stanza.to_owned())
-}
-
-/// Produce the message payload embedded in a MUC MAM result. XEP-0313
-/// requires no `to`, requires the occupant JID in `from`, and forbids trusting
-/// a pre-existing MUC user extension. Real JIDs are added only when room
-/// anonymity policy permits the querying user to see them.
-pub fn mam_muc_stanza(stanza: &str, sender_jid: &str, reveal_real_jid: bool) -> String {
-    let Ok(document) = Document::parse(stanza) else {
-        return stanza.to_owned();
-    };
-    let mut ranges = document
-        .root_element()
-        .children()
-        .filter(|node| {
-            node.is_element()
-                && node.tag_name().name() == "x"
-                && matches!(
-                    node.tag_name().namespace(),
-                    Some("http://jabber.org/protocol/muc#user" | "urn:northstar:muc:sender:0")
-                )
-        })
-        .map(|node| node.range())
-        .collect::<Vec<_>>();
-    ranges.sort_by_key(|range| std::cmp::Reverse(range.start));
-    let mut result = stanza.to_owned();
-    for range in ranges {
-        result.replace_range(range, "");
-    }
-    result = remove_root_attribute(&result, "to");
-    if reveal_real_jid {
-        let extension = XmlElement::namespaced("x", "http://jabber.org/protocol/muc#user")
-            .child(XmlElement::new("item").attr("jid", sender_jid));
-        result = append_root_element(&result, &extension).unwrap_or(result);
-    }
-    result
 }

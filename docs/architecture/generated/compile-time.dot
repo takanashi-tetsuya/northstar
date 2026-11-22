@@ -1162,6 +1162,7 @@ digraph compile_time {
   "northstar-db-it" -> "northstar-message-application";
   "northstar-db-it" -> "northstar-message-core";
   "northstar-db-it" -> "northstar-message-postgres";
+  "northstar-db-it" -> "northstar-muc-xmpp";
   "northstar-db-it" -> "northstar-operations-application";
   "northstar-db-it" -> "northstar-operations-core";
   "northstar-db-it" -> "northstar-operations-postgres";

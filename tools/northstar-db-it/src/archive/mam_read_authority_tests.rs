@@ -6,8 +6,10 @@ use northstar_archive_application::{
     MamDbRoomReadOutcome, MamLocalAuthority, MamMetadataCommand, MamMetadataResult,
     MamOccupancyProof, MamPreferences, MamPreferencesGetCommand, MamPreferencesSetCommand,
     MamPreferencesWriter, MamQueryCommand, MamQueryRepository, MamQueryResult, MamQueryScope,
-    MamRoomAccessOutcome, MamRoomReadAuthority, MamRsmPage,
+    MamRoomAccessOutcome, MamRoomReadAuthority, MamRsmPage, MamService,
 };
+use northstar_muc_xmpp::federated_muc::render_federated_mam_stream;
+use northstar_room_core::stanza::MucMamProjectionError;
 use northstar_workflows::mam_repository::PostgresMamRepository;
 use northstar_workflows::mam_room::{
     mam_federated_room_archive_page_authorized, mam_room_archive_page_authorized,
@@ -573,6 +575,17 @@ async fn muc_mam_hides_locked_rooms_without_initializing_their_secret() {
     fixture.cleanup().await;
 }
 
+async fn legacy_mam_room(pool: &PgPool, name: &str) -> Uuid {
+    sqlx::query_scalar(
+        "INSERT INTO muc_rooms(id,localpart,occupant_id_secret)
+         VALUES(gen_random_uuid(),$1,NULL) RETURNING id",
+    )
+    .bind(name)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
 async fn federated_mam_keeps_the_visible_legacy_repair_when_response_admission_fails() {
@@ -581,14 +594,11 @@ async fn federated_mam_keeps_the_visible_legacy_repair_when_response_admission_f
     let repository = PostgresMamRepository::new(pool.clone());
     let room = "visible-legacy-room";
     let authority = viewer("viewer@remote.test/Phone", None);
-    sqlx::query(
-        "INSERT INTO muc_rooms(id,localpart,occupant_id_secret)
-         VALUES(gen_random_uuid(),$1,NULL)",
-    )
-    .bind(room)
-    .execute(pool)
-    .await
-    .unwrap();
+    let room_id = legacy_mam_room(pool, room).await;
+    let mut connection = pool.acquire().await.unwrap();
+    room_message(&mut connection, room_id).await;
+    drop(connection);
+    let result_id_seed = Uuid::new_v4();
     let outcome = repository
         .admit_federated_room_stream(
             FederatedMamOutboxLimits {
@@ -598,11 +608,16 @@ async fn federated_mam_keeps_the_visible_legacy_repair_when_response_admission_f
                 max_per_domain: 1,
             },
             FederatedMamStreamRequest::new("remote.test", room, &authority, &query()),
-            |_| {
-                Ok(vec![
-                    "<message xmlns='jabber:server' from='visible-legacy-room@conference.local.test' to='viewer@remote.test/Phone' id='first'/>".to_owned(),
-                    "<iq xmlns='jabber:server' type='result' id='fin'/>".to_owned(),
-                ])
+            |page| {
+                render_federated_mam_stream(
+                    page,
+                    "visible-legacy-room@conference.local.test",
+                    &authority.full_jid,
+                    "i",
+                    None,
+                    false,
+                    result_id_seed,
+                )
             },
         )
         .await
@@ -626,6 +641,118 @@ async fn federated_mam_keeps_the_visible_legacy_repair_when_response_admission_f
         .len(),
         32
     );
+    fixture.cleanup().await;
+}
+
+pub(super) async fn room_mam_evidence(pool: &PgPool, room_id: Uuid) -> Vec<serde_json::Value> {
+    sqlx::query_scalar(
+        "SELECT to_jsonb(archive) FROM muc_messages archive WHERE room_id=$1 ORDER BY created_at,id",
+    )
+    .bind(room_id)
+    .fetch_all(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
+async fn federated_mam_projection_failure_never_admits_a_prefix() {
+    let fixture = Fixture::new().await;
+    let pool = &fixture.pool;
+    let room = "projection-error-room";
+    let authority = viewer("viewer@remote.test/Phone", None);
+    let room_id = legacy_mam_room(pool, room).await;
+    let room_evidence = || {
+        sqlx::query_as::<_, (serde_json::Value, Option<Vec<u8>>)>(
+            "SELECT to_jsonb(room)-'occupant_id_secret', occupant_id_secret FROM muc_rooms room WHERE id=$1",
+        )
+        .bind(room_id)
+        .fetch_one(pool)
+    };
+    let (room_before, secret_before) = room_evidence().await.unwrap();
+    assert!(secret_before.is_none());
+    let valid_id = Uuid::new_v4();
+    let corrupt_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO muc_messages(id,room_id,sender_jid,nick,stanza,encrypted,message_kind,actor_scope,created_at)
+         VALUES($2,$1,'sender@remote.test/Phone','Sender','<message><body>visible</body></message>',
+                FALSE,'discussion','sender@remote.test','2026-01-01 00:00:00+00'),
+               ($3,$1,'sender@remote.test/Phone','Sender','<presence/>',
+                FALSE,'discussion','sender@remote.test','2026-01-01 00:00:01+00')",
+    )
+    .bind(room_id)
+    .bind(valid_id)
+    .bind(corrupt_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    let before = room_mam_evidence(pool, room_id).await;
+    assert_eq!(before.len(), 2);
+    assert!(before.iter().all(|row| row["retracted_at"].is_null()
+        && row["retraction_action_id"].is_null()
+        && row["message_kind"] == "discussion"));
+    let (wake, mut receiver) = tokio::sync::mpsc::channel(2);
+    let service = MamService::new(
+        PostgresMamRepository::new(pool.clone()),
+        FederatedMamOutboxLimits {
+            ttl_seconds: 300,
+            max_rows: 8,
+            max_bytes: 1024 * 1024,
+            max_per_domain: 8,
+        },
+        wake,
+    );
+    let result_id_seed = Uuid::new_v4();
+    let render = |page: &northstar_archive_application::FederatedMamStreamPage| {
+        render_federated_mam_stream(
+            page,
+            "projection-error-room@conference.local.test",
+            &authority.full_jid,
+            "i",
+            None,
+            false,
+            result_id_seed,
+        )
+    };
+    let error = service
+        .admit_federated_room_stream(
+            FederatedMamStreamRequest::new("remote.test", room, &authority, &query()),
+            render,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<MucMamProjectionError>(),
+        Some(&MucMamProjectionError::Envelope)
+    );
+    assert!(receiver.try_recv().is_err());
+    let outbox_count =
+        || sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM s2s_outbox").fetch_one(pool);
+    assert_eq!(outbox_count().await.unwrap(), 0);
+    assert_eq!(room_mam_evidence(pool, room_id).await, before);
+    let (room_after, repaired) = room_evidence().await.unwrap();
+    assert_eq!(room_after, room_before);
+    assert_eq!(repaired.unwrap().len(), 32);
+
+    let valid_only = MamArchiveQuery {
+        ids: vec![valid_id],
+        ..query()
+    };
+    assert_eq!(
+        service
+            .admit_federated_room_stream(
+                FederatedMamStreamRequest::new("remote.test", room, &authority, &valid_only),
+                render,
+            )
+            .await
+            .unwrap(),
+        FederatedMamAdmissionOutcome::Queued
+    );
+    receiver
+        .try_recv()
+        .expect("the valid-only page must wake delivery");
+    assert_eq!(outbox_count().await.unwrap(), 2);
+    assert_eq!(room_mam_evidence(pool, room_id).await, before);
     fixture.cleanup().await;
 }
 

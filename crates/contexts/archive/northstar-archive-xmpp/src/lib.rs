@@ -11,15 +11,18 @@ mod session_host;
 #[cfg(test)]
 use northstar_archive_application::MamRsmPage;
 use northstar_archive_application::{
-    ArchiveBoundary, ArchiveRow, MamAccountOutcome, MamLocalAuthority, MamMetadataCommand,
-    MamMetadataResult, MamOccupancyProof, MamPreferences, MamPreferencesGetCommand,
-    MamPreferencesSetCommand, MamPreferencesWriter, MamQueryCommand, MamQueryRepository,
-    MamQueryResult, MamQueryScope, MamRoomAccess, MamRoomAccessOutcome, MamRoomReadAuthority,
-    MamService,
+    ArchiveBoundary, ArchivePage, ArchiveRow, MamAccountOutcome, MamLocalAuthority,
+    MamMetadataCommand, MamMetadataResult, MamOccupancyProof, MamPreferences,
+    MamPreferencesGetCommand, MamPreferencesSetCommand, MamPreferencesWriter, MamQueryCommand,
+    MamQueryRepository, MamQueryResult, MamQueryScope, MamRoomAccess, MamRoomAccessOutcome,
+    MamRoomReadAuthority, MamService,
 };
 #[cfg(test)]
 use northstar_archive_core::mam_parse::ParsedMamQuery;
 use northstar_archive_core::mam_parse::{mam_error_condition, parse_mam_query};
+use northstar_room_core::stanza::{
+    project_muc_mam_message, MucMamProjectionError, MucMamStoredRow,
+};
 #[cfg(test)]
 use northstar_time::Utc;
 #[cfg(test)]
@@ -29,7 +32,7 @@ use northstar_xep_0313::{
     XMLNS_MAM as MAM_NS, XMLNS_RSM as RSM_NS,
 };
 use northstar_xep_0359::add_stanza_id;
-use northstar_xml_builder::stanza::{iq_error, iq_result, iq_result_from};
+use northstar_xml_builder::stanza::{iq_error, iq_error_from, iq_result, iq_result_from};
 use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
 use uuid::Uuid;
@@ -60,9 +63,6 @@ pub trait MamSession: Sync {
     ) -> &MamService<
         impl MamQueryRepository<Error = anyhow::Error> + MamPreferencesWriter<Error = anyhow::Error>,
     >;
-    /// One archived room message as this viewer receives it: the room's occupant id for the sender
-    /// and the sender's real JID only where the room reveals it.
-    fn mam_room_stanza(&self, access: &MamRoomAccess, item: &ArchiveRow) -> String;
 }
 
 struct MamRoomTarget {
@@ -415,17 +415,86 @@ pub async fn mam_query<S: MamSession>(
         .as_ref()
         .map(|access| format!("{}@{}", access.localpart(), session.mam_muc_domain()))
         .or_else(|| personal_archive_reply_from(to));
+    render_mam_page(
+        &page,
+        MamPageProjection {
+            id,
+            recipient: session.mam_full_jid().unwrap_or_default(),
+            archive_from: archive_from.as_deref(),
+            personal_archive_by: &personal_archive_by,
+            room: room.as_ref(),
+            query_id: parsed.query_id.as_deref(),
+            flip_page: parsed.flip_page,
+        },
+    )
+}
+
+fn project_room_mam_row(
+    room_jid: &str,
+    access: &MamRoomAccess,
+    row: &ArchiveRow,
+) -> Result<String, MucMamProjectionError> {
+    let muc = row.muc.as_ref().ok_or(MucMamProjectionError::Identity)?;
+    project_muc_mam_message(
+        room_jid,
+        access.occupant_id_secret(),
+        access.reveal_real_jid(),
+        MucMamStoredRow {
+            id: row.id,
+            stanza: &row.stanza,
+            sender_jid: &row.peer_jid,
+            nick: &muc.nick,
+            message_kind: &muc.message_kind,
+            encrypted: row.encrypted,
+            retracted: muc.retracted,
+        },
+    )
+}
+
+struct MamPageProjection<'a> {
+    id: &'a str,
+    recipient: &'a str,
+    archive_from: Option<&'a str>,
+    personal_archive_by: &'a str,
+    room: Option<&'a MamRoomAccess>,
+    query_id: Option<&'a str>,
+    flip_page: bool,
+}
+
+fn render_mam_page(
+    page: &ArchivePage,
+    projection: MamPageProjection<'_>,
+) -> anyhow::Result<MamReply> {
+    let MamPageProjection {
+        id,
+        recipient,
+        archive_from,
+        personal_archive_by,
+        room,
+        query_id,
+        flip_page,
+    } = projection;
     let mut replies = Vec::with_capacity(page.rows.len() + 1);
-    let rows: Box<dyn Iterator<Item = &ArchiveRow>> = if parsed.flip_page {
+    let rows: Box<dyn Iterator<Item = &ArchiveRow>> = if flip_page {
         Box::new(page.rows.iter().rev())
     } else {
         Box::new(page.rows.iter())
     };
     for item in rows {
-        let archived_stanza = if let Some(access) = &room {
-            session.mam_room_stanza(access, item)
+        let archived_stanza = if let Some(access) = room {
+            let from = archive_from.unwrap_or_default();
+            match project_room_mam_row(from, access, item) {
+                Ok(projected) => projected,
+                Err(_) => {
+                    return Ok(MamReply::Send(iq_error_from(
+                        id,
+                        from,
+                        "internal-server-error",
+                    )));
+                }
+            }
         } else {
-            personal_mam_stanza(item, &personal_archive_by)
+            personal_mam_stanza(item, personal_archive_by)
         };
         let forwarded = XmlElement::namespaced("forwarded", "urn:xmpp:forward:0")
             .child(
@@ -438,13 +507,13 @@ pub async fn mam_query<S: MamSession>(
             .validated_fragment(&archived_stanza)?;
         let result = XmlElement::namespaced("result", MAM_NS)
             .attr("id", item.id)
-            .optional_attr("queryid", parsed.query_id.as_deref())
+            .optional_attr("queryid", query_id)
             .child(forwarded);
         replies.push(
             XmlElement::namespaced("message", "jabber:client")
                 .attr("id", Uuid::new_v4())
-                .attr("to", session.mam_full_jid().unwrap_or_default())
-                .optional_attr("from", archive_from.as_deref())
+                .attr("to", recipient)
+                .optional_attr("from", archive_from)
                 .child(result)
                 .finish(),
         );
@@ -465,7 +534,7 @@ pub async fn mam_query<S: MamSession>(
         .attr("stable", "true")
         .child(set)
         .finish();
-    replies.push(if let Some(from) = archive_from.as_deref() {
+    replies.push(if let Some(from) = archive_from {
         iq_result_from(id, from, &fin)
     } else {
         iq_result(id, &fin)
@@ -564,6 +633,7 @@ mod tests {
                 encrypted: false,
                 stanza_id: Some("client-id".to_owned()),
                 created_at: Utc::now(),
+                muc: None,
             };
 
             let rendered = personal_mam_stanza(&item, "alice@example.test");
@@ -709,3 +779,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod muc_mam_tests;

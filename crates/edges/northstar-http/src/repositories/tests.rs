@@ -25,6 +25,9 @@ async fn history_route_follows_effective_mam_profile() {
             .filter(|line| !line.starts_with('#'))
             .filter_map(|line| line.split_once('='))
             .map(|(name, value)| (name, value.trim_matches('"')));
+        // Each child holds copies of other tests' sockets until its exec; `output` waits for
+        // the child to exit before the guard is released.
+        let _children = crate::test_support::child_process_guard().await;
         for (mam, rsm, expected) in [
             ("true", "true", "true"),
             ("false", "true", "false"),

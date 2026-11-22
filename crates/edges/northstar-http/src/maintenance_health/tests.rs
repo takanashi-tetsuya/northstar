@@ -1,8 +1,10 @@
 use super::*;
+use crate::test_support::socket_close_guard;
 use northstar_runtime::workers::WorkerCriticality;
 use std::net::SocketAddr;
 use tokio::{
     net::{TcpSocket, TcpStream},
+    sync::RwLockReadGuard,
     task::JoinHandle,
 };
 
@@ -15,13 +17,18 @@ struct HealthFixture {
     subscription_readiness: SubscriptionCleanupReadiness,
     cancel: CancellationToken,
     task: Option<JoinHandle<Result<()>>>,
+    /// Keeps child processes of other tests from holding copies of this fixture's sockets, so
+    /// dropping a socket closes it; see `crate::test_support`.
+    _socket_close_guard: RwLockReadGuard<'static, ()>,
 }
 
 /// Binds the loopback health listener together with a second socket on the same port that is
 /// bound but never listens. A non-listening socket receives no connections, so while the
 /// listener is open it gets every connection; after the listener closes, a connection to the
-/// port is refused. Because the second socket keeps the port bound, no other test can bind the
-/// freed port, so a refused connection in `stop` proves that this listener is closed.
+/// port is refused. Because the second socket keeps the port bound, no other socket can bind the
+/// freed port (only another `SO_REUSEPORT` socket of the same user could, and nothing else in the
+/// workspace sets it), and an outgoing connection cannot take it as its source port and connect
+/// to itself, so a refused connection in `stop` proves that this listener is closed.
 fn reserved_loopback_listener() -> (TcpListener, TcpSocket) {
     let listener = TcpSocket::new_v4().unwrap();
     listener.set_reuseport(true).unwrap();
@@ -34,6 +41,7 @@ fn reserved_loopback_listener() -> (TcpListener, TcpSocket) {
 
 impl HealthFixture {
     async fn start() -> Self {
+        let socket_close_guard = socket_close_guard().await;
         let (listener, port_reservation) = reserved_loopback_listener();
         let address = listener.local_addr().unwrap();
         let workers = WorkerRegistry::new();
@@ -57,6 +65,7 @@ impl HealthFixture {
             subscription_readiness,
             cancel,
             task: Some(task),
+            _socket_close_guard: socket_close_guard,
         }
     }
 
@@ -79,7 +88,9 @@ impl HealthFixture {
             .expect("health cancellation did not join its connections")
             .expect("health listener panicked")
             .unwrap();
-        // `_port_reservation` still holds the port, so no other socket can be listening on it.
+        // `_port_reservation` still holds the port, so no other socket can be listening on it,
+        // and `_socket_close_guard` keeps every child process from holding a copy of the
+        // listener, so the joined task's drop has closed it.
         assert!(
             TcpStream::connect(self.address).await.is_err(),
             "health listener survived shutdown"

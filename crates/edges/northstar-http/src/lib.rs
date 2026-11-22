@@ -1020,4 +1020,7 @@ fn module_source() -> String {
 mod tests;
 
 #[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
 mod module_source_tests;

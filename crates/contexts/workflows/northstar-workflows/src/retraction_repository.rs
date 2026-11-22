@@ -1,5 +1,8 @@
 //! Atomic retraction intents, archive tombstones and delivery projections.
 use anyhow::Result;
+use northstar_archive_postgres::display_changes::{
+    begin_personal_display_writes, PersonalArchiveDisplayChange, PersonalDisplayWriteOutcome,
+};
 use northstar_message_application::retractions::*;
 use northstar_message_core::DirectSpoolEligibility;
 use northstar_message_postgres::direct_cluster::DirectCommitCluster;
@@ -82,6 +85,28 @@ impl PostgresRetractionRepository {
 }
 impl RetractionRepository for PostgresRetractionRepository {
     async fn apply_prepared(&self, prepared: PreparedRetraction<'_>) -> Result<RetractionOutcome> {
+        match self.apply_prepared_once(&prepared).await {
+            Err(error) if retryable_retraction_abort(&error) => {
+                self.apply_prepared_once(&prepared).await
+            }
+            result => result,
+        }
+    }
+}
+
+fn retryable_retraction_abort(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<sqlx::Error>()
+        .and_then(sqlx::Error::as_database_error)
+        .and_then(|database| database.code())
+        .is_some_and(|code| matches!(code.as_ref(), "40P01" | "40001"))
+}
+
+impl PostgresRetractionRepository {
+    async fn apply_prepared_once(
+        &self,
+        prepared: &PreparedRetraction<'_>,
+    ) -> Result<RetractionOutcome> {
         let PreparedRetraction {
             command,
             command_encrypted,
@@ -104,6 +129,9 @@ impl RetractionRepository for PostgresRetractionRepository {
             delivery_authenticators,
         } = prepared;
         let mut transaction = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+            .execute(&mut *transaction)
+            .await?;
         if self.cluster.is_some() {
             northstar_postgres::cluster_lock::lock_direct_spool_instance_claims_in_transaction(
                 &mut transaction,
@@ -128,10 +156,12 @@ impl RetractionRepository for PostgresRetractionRepository {
             transaction.rollback().await?;
             return Ok(RetractionOutcome::AccountUnavailable);
         }
+        // The auth-generation capability above already holds each enabled
+        // row FOR SHARE. Reading its username needs only runtime SELECT.
         let account_rows = sqlx::query(
             "SELECT id,username FROM users
               WHERE id=ANY($1) AND NOT is_disabled
-              ORDER BY id FOR SHARE",
+              ORDER BY id",
         )
         .bind(&required_accounts)
         .fetch_all(&mut *transaction)
@@ -146,14 +176,14 @@ impl RetractionRepository for PostgresRetractionRepository {
             account_bares.insert(id, bare);
         }
         validate_owner_authority(
-            &normalized_owners,
+            normalized_owners,
             &account_bares,
-            &canonical_sender,
-            &configured_domain,
+            canonical_sender,
+            configured_domain,
             normalized_delivery.as_ref(),
             normalized_outbound.as_ref(),
         )?;
-        let lock_key = retraction_lock_key(&canonical_sender, command.action_id);
+        let lock_key = retraction_lock_key(canonical_sender, command.action_id);
         sqlx::query("SELECT pg_advisory_xact_lock($1)")
             .bind(lock_key)
             .execute(&mut *transaction)
@@ -176,7 +206,7 @@ impl RetractionRepository for PostgresRetractionRepository {
              ON CONFLICT (sender_bare_jid,action_digest) DO NOTHING",
         )
         .bind(intent_id)
-        .bind(&canonical_sender)
+        .bind(canonical_sender)
         .bind(command.action_id)
         .bind(action_digest.as_slice())
         .bind(command.target_id)
@@ -204,7 +234,7 @@ impl RetractionRepository for PostgresRetractionRepository {
                   WHERE sender_bare_jid=$1 AND action_digest=$2
                   FOR UPDATE",
             )
-            .bind(&canonical_sender)
+            .bind(canonical_sender)
             .bind(action_digest.as_slice())
             .fetch_optional(&mut *transaction)
             .await?;
@@ -243,7 +273,7 @@ impl RetractionRepository for PostgresRetractionRepository {
                 (None, None, Some(sha256), Some(sha512), Some(length))
                     if sha256.len() == 32 && sha512.len() == 64 =>
                 {
-                    length == semantic_length
+                    length == *semantic_length
                         && bool::from(
                             sha256.ct_eq(semantic_sha256.as_slice())
                                 & sha512.ct_eq(semantic_sha512.as_slice()),
@@ -284,7 +314,7 @@ impl RetractionRepository for PostgresRetractionRepository {
                 (None, None, Some(sha256), Some(sha512), Some(length))
                     if sha256.len() == 32 && sha512.len() == 64 =>
                 {
-                    length == owner_projection_length
+                    length == *owner_projection_length
                         && bool::from(
                             sha256.ct_eq(owner_projection_sha256.as_slice())
                                 & sha512.ct_eq(owner_projection_sha512.as_slice()),
@@ -350,7 +380,7 @@ impl RetractionRepository for PostgresRetractionRepository {
                     Document::parse(&existing_stanza).ok().map(|document| {
                         northstar_xml_builder::stanza::is_encrypted(document.root_element())
                     });
-                if existing_encrypted != command_encrypted
+                if existing_encrypted != *command_encrypted
                     || existing_encryption_shape != Some(existing_encrypted)
                 {
                     transaction.rollback().await?;
@@ -358,11 +388,11 @@ impl RetractionRepository for PostgresRetractionRepository {
                 }
                 let existing_semantics = canonical_retraction_semantics(
                     &existing_stanza,
-                    &canonical_sender,
+                    canonical_sender,
                     command.action_id,
                     command.target_id,
                 );
-                let expected_semantics = if command_encrypted {
+                let expected_semantics = if *command_encrypted {
                     let sanitized =
                         northstar_xml_builder::message_policy::encrypted_retraction_archive_stanza(
                             command.semantic_payload,
@@ -370,7 +400,7 @@ impl RetractionRepository for PostgresRetractionRepository {
                         );
                     canonical_retraction_semantics(
                         &sanitized,
-                        &canonical_sender,
+                        canonical_sender,
                         command.action_id,
                         command.target_id,
                     )?
@@ -438,7 +468,8 @@ impl RetractionRepository for PostgresRetractionRepository {
         // A newly recorded intent must not adopt legacy or manually inserted
         // action rows whose full operation identity was never committed with
         // it. The immutable projection plan below is the only replay snapshot.
-        for write in &normalized_writes {
+        let mut display_writes = begin_personal_display_writes(&mut transaction).await?;
+        for write in normalized_writes {
             let existing: bool = sqlx::query_scalar(
                 "SELECT EXISTS(
                     SELECT 1 FROM message_archive
@@ -452,7 +483,7 @@ impl RetractionRepository for PostgresRetractionRepository {
             .bind(write.write.owner_id)
             .bind(&write.peer_bare_jid)
             .bind(command.action_id)
-            .fetch_one(&mut *transaction)
+            .fetch_one(&mut **display_writes.transaction())
             .await?;
             if existing {
                 transaction.rollback().await?;
@@ -469,16 +500,16 @@ impl RetractionRepository for PostgresRetractionRepository {
             .bind(i16::try_from(ordinal)?)
             .bind(write.write.owner_id)
             .bind(write.write.id)
-            .execute(&mut *transaction)
+            .execute(&mut **display_writes.transaction())
             .await?;
         }
 
         let mut tombstones = Vec::new();
         let mut saw_same_tombstone = false;
         let mut saw_foreign_original = false;
-        for owner in &normalized_owners {
-            let rows = sqlx::query(
-                "SELECT id,stanza FROM message_archive
+        for owner in normalized_owners {
+            let ids = sqlx::query_scalar::<_, Uuid>(
+                "SELECT id FROM message_archive
                   WHERE owner_id=$1
                     AND pg_catalog.md5(peer_jid)=pg_catalog.md5($2::TEXT)
                     AND pg_catalog.md5(stanza_id)=pg_catalog.md5($3::TEXT)
@@ -488,9 +519,9 @@ impl RetractionRepository for PostgresRetractionRepository {
             .bind(owner.owner_id)
             .bind(&owner.peer_bare_jid)
             .bind(command.target_id)
-            .fetch_all(&mut *transaction)
+            .fetch_all(&mut **display_writes.transaction())
             .await?;
-            if rows.len() == 3 {
+            if ids.len() == 3 {
                 // Three exact owner/peer/stanza-id matches exhaust this
                 // deliberately bounded ambiguity probe. Fail closed instead
                 // of allowing newer decoy rows to hide an older retractable
@@ -498,13 +529,26 @@ impl RetractionRepository for PostgresRetractionRepository {
                 transaction.rollback().await?;
                 return Ok(RetractionOutcome::Conflict);
             }
+            // A contender may have committed an overlay while this operation
+            // waited for the original tuple. Read display state afresh.
+            let rows = sqlx::query(
+                "SELECT a.id,COALESCE(d.display_stanza,a.stanza) AS stanza
+                 FROM message_archive a
+                 LEFT JOIN personal_archive_display_changes d ON d.archive_id=a.id
+                 WHERE a.owner_id=$1 AND a.id=ANY($2)
+                 ORDER BY a.created_at DESC,a.id DESC",
+            )
+            .bind(owner.owner_id)
+            .bind(&ids)
+            .fetch_all(&mut **display_writes.transaction())
+            .await?;
             let mut owned = Vec::new();
             for row in rows {
                 let archive_id: Uuid = row.get("id");
                 let stanza: String = row.get("stanza");
-                match classify_target(&stanza, &canonical_sender, command.action_id)? {
+                match classify_target(&stanza, canonical_sender, command.action_id)? {
                     TargetClassification::OwnedOriginal(tombstone) => {
-                        owned.push((owner.owner_id, archive_id, tombstone));
+                        owned.push((owner.owner_id, archive_id, stanza, tombstone));
                     }
                     TargetClassification::SameTombstone => saw_same_tombstone = true,
                     TargetClassification::ConflictingTombstone => {
@@ -537,22 +581,23 @@ impl RetractionRepository for PostgresRetractionRepository {
             return Ok(RetractionOutcome::Conflict);
         }
 
-        for (owner_id, archive_id, tombstone) in &tombstones {
-            let updated = sqlx::query(
-                "UPDATE message_archive SET stanza=$3,encrypted=FALSE
-                  WHERE owner_id=$1 AND id=$2",
-            )
-            .bind(owner_id)
-            .bind(archive_id)
-            .bind(tombstone)
-            .execute(&mut *transaction)
-            .await?;
-            anyhow::ensure!(
-                updated.rows_affected() == 1,
-                "locked retraction target disappeared before tombstoning"
-            );
+        for (owner_id, archive_id, expected_stanza, tombstone) in &tombstones {
+            let outcome = display_writes
+                .apply(PersonalArchiveDisplayChange {
+                    owner_id: *owner_id,
+                    archive_id: *archive_id,
+                    expected_stanza,
+                    display_stanza: tombstone,
+                    actor_bare_jid: canonical_sender,
+                    action_id: command.action_id,
+                })
+                .await?;
+            if outcome == PersonalDisplayWriteOutcome::MissingOrChanged {
+                transaction.rollback().await?;
+                return Ok(RetractionOutcome::Conflict);
+            }
         }
-        for write in &normalized_writes {
+        for write in normalized_writes {
             sqlx::query(
                 "INSERT INTO message_archive
                  (id,owner_id,peer_jid,peer_full_jid,stanza,encrypted,stanza_id)

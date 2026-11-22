@@ -217,9 +217,15 @@ and Docker artifacts and their provenance. They do not repeat source CI.
   with every S2S outbox writer stopped. Reconcile exact grants and verify that
   runtime holds only `SELECT, UPDATE` on `s2s_outbox_enqueue_generation` before
   starting updated binaries; never run old and new writers together.
+- [ ] Apply [migration `0161`](../migrations/0161_archive_display_overlays.sql)
+  with every server process stopped and no export request in flight. Reconcile
+  exact grants and verify that runtime holds only `SELECT, INSERT` on the three
+  display-change tables, `USAGE, SELECT` on `archive_display_change_seq` and
+  `EXECUTE` on `northstar_lock_legal_hold_export(uuid,uuid,bool)` before
+  starting updated binaries; never run old and new processes together.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 159 migrations from `0001` through the current
-  repository maximum `0160`, with `0021` as the sole intentional gap.
+  identity and verify all 160 migrations from `0001` through the current
+  repository maximum `0161`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

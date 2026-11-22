@@ -9,11 +9,12 @@ use crate::mix_source_retractions::MixSourceRetraction;
 
 pub const PERSONAL_DISPLAY_SELECT: &str =
     "SELECT page.*, fact.action_stanza_id AS mix_action_stanza_id,
-            fact.retracted_at AS mix_retracted_at FROM ";
+            fact.retracted_at AS mix_retracted_at, d.display_stanza FROM ";
 
 pub const PERSONAL_DISPLAY_JOIN: &str = " AS page LEFT JOIN mix_source_retractions AS fact
       ON fact.source_by=page.source_by AND fact.target_stanza_id=page.source_stanza_id
-      AND fact.first_for_target";
+      AND fact.first_for_target
+      LEFT JOIN personal_archive_display_changes AS d ON d.archive_id=page.id";
 
 pub fn project_personal_archive_content(row: &PgRow) -> (String, bool) {
     let action: Option<Uuid> = row.get("mix_action_stanza_id");
@@ -27,13 +28,19 @@ pub fn project_personal_archive_content(row: &PgRow) -> (String, bool) {
             },
         )
     });
-    resolve_personal_display(row.get("stanza"), row.get("encrypted"), source)
+    resolve_personal_display(
+        row.get("stanza"),
+        row.get("encrypted"),
+        source,
+        row.get("display_stanza"),
+    )
 }
 
 fn resolve_personal_display(
     raw: &str,
     encrypted: bool,
     source: Option<(&str, Uuid, MixSourceRetraction)>,
+    overlay: Option<&str>,
 ) -> (String, bool) {
     if let Some((channel, target, primary)) = source {
         return (
@@ -41,7 +48,10 @@ fn resolve_personal_display(
             false,
         );
     }
-    (raw.to_owned(), encrypted)
+    match overlay {
+        Some(stanza) => (stanza.to_owned(), false),
+        None => (raw.to_owned(), encrypted),
+    }
 }
 
 pub fn render_mix_source_tombstone(

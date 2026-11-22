@@ -3419,6 +3419,62 @@ PSQL
 [[ "$immutable_history_acl_ok" == 't' ]] \
   || fail 'runtime immutable-history mutation privilege drifted'
 
+display_overlay_acl_ok=$(control_psql --dbname="$database_name" --tuples-only --no-align <<'PSQL'
+SELECT pg_catalog.count(*)=3 AND pg_catalog.bool_and(
+         pg_catalog.pg_get_userbyid(relowner)='northstar_migrator'
+         AND pg_catalog.has_table_privilege('northstar_runtime',oid,'SELECT')
+         AND pg_catalog.has_table_privilege('northstar_runtime',oid,'INSERT')
+         AND pg_catalog.has_table_privilege('northstar_backup',oid,'SELECT')
+         AND NOT EXISTS (
+           SELECT 1 FROM pg_catalog.aclexplode(relacl) acl
+            WHERE acl.grantee=0 OR (acl.grantee<>relowner AND NOT (
+              (pg_catalog.pg_get_userbyid(acl.grantee)='northstar_runtime'
+                AND acl.privilege_type IN ('SELECT','INSERT') AND NOT acl.is_grantable)
+              OR (pg_catalog.pg_get_userbyid(acl.grantee)='northstar_backup'
+                AND acl.privilege_type='SELECT' AND NOT acl.is_grantable)
+            ))
+         ))
+  FROM pg_catalog.pg_class
+ WHERE relnamespace='public'::pg_catalog.regnamespace AND relkind='r'
+   AND relname IN ('personal_archive_display_changes','muc_archive_display_changes',
+                   'legal_hold_export_display_cutoffs');
+PSQL
+)
+[[ "$display_overlay_acl_ok" == 't' ]] || fail '0161 display overlay relation ACL drifted'
+display_sequence_acl_ok=$(control_psql --dbname="$database_name" --tuples-only --no-align <<'PSQL'
+SELECT pg_catalog.pg_get_userbyid(relowner)='northstar_migrator'
+   AND pg_catalog.has_sequence_privilege('northstar_runtime',oid,'USAGE')
+   AND pg_catalog.has_sequence_privilege('northstar_runtime',oid,'SELECT')
+   AND pg_catalog.has_sequence_privilege('northstar_backup',oid,'SELECT')
+   AND NOT EXISTS (
+     SELECT 1 FROM pg_catalog.aclexplode(relacl) acl
+      WHERE acl.grantee=0 OR (acl.grantee<>relowner AND NOT (
+        (pg_catalog.pg_get_userbyid(acl.grantee)='northstar_runtime'
+          AND acl.privilege_type IN ('USAGE','SELECT') AND NOT acl.is_grantable)
+        OR (pg_catalog.pg_get_userbyid(acl.grantee)='northstar_backup'
+          AND acl.privilege_type='SELECT' AND NOT acl.is_grantable)
+      ))
+   )
+  FROM pg_catalog.pg_class
+ WHERE relkind='S' AND oid='public.archive_display_change_seq'::pg_catalog.regclass;
+PSQL
+)
+[[ "$display_sequence_acl_ok" == 't' ]] || fail '0161 display sequence ACL drifted'
+display_fact_lock_ok=$(psql_as "$runtime_role" "$runtime_password" --quiet --tuples-only --no-align <<'PSQL'
+BEGIN;
+INSERT INTO public.legal_holds(id,title,authority_reference,reason,created_by,created_request_id)
+VALUES('00000000-0000-0000-0000-000000000161','Display export','role CI','lock fixture',
+       '00000000-0000-0000-0000-000000000012','00000000-0000-0000-0000-000000000162');
+SELECT public.northstar_lock_legal_hold_export(
+  '00000000-0000-0000-0000-000000000012','00000000-0000-0000-0000-000000000161',TRUE);
+SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_locks
+ WHERE pid=pg_catalog.pg_backend_pid() AND relation='public.mix_source_retractions'::pg_catalog.regclass
+   AND mode='ShareLock' AND granted);
+ROLLBACK;
+PSQL
+)
+[[ "$display_fact_lock_ok" == $'t\nt' ]] || fail '0161 runtime cannot fence MIX display facts'
+
 migration_ledger_acl_ok=$(control_psql --dbname="$database_name" --tuples-only --no-align <<'PSQL'
 SELECT NOT EXISTS (
   SELECT 1 FROM (VALUES ('_sqlx_migrations'),('jid_identity_migrations')) ledger(name)

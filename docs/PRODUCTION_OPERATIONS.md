@@ -1085,11 +1085,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 159 files from `0001` through
-`0160`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 160 files from `0001` through
+`0161`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0160`, with the exact SQLx description and SHA-384 checksum, before it
+through `0161`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url`, `storage_database_url`, and `command_database_url`
 secrets; none of these identities may attempt DDL. Pending, failed, unknown,
@@ -1160,6 +1160,19 @@ global row, byte or per-domain limit. It is a stopped-writer boundary: stop
 every process that enqueues S2S outbox rows, migrate, reconcile exact grants
 and start only updated binaries. An old writer bypasses the fence, so neither a
 mixed-version period nor a rolling rollback to an older binary is safe.
+[Migration `0161`](../migrations/0161_archive_display_overlays.sql) lets a
+retraction or moderation of a row under legal hold succeed: online history
+shows the ordinary tombstone through a display overlay while the held original
+stays untouched, and a legal-hold export returns the original together with its
+display change (`northstar-legal-hold-chain-v3`). It is a stopped cutover: stop
+every server process, let in-flight export requests finish, migrate, reconcile
+exact grants, attest the runtime role and start only updated binaries. An old
+writer would still fail held retractions and an old reader would show the held
+original, so there is no mixed-version period or rolling rollback. Export
+leases opened before the cutover continue in V2 and exact replays return their
+stored responses; every new export is V3. Back up overlays, source facts,
+export cutoffs and the sequence together; releasing a hold restores nothing,
+and ordinary retention later deletes the original and its overlay together.
 On an existing volume, stop every old server process, generate the new storage
 password and URL secrets, reconcile the new role, run migrations and exact
 grants, then start the new binary. The older binary's exact role/ACL audit does
@@ -1333,7 +1346,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0160` manifest
+5. run the one-shot migration job through the complete `0001`-`0161` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

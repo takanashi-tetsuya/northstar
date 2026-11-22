@@ -425,7 +425,10 @@ async fn postgres_hold_cleanup_delete_release_and_audit_invariants() {
 
 #[tokio::test]
 #[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
-async fn legal_hold_blocks_sender_retractions_until_release() {
+async fn legal_hold_retractions_succeed_without_replacing_evidence() {
+    use northstar_archive_postgres::mix_source_retractions::{
+        lock_sources_in_tx, record_locked_in_tx,
+    };
     use northstar_archive_postgres::{
         mam_user_archive_page, MamArchiveQuery, MamRoomReadOutcome, MamRsmPage,
     };
@@ -453,6 +456,11 @@ async fn legal_hold_blocks_sender_retractions_until_release() {
 
     let [admin, sender, room, hold, personal, muc, personal_action, muc_action] =
         [(); 8].map(|()| Uuid::new_v4());
+    let [mix_copy, mix_target, mix_action, overlapping_hold] = [(); 4].map(|()| Uuid::new_v4());
+    let channel = format!("chan-{}@mix.remote.test", mix_target.simple());
+    let mix_original = format!(
+        "<message from='{channel}/publisher' type='groupchat' id='{mix_target}'><body>MIX evidence</body></message>"
+    );
     let username = format!("held-sender-{}", &sender.simple().to_string()[..12]);
     let actor_scope = format!("{username}@local.test");
     let sender_jid = format!("{actor_scope}/Device");
@@ -522,6 +530,20 @@ async fn legal_hold_blocks_sender_retractions_until_release() {
     .await
     .unwrap();
 
+    sqlx::query(
+        "INSERT INTO message_archive(id,owner_id,peer_jid,peer_full_jid,stanza,encrypted,
+                                     source_by,source_stanza_id,source_payload_digest,created_at)
+         VALUES($1,$2,$3,$3,$4,FALSE,$3,$5,decode(repeat('ab',32),'hex'),NOW()-INTERVAL '12 hours')",
+    )
+    .bind(mix_copy)
+    .bind(sender)
+    .bind(&channel)
+    .bind(&mix_original)
+    .bind(mix_target)
+    .execute(&pool)
+    .await
+    .unwrap();
+
     let mut tx = pool.begin().await.unwrap();
     create_legal_hold_in_tx(
         &mut tx,
@@ -533,7 +555,25 @@ async fn legal_hold_blocks_sender_retractions_until_release() {
             reason: "preserve original archive payloads",
             targets: &[
                 LegalHoldTarget::PersonalArchive(personal),
+                LegalHoldTarget::PersonalArchive(mix_copy),
                 LegalHoldTarget::MucArchiveRoom(room),
+            ],
+            request_id: Uuid::new_v4(),
+        },
+    )
+    .await
+    .unwrap();
+    create_legal_hold_in_tx(
+        &mut tx,
+        admin,
+        &CreateLegalHold {
+            id: overlapping_hold,
+            title: "overlapping exact and scoped hold",
+            authority_reference: "case-overlap",
+            reason: "verify one display change per archive row",
+            targets: &[
+                LegalHoldTarget::PersonalArchiveOwner(sender),
+                LegalHoldTarget::MucArchive(muc),
             ],
             request_id: Uuid::new_v4(),
         },
@@ -575,9 +615,11 @@ async fn legal_hold_blocks_sender_retractions_until_release() {
             )
             .await
     };
-    let muc_tombstone = "<message type='groupchat' id='muc-original'><retracted xmlns='urn:xmpp:message-retract:1' id='muc-action'/></message>";
+    let muc_tombstone = format!(
+        "<message type='groupchat' id='muc-original'><retracted xmlns='urn:xmpp:message-retract:1' id='{muc_action}' stamp='2026-01-01T00:00:00Z'><moderated xmlns='urn:xmpp:message-moderate:1' by='{localpart}@muc.local.test/Sender'/><reason>Off topic</reason></retracted></message>"
+    );
     let muc_action_xml = format!(
-        "<message type='groupchat' id='muc-action'><retract xmlns='urn:xmpp:message-retract:1' id='{muc}'/></message>"
+        "<message type='groupchat' id='muc-action'><retract xmlns='urn:xmpp:message-retract:1' id='{muc}'><moderated xmlns='urn:xmpp:message-moderate:1' by='{localpart}@muc.local.test/Sender'/><reason>Off topic</reason></retract></message>"
     );
     let retract_muc = async || {
         retract_muc_message_and_archive_action(
@@ -590,10 +632,10 @@ async fn legal_hold_blocks_sender_retractions_until_release() {
                 actor_scope: &actor_scope,
                 sender_jid: &sender_jid,
                 nick: "Sender",
-                tombstone: muc_tombstone,
+                tombstone: &muc_tombstone,
                 action_stanza: &muc_action_xml,
-                reason: None,
-                kind: MucRetractionKind::Author,
+                reason: Some("Off topic"),
+                kind: MucRetractionKind::Moderator,
                 authority: MucActorAuthority {
                     clustered: false,
                     expected_room_epoch: room_epoch,
@@ -673,7 +715,7 @@ async fn legal_hold_blocks_sender_retractions_until_release() {
         };
         (personal_page, muc_page)
     };
-    let export = async || {
+    let export = async |hold| {
         let mut tx = pool.begin().await.unwrap();
         let page = export_legal_hold_page_in_tx(
             &mut tx,
@@ -691,108 +733,207 @@ async fn legal_hold_blocks_sender_retractions_until_release() {
         page
     };
 
-    for error in [
-        retract_personal().await.unwrap_err(),
-        retract_muc().await.unwrap_err(),
-    ] {
-        let db = error
-            .downcast_ref::<sqlx::Error>()
-            .and_then(sqlx::Error::as_database_error)
-            .expect("held sender retraction should hit the preservation trigger");
-        assert_eq!(db.code().as_deref(), Some("55000"));
-        assert_eq!(
-            db.message(),
-            "data record is protected by an active legal hold"
-        );
-    }
-    let (held_personal, held_muc) = read_pages().await;
-    assert_eq!(held_personal.total, 1);
-    assert_eq!(held_muc.total, 1);
+    let (original_personal, original_room) = read_pages().await;
     assert_eq!(
-        archive_payloads(&held_personal),
-        [(personal, personal_original.as_str())]
-    );
-    assert_eq!(archive_payloads(&held_muc), [(muc, muc_original)]);
-    let held_export = export().await;
-    assert!(held_export.hold.released_at.is_none());
-    assert_eq!(
-        exported_payloads(&held_export),
+        archive_payloads(&original_personal),
         [
-            (
-                "personal_archive",
-                personal,
-                Some(personal_original.as_str())
-            ),
-            ("muc_archive", muc, Some(muc_original)),
+            (personal, personal_original.as_str()),
+            (mix_copy, mix_original.as_str())
         ]
     );
-
-    let mut release = pool.begin().await.unwrap();
-    release_legal_hold_in_tx(
-        &mut release,
-        admin,
-        hold,
-        "fixture authority ended",
-        Uuid::new_v4(),
-    )
-    .await
-    .unwrap();
-    release.commit().await.unwrap();
+    assert_eq!(archive_payloads(&original_room), [(muc, muc_original)]);
     assert_eq!(
         retract_personal().await.unwrap(),
         RetractionOutcome::Applied {
             tombstones: 1,
-            live_claim_id: None,
+            live_claim_id: None
         }
     );
     assert_eq!(retract_muc().await.unwrap(), MucRetractionOutcome::Applied);
-
-    let (released_personal, released_muc) = read_pages().await;
-    assert_eq!(released_personal.total, 2);
-    assert_eq!(released_muc.total, 2);
-    let personal_tombstone = released_personal.rows[0].stanza.as_str();
-    let parsed = roxmltree::Document::parse(personal_tombstone).unwrap();
-    let children: Vec<_> = parsed
-        .root_element()
-        .children()
-        .filter(roxmltree::Node::is_element)
-        .collect();
-    assert_eq!(children.len(), 1);
-    assert_eq!(children[0].tag_name().name(), "retracted");
-    assert_eq!(
-        children[0].tag_name().namespace(),
-        Some("urn:xmpp:message-retract:1")
+    let mut fact = pool.begin().await.unwrap();
+    lock_sources_in_tx(&mut fact, &channel, &[mix_target, mix_action], true)
+        .await
+        .unwrap();
+    assert!(
+        record_locked_in_tx(&mut fact, &channel, mix_target, mix_action, "publisher",)
+            .await
+            .unwrap()
     );
-    assert_eq!(children[0].attribute("id"), Some("personal-action"));
+    fact.commit().await.unwrap();
+
+    let (held_personal, held_muc) = read_pages().await;
+    assert_eq!(held_personal.total, 3);
+    assert_eq!(held_muc.total, 2);
+    assert_eq!(held_personal.first_index, original_personal.first_index);
+    assert_eq!(held_muc.first_index, original_room.first_index);
     assert_eq!(
-        archive_payloads(&released_personal),
+        held_personal.rows[0].created_at,
+        original_personal.rows[0].created_at
+    );
+    assert_eq!(
+        held_personal.rows[1].created_at,
+        original_personal.rows[1].created_at
+    );
+    assert_eq!(
+        held_muc.rows[0].created_at,
+        original_room.rows[0].created_at
+    );
+    for (row, action) in held_personal.rows[..2]
+        .iter()
+        .zip(["personal-action".to_owned(), mix_action.to_string()])
+    {
+        let parsed = roxmltree::Document::parse(&row.stanza).unwrap();
+        let children: Vec<_> = parsed
+            .root_element()
+            .children()
+            .filter(roxmltree::Node::is_element)
+            .collect();
+        assert!(children.iter().all(|node| node.tag_name().name() != "body"));
+        let retracted = children.last().unwrap();
+        assert_eq!(retracted.tag_name().name(), "retracted");
+        assert_eq!(
+            retracted.tag_name().namespace(),
+            Some("urn:xmpp:message-retract:1")
+        );
+        assert_eq!(retracted.attribute("id"), Some(action.as_str()));
+        assert!(!row.encrypted);
+    }
+    assert_eq!(held_personal.rows[0].id, personal);
+    assert_eq!(held_personal.rows[1].id, mix_copy);
+    assert_eq!(held_personal.rows[2].id, personal_action);
+    assert_eq!(held_personal.rows[2].stanza, personal_action_xml);
+    assert_eq!(
+        archive_payloads(&held_muc),
         [
-            (personal, personal_tombstone),
-            (personal_action, personal_action_xml.as_str()),
+            (muc, muc_tombstone.as_str()),
+            (muc_action, muc_action_xml.as_str())
         ]
     );
-    assert_eq!(
-        archive_payloads(&released_muc),
-        [(muc, muc_tombstone), (muc_action, muc_action_xml.as_str())]
-    );
-    assert_eq!(
-        released_personal.rows[0].created_at,
-        held_personal.rows[0].created_at
-    );
-    assert_eq!(released_muc.rows[0].created_at, held_muc.rows[0].created_at);
-    let released_export = export().await;
+    assert!(held_muc.rows[0].muc.as_ref().unwrap().retracted);
+
+    for (table, id, original) in [
+        ("message_archive", personal, personal_original.as_str()),
+        ("message_archive", mix_copy, mix_original.as_str()),
+        ("muc_messages", muc, muc_original),
+    ] {
+        let query = format!("SELECT stanza,encrypted FROM {table} WHERE id=$1");
+        let raw: (String, bool) = sqlx::query_as(sqlx::AssertSqlSafe(query.as_str()))
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(raw, (original.to_owned(), false));
+        for statement in [
+            format!("UPDATE {table} SET stanza='<message/>' WHERE id=$1"),
+            format!("DELETE FROM {table} WHERE id=$1"),
+        ] {
+            let error = sqlx::query(sqlx::AssertSqlSafe(statement.as_str()))
+                .bind(id)
+                .execute(&pool)
+                .await
+                .unwrap_err();
+            let db = error.as_database_error().unwrap();
+            assert_eq!(db.code().as_deref(), Some("55000"));
+            assert_eq!(
+                db.message(),
+                "data record is protected by an active legal hold"
+            );
+        }
+    }
+
+    let expected = [
+        (
+            "personal_archive",
+            personal,
+            Some(personal_original.as_str()),
+        ),
+        ("personal_archive", mix_copy, Some(mix_original.as_str())),
+        ("muc_archive", muc, Some(muc_original)),
+        ("muc_archive", muc_action, Some(muc_action_xml.as_str())),
+    ];
+    let held_export = export(hold).await;
+    assert_eq!(held_export.format, "northstar-legal-hold-chain-v3");
+    assert!(held_export.hold.released_at.is_none());
+    assert_eq!(exported_payloads(&held_export), expected);
+    let annotations = [
+        (
+            personal,
+            "personal_retraction",
+            actor_scope.as_str(),
+            "personal-action".to_owned(),
+            None,
+        ),
+        (
+            mix_copy,
+            "mix_retraction",
+            channel.as_str(),
+            mix_action.to_string(),
+            None,
+        ),
+        (
+            muc,
+            "muc_moderation",
+            actor_scope.as_str(),
+            muc_action.to_string(),
+            Some("Off topic"),
+        ),
+    ];
+    let overlapping_export = export(overlapping_hold).await;
+    for page in [&held_export, &overlapping_export] {
+        assert_eq!(
+            page.records
+                .iter()
+                .filter(|row| row.display_change.is_some())
+                .count(),
+            3
+        );
+        for (id, kind, actor, action, reason) in &annotations {
+            let record = page
+                .records
+                .iter()
+                .find(|row| row.record_id == *id)
+                .unwrap();
+            let change = record.display_change.as_ref().unwrap();
+            assert_eq!(serde_json::to_value(change.kind).unwrap(), *kind);
+            assert_eq!(change.actor.as_str(), *actor);
+            assert_eq!(&change.action_id, action);
+            assert_eq!(change.reason.as_deref(), *reason);
+        }
+    }
+
+    for id in [hold, overlapping_hold] {
+        let mut release = pool.begin().await.unwrap();
+        release_legal_hold_in_tx(
+            &mut release,
+            admin,
+            id,
+            "fixture authority ended",
+            Uuid::new_v4(),
+        )
+        .await
+        .unwrap();
+        release.commit().await.unwrap();
+    }
+    assert_eq!(retract_personal().await.unwrap(), RetractionOutcome::Replay);
+    assert_eq!(retract_muc().await.unwrap(), MucRetractionOutcome::Conflict);
+    assert_eq!(read_pages().await, (held_personal, held_muc));
+    let released_export = export(hold).await;
     assert!(released_export.hold.released_at.is_some());
     assert!(released_export.lease_expires_at.is_none());
-    // The exact target follows the current payload of its original row. The
-    // room scope also includes the newly archived retraction action.
+    assert_eq!(exported_payloads(&released_export), expected);
     assert_eq!(
-        exported_payloads(&released_export),
-        [
-            ("personal_archive", personal, Some(personal_tombstone)),
-            ("muc_archive", muc, Some(muc_tombstone)),
-            ("muc_archive", muc_action, Some(muc_action_xml.as_str())),
-        ]
+        released_export
+            .records
+            .iter()
+            .filter(|row| row.display_change.is_some())
+            .count(),
+        3
     );
+    sqlx::query("DELETE FROM mix_source_retractions WHERE source_by=$1")
+        .bind(&channel)
+        .execute(&pool)
+        .await
+        .unwrap();
 
     sqlx::query("DELETE FROM muc_rooms WHERE id=$1")
         .bind(room)

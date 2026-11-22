@@ -18,6 +18,7 @@ const MAX_MUC_NICK_BYTES: usize = 128;
 const MAX_ORIGIN_ID_BYTES: usize = 128;
 const MAX_RETRACTION_REASON_BYTES: usize = 4096;
 const MUC_CONFIGURATION_WINDOW_SECONDS: i64 = 300;
+pub(super) const LOCK_MUC_ARCHIVE_WRITER: &str = "LOCK TABLE muc_messages IN ROW EXCLUSIVE MODE";
 
 #[derive(Clone, Debug)]
 pub struct MucRoom {

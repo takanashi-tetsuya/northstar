@@ -110,8 +110,28 @@ pub struct HeldRecordExport {
     /// column, so its user-supplied decrypted body is deliberately omitted.
     pub server_visible_payload: Option<String>,
     pub payload_disposition: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_change: Option<HeldArchiveDisplayChange>,
     pub previous_hash: String,
     pub entry_hash: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HeldArchiveDisplayChange {
+    pub kind: HeldArchiveDisplayChangeKind,
+    pub actor: String,
+    pub changed_at: DateTime<Utc>,
+    pub reason: Option<String>,
+    pub action_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeldArchiveDisplayChangeKind {
+    PersonalRetraction,
+    MixRetraction,
+    MucRetraction,
+    MucModeration,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

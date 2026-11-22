@@ -311,7 +311,7 @@ This script has no bootstrap secret. It refuses to continue unless:
 - it is connected to database `xmpp`.
 
 Grant application is ledger-gated. The exact manifest for this release contains
-159 migrations from `0001` through `0160`; `0021` is the sole intentional gap.
+160 migrations from `0001` through `0161`; `0021` is the sole intentional gap.
 Every listed row is identified by version, SQLx description and SHA-384 checksum.
 `bootstrap` accepts only a genuinely empty
 database with no sqlx ledger or application object. `auto` accepts either that
@@ -320,7 +320,7 @@ migrated installation. Both non-empty shapes must match the checked-in manifest
 by exact version, SQLx description and SHA-384 checksum; the intentional `0021`
 gap is part of that set. Missing, unknown, failed, duplicated or modified rows,
 one-sided 0114/0115, and post-0115-without-boundary ledgers fail closed. `exact`
-requires the complete checked-in `0001`-`0160` manifest, not merely the
+requires the complete checked-in `0001`-`0161` manifest, not merely the
 `0114`/`0115` transition boundary. Bootstrap and prepare
 leave runtime, storage, command, and backup with **zero** database, schema, object, type,
 or routine capability. Only post-migration exact reconciliation installs the
@@ -486,8 +486,8 @@ that marker before cleanup. It then:
    and separately proves empty bootstrap plus partial/tampered-ledger rejection;
    demotion;
 4. runs Northstar's real `migrate` command as `northstar_migrator`, comparing
-the successful sqlx ledger with all 159 checked-in migrations from `0001`
-through `0160` (including the intentional numbering gap at `0021`);
+the successful sqlx ledger with all 160 checked-in migrations from `0001`
+through `0161` (including the intentional numbering gap at `0021`);
 5. reapplies the shared `exact` post-migration ACL policy;
 6. removes the function/type override rows and injects missing, unknown, failed,
    and checksum/description-tampered ledger states to prove every audit fails
@@ -583,7 +583,7 @@ role also remains a true superuser by design; isolation depends on keeping its
 secret inside the PostgreSQL/bootstrap trust boundary and using it only for
 explicit maintenance.
 
-The `0001`-`0160` migration SQL and checksums used by both the one-shot migrator
+The `0001`-`0161` migration SQL and checksums used by both the one-shot migrator
 and normal startup verifier are embedded in the release binary. The checked-in
 migration directory remains an auditable source/build input, but replacing
 files beside an installed binary cannot redefine the schema that binary accepts.
@@ -660,3 +660,18 @@ admission. Every successful enqueue locks the row `FOR NO KEY UPDATE` in the
 statement that counts the outbox and advances the generation in the statement
 that inserts the row, so runtime holds exactly `SELECT, UPDATE`; backup reads
 it; storage, command and `PUBLIC` have no access. The migrator owns the table.
+[Migration `0161`](../migrations/0161_archive_display_overlays.sql) adds the
+legal-hold display overlay: `personal_archive_display_changes`,
+`muc_archive_display_changes`, `legal_hold_export_display_cutoffs`, the shared
+`archive_display_change_seq` sequence and a `display_sequence` column on
+`mix_source_retractions`. A retraction or moderation of a held row inserts an
+overlay instead of replacing the stored stanza, and the first page of a hold
+export records its sequence cutoff, so runtime holds exactly `SELECT, INSERT`
+on the three tables and `USAGE, SELECT` on the sequence; backup reads all four;
+storage, command and `PUBLIC` have no access. Runtime never updates or deletes
+an overlay or cutoff: they disappear only through the cascade from their base
+archive row or export lease. The runtime may also execute the admin-checked
+`SECURITY DEFINER` capability `northstar_lock_legal_hold_export(uuid,uuid,bool)`,
+which locks the hold header `FOR UPDATE` and, on the first page of an active
+hold, takes `SHARE` on `mix_source_retractions` without widening the runtime's
+table privileges. The migrator owns every new object.

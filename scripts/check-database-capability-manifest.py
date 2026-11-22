@@ -66,6 +66,7 @@ MIGRATIONS = {
     "0156": ROOT / "migrations/0156_admin_registration_command_capability.sql",
     "0157": ROOT / "migrations/0157_sm_recovery_retention.sql",
     "0158": ROOT / "migrations/0158_sm_cleanup_claim_alias.sql",
+    "0161": ROOT / "migrations/0161_archive_display_overlays.sql",
 }
 
 # A later migration may replace an existing routine without changing its
@@ -130,7 +131,7 @@ REPLACEMENT_HARDENING_SUCCESSORS = {
 
 ROW = re.compile(
     r"^\s*\('([^']+\([^']*\))','(runtime|storage|command|private)',"
-    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131|0144|0145|0146|0149|0150|0151|0153|0154|0155|0156|0157)'\)[,;]\s*$",
+    r"'(baseline-0111|0112|0113|0114|0126|0127|0128|0131|0144|0145|0146|0149|0150|0151|0153|0154|0155|0156|0157|0161)'\)[,;]\s*$",
     re.MULTILINE,
 )
 RELATION_ROW = re.compile(
@@ -948,7 +949,7 @@ if "ON COMMIT DROP" in generator_text:
     fail("migration ledger temp table would disappear in autocommit audit sessions")
 
 manifest_text = read(MANIFEST)
-if "'baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151','0153','0154','0155','0156','0157'" not in manifest_text:
+if "'baseline-0111','0112','0113','0114','0126','0127','0128','0131','0144','0145','0146','0149','0150','0151','0153','0154','0155','0156','0157','0161'" not in manifest_text:
     fail("canonical manifest origin constraint omits a reviewed capability migration")
 rows = ROW.findall(manifest_text)
 if not rows:
@@ -962,7 +963,7 @@ by_workload = {
 }
 by_origin = {
     origin: {signature for signature, _, row_origin in rows if row_origin == origin}
-    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131", "0144", "0145", "0146", "0149", "0150", "0151", "0153", "0154", "0155", "0156", "0157")
+    for origin in ("baseline-0111", "0112", "0113", "0114", "0126", "0127", "0128", "0131", "0144", "0145", "0146", "0149", "0150", "0151", "0153", "0154", "0155", "0156", "0157", "0161")
 }
 require_exact(
     "SM retention helper introduction",
@@ -971,6 +972,13 @@ require_exact(
 )
 if "northstar_session_recovery_retention(uuid,timestamptz)" not in by_workload["runtime"]:
     fail("SM retention classifier must remain in the runtime capability partition")
+require_exact(
+    "legal hold export lock capability introduction",
+    by_origin["0161"],
+    {"northstar_lock_legal_hold_export(uuid,uuid,bool)"},
+)
+if "northstar_lock_legal_hold_export(uuid,uuid,bool)" not in by_workload["runtime"]:
+    fail("legal hold export lock must remain in the runtime capability partition")
 
 if "northstar_session_cleanup_live(int8)" not in by_origin["0114"]:
     fail("SM cleanup callable identity must retain its 0114 introduction origin")
@@ -1093,6 +1101,14 @@ for relation_name, expected_acl in {
 }.items():
     if relation_manifest.get(relation_name, ())[:4] != expected_acl:
         fail(f"least-privilege runtime ACL drifted for {relation_name}")
+
+for relation_name in (
+    "personal_archive_display_changes",
+    "muc_archive_display_changes",
+    "legal_hold_export_display_cutoffs",
+):
+    if relation_manifest.get(relation_name) != (True, True, False, False, "0161"):
+        fail(f"0161 runtime ACL or origin drifted for {relation_name}")
 
 # These checks cover the exact SQL surfaces that enforce the database role
 # boundary.  Migration bodies are included because their SECURITY DEFINER

@@ -1650,6 +1650,36 @@ if printf '%s\n' "$outbox_generation_sql" | grep -Eiq 'DO UPDATE|CREATE (OR REPL
 fi
 echo "migration 0160 seeds a protected singleton without resetting its generation"
 
+display_overlay_migration="migrations/0161_archive_display_overlays.sql"
+display_overlay_sql=$(tr -s '[:space:]' ' ' < "$display_overlay_migration")
+for required_fragment in \
+    'CREATE SEQUENCE archive_display_change_seq AS BIGINT INCREMENT BY 1 START WITH 1 CACHE 1 NO CYCLE;' \
+    'archive_id UUID PRIMARY KEY REFERENCES message_archive(id) ON DELETE CASCADE' \
+    'message_id UUID PRIMARY KEY REFERENCES muc_messages(id) ON DELETE CASCADE' \
+    'export_id UUID PRIMARY KEY REFERENCES governance_export_leases(id) ON DELETE CASCADE' \
+    "change_kind IN ('personal_retraction')" \
+    "change_kind IN ('muc_retraction', 'muc_moderation')" \
+    "ALTER TABLE mix_source_retractions ADD COLUMN display_sequence BIGINT NOT NULL DEFAULT pg_catalog.nextval('archive_display_change_seq'::pg_catalog.regclass)" \
+    'REVOKE ALL ON TABLE personal_archive_display_changes, muc_archive_display_changes, legal_hold_export_display_cutoffs FROM PUBLIC;' \
+    'REVOKE ALL ON SEQUENCE archive_display_change_seq FROM PUBLIC;' \
+    'WHERE id=requested_hold FOR UPDATE;' \
+    'IF first_page AND released IS NULL THEN LOCK TABLE mix_source_retractions IN SHARE MODE;' \
+    'REVOKE ALL ON FUNCTION %I.%s FROM PUBLIC'
+do
+    if ! printf '%s\n' "$display_overlay_sql" | grep -Fq "$required_fragment"; then
+        echo "migration 0161 display overlays are missing: $required_fragment" >&2
+        exit 1
+    fi
+done
+if grep -Eiq '^(ALTER|DROP|TRUNCATE)[[:space:]]+TABLE[[:space:]]+(message_archive|muc_messages)([[:space:]]|;)|^CREATE.*(TRIGGER|PROCEDURE)' "$display_overlay_migration"; then
+    echo "migration 0161 must preserve raw archives and their guard triggers" >&2
+    exit 1
+fi
+if [ "$(grep -Fc "DEFAULT pg_catalog.nextval('archive_display_change_seq'::pg_catalog.regclass)" "$display_overlay_migration")" -ne 3 ]; then
+    echo "migration 0161 must sequence both overlays and MIX source facts" >&2
+    exit 1
+fi
+
 # Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0
 # development line. They are immutable: SQLx will reject changed content in an
 # existing database, and this repository-side manifest catches the same mistake

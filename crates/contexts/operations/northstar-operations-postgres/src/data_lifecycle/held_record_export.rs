@@ -5,11 +5,14 @@ use super::{
     LegalHoldExportCursor, LegalHoldSummary, GOVERNANCE_EXPORT_LEASE_SECONDS,
     MAX_GOVERNANCE_EXPORT_ROWS,
 };
-use anyhow::Context;
+use anyhow::{Context, Result};
+use northstar_operations_application::governance::{
+    HeldArchiveDisplayChange, HeldArchiveDisplayChangeKind,
+};
 use northstar_time::{DateTime, Duration, Utc};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use sqlx::{Postgres, Row, Transaction};
+use sqlx::{postgres::PgRow, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 #[derive(Serialize)]
@@ -23,14 +26,55 @@ struct HeldRecordHashPayload<'a> {
     payload_disposition: &'a str,
 }
 
+#[derive(Serialize)]
+struct HeldRecordHashPayloadV3<'a> {
+    #[serde(flatten)]
+    original: HeldRecordHashPayload<'a>,
+    display_change: Option<&'a HeldArchiveDisplayChange>,
+}
+
+#[derive(Clone, Copy)]
+enum ExportMode {
+    V2,
+    V3 { max_display_sequence: Option<i64> },
+}
+
+impl ExportMode {
+    fn format(self) -> &'static str {
+        match self {
+            Self::V2 => "northstar-legal-hold-chain-v2",
+            Self::V3 { .. } => "northstar-legal-hold-chain-v3",
+        }
+    }
+
+    fn canonical_row<'a>(
+        self,
+        original: HeldRecordHashPayload<'a>,
+        display_change: Option<&'a HeldArchiveDisplayChange>,
+    ) -> Result<Vec<u8>> {
+        match self {
+            Self::V2 => serde_json::to_vec(&original),
+            Self::V3 { .. } => serde_json::to_vec(&HeldRecordHashPayloadV3 {
+                original,
+                display_change,
+            }),
+        }
+        .context("could not canonicalize legal-hold export row")
+    }
+}
+
 fn legal_hold_chain_genesis(
+    mode: ExportMode,
     export_id: Uuid,
     actor_id: Uuid,
     hold_id: Uuid,
     snapshot_at: DateTime<Utc>,
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(b"northstar/legal-hold-export/v2\0");
+    hasher.update(match mode {
+        ExportMode::V2 => b"northstar/legal-hold-export/v2\0",
+        ExportMode::V3 { .. } => b"northstar/legal-hold-export/v3\0",
+    });
     hasher.update(export_id.as_bytes());
     hasher.update(actor_id.as_bytes());
     hasher.update(hold_id.as_bytes());
@@ -38,7 +82,35 @@ fn legal_hold_chain_genesis(
     hasher.finalize().into()
 }
 
-async fn locked_hold_summary(
+fn decode_display_change(row: &PgRow) -> Result<Option<HeldArchiveDisplayChange>> {
+    let kind: Option<String> = row.try_get("display_kind")?;
+    let actor: Option<String> = row.try_get("display_actor")?;
+    let changed_at: Option<DateTime<Utc>> = row.try_get("display_changed_at")?;
+    let reason: Option<String> = row.try_get("display_reason")?;
+    let action_id: Option<String> = row.try_get("display_action_id")?;
+    match (kind.as_deref(), actor, changed_at, action_id) {
+        (None, None, None, None) if reason.is_none() => Ok(None),
+        (Some(kind), Some(actor), Some(changed_at), Some(action_id)) => {
+            let kind = match kind {
+                "personal_retraction" => HeldArchiveDisplayChangeKind::PersonalRetraction,
+                "mix_retraction" => HeldArchiveDisplayChangeKind::MixRetraction,
+                "muc_retraction" => HeldArchiveDisplayChangeKind::MucRetraction,
+                "muc_moderation" => HeldArchiveDisplayChangeKind::MucModeration,
+                _ => anyhow::bail!("unknown held archive display change kind"),
+            };
+            Ok(Some(HeldArchiveDisplayChange {
+                kind,
+                actor,
+                changed_at,
+                reason,
+                action_id,
+            }))
+        }
+        _ => anyhow::bail!("incomplete held archive display change"),
+    }
+}
+
+async fn hold_summary(
     tx: &mut Transaction<'_, Postgres>,
     hold_id: Uuid,
 ) -> std::result::Result<LegalHoldSummary, LegalHoldError> {
@@ -53,7 +125,7 @@ async fn locked_hold_summary(
                     UNION ALL SELECT evidence_id FROM legal_hold_report_evidence WHERE hold_id=hold.id
                     UNION ALL SELECT subject_id FROM legal_hold_scopes WHERE hold_id=hold.id
                 ) targets)::BIGINT AS target_count
-           FROM legal_holds hold WHERE hold.id=$1 FOR UPDATE OF hold",
+           FROM legal_holds hold WHERE hold.id=$1",
     )
     .bind(hold_id)
     .fetch_optional(&mut **tx)
@@ -81,14 +153,16 @@ WITH held_records AS (
            link.record_created_at,archive.stanza AS payload,
            CASE WHEN archive.id IS NULL THEN 'released_record_expired'
                 WHEN link.encrypted THEN 'ciphertext'
-                ELSE 'server_plaintext' END::TEXT AS disposition
+                ELSE 'server_plaintext' END::TEXT AS disposition,
+           archive.source_by,archive.source_stanza_id
       FROM legal_hold_personal_archives link
       LEFT JOIN message_archive archive ON archive.id=link.archive_id
      WHERE link.hold_id=$1 AND link.record_created_at <= $2
     UNION ALL
     SELECT 1,'personal_archive',archive.id,archive.owner_id,archive.encrypted,
            archive.created_at,archive.stanza,
-           CASE WHEN archive.encrypted THEN 'ciphertext' ELSE 'server_plaintext' END
+           CASE WHEN archive.encrypted THEN 'ciphertext' ELSE 'server_plaintext' END,
+           archive.source_by,archive.source_stanza_id
       FROM legal_hold_scopes scope_link
       JOIN message_archive archive ON archive.owner_id=scope_link.subject_id
      WHERE scope_link.hold_id=$1 AND scope_link.scope_type='personal_archive_owner'
@@ -98,14 +172,14 @@ WITH held_records AS (
            link.record_created_at,archive.stanza,
            CASE WHEN archive.id IS NULL THEN 'released_record_expired'
                 WHEN link.encrypted THEN 'ciphertext'
-                ELSE 'server_plaintext' END
+                ELSE 'server_plaintext' END,NULL,NULL
       FROM legal_hold_muc_archives link
       LEFT JOIN muc_messages archive ON archive.id=link.message_id
      WHERE link.hold_id=$1 AND link.record_created_at <= $2
     UNION ALL
     SELECT 2,'muc_archive',archive.id,archive.room_id,archive.encrypted,
            archive.created_at,archive.stanza,
-           CASE WHEN archive.encrypted THEN 'ciphertext' ELSE 'server_plaintext' END
+           CASE WHEN archive.encrypted THEN 'ciphertext' ELSE 'server_plaintext' END,NULL,NULL
       FROM legal_hold_scopes scope_link
       JOIN muc_messages archive ON archive.room_id=scope_link.subject_id
      WHERE scope_link.hold_id=$1 AND scope_link.scope_type='muc_archive_room'
@@ -116,7 +190,7 @@ WITH held_records AS (
            CASE WHEN COALESCE(message.id,snapshot.message_id) IS NULL
                      THEN 'released_record_expired'
                 WHEN link.encrypted THEN 'ciphertext'
-                ELSE 'server_plaintext' END
+                ELSE 'server_plaintext' END,NULL,NULL
       FROM legal_hold_offline_messages link
       LEFT JOIN offline_messages message ON message.id=link.message_id
       LEFT JOIN legal_hold_offline_snapshots snapshot
@@ -125,13 +199,13 @@ WITH held_records AS (
     UNION ALL
     SELECT 3,'offline_message',snapshot.message_id,snapshot.recipient_id,
            snapshot.encrypted,snapshot.record_created_at,snapshot.stanza,
-           CASE WHEN snapshot.encrypted THEN 'ciphertext' ELSE 'server_plaintext' END
+           CASE WHEN snapshot.encrypted THEN 'ciphertext' ELSE 'server_plaintext' END,NULL,NULL
       FROM legal_hold_offline_snapshots snapshot
      WHERE snapshot.hold_id=$1 AND snapshot.record_created_at <= $2
     UNION ALL
     SELECT 3,'offline_message',message.id,message.recipient_id,message.encrypted,
            message.created_at,message.stanza,
-           CASE WHEN message.encrypted THEN 'ciphertext' ELSE 'server_plaintext' END
+           CASE WHEN message.encrypted THEN 'ciphertext' ELSE 'server_plaintext' END,NULL,NULL
       FROM legal_hold_scopes scope_link
       JOIN offline_messages message ON message.recipient_id=scope_link.subject_id
      WHERE scope_link.hold_id=$1 AND scope_link.scope_type='offline_message_recipient'
@@ -142,7 +216,7 @@ WITH held_records AS (
            CASE WHEN evidence.encrypted THEN NULL ELSE evidence.body_text END,
            CASE WHEN evidence.id IS NULL THEN 'released_record_expired'
                 WHEN evidence.encrypted THEN 'encrypted_evidence_plaintext_omitted'
-                ELSE 'server_plaintext' END
+                ELSE 'server_plaintext' END,NULL,NULL
       FROM legal_hold_report_evidence link
       LEFT JOIN abuse_report_evidence evidence ON evidence.id=link.evidence_id
      WHERE link.hold_id=$1 AND link.record_created_at <= $2
@@ -151,7 +225,7 @@ WITH held_records AS (
            evidence.created_at,
            CASE WHEN evidence.encrypted THEN NULL ELSE evidence.body_text END,
            CASE WHEN evidence.encrypted THEN 'encrypted_evidence_plaintext_omitted'
-                ELSE 'server_plaintext' END
+                ELSE 'server_plaintext' END,NULL,NULL
       FROM legal_hold_scopes scope_link
       JOIN abuse_report_evidence evidence ON evidence.report_id=scope_link.subject_id
      WHERE scope_link.hold_id=$1 AND scope_link.scope_type='report_evidence_report'
@@ -161,8 +235,24 @@ WITH held_records AS (
      ORDER BY resource_order,record_id,payload NULLS LAST,disposition
 )
 SELECT resource_order,resource_type,record_id,subject_id,encrypted,
-       record_created_at,payload,disposition
-  FROM deduplicated
+       record_created_at,payload,disposition,
+       CASE WHEN f.action_stanza_id IS NOT NULL THEN 'mix_retraction'
+            ELSE COALESCE(p.change_kind,m.change_kind) END AS display_kind,
+       COALESCE(f.source_by,p.actor_bare_jid,m.actor_bare_jid) AS display_actor,
+       COALESCE(f.retracted_at,p.changed_at,m.changed_at) AS display_changed_at,
+       m.reason AS display_reason,
+       COALESCE(f.action_stanza_id::TEXT,p.action_id,m.action_id::TEXT) AS display_action_id
+  FROM deduplicated r
+  LEFT JOIN mix_source_retractions f
+    ON $7::BOOLEAN AND r.resource_order=1 AND f.first_for_target
+   AND f.source_by=r.source_by AND f.target_stanza_id=r.source_stanza_id
+   AND ($8::BIGINT IS NULL OR f.display_sequence <= $8)
+  LEFT JOIN personal_archive_display_changes p
+    ON $7::BOOLEAN AND r.resource_order=1 AND p.archive_id=r.record_id
+   AND ($8::BIGINT IS NULL OR p.display_sequence <= $8)
+  LEFT JOIN muc_archive_display_changes m
+    ON $7::BOOLEAN AND r.resource_order=2 AND m.message_id=r.record_id
+   AND ($8::BIGINT IS NULL OR m.display_sequence <= $8)
  WHERE $3::BIGINT IS NULL
     OR (resource_order,record_created_at,record_id) > ($3,$4,$5)
  ORDER BY resource_order,record_created_at,record_id
@@ -170,7 +260,7 @@ SELECT resource_order,resource_type,record_id,subject_id,encrypted,
 "#;
 
 /// Export one immutable page.  The initial active-hold page briefly locks all
-/// four source tables, chooses a database-time cutoff, and creates a
+/// source relations, chooses database-time and display cutoffs, and creates a
 /// non-renewable lease.  Hold release and payload cleanup are then fenced until
 /// the final page completes or the lease/cursor expires.
 pub async fn export_legal_hold_page_in_tx(
@@ -184,7 +274,19 @@ pub async fn export_legal_hold_page_in_tx(
 ) -> std::result::Result<LegalHoldExport, LegalHoldError> {
     let max_rows = max_rows.clamp(1, MAX_GOVERNANCE_EXPORT_ROWS);
     require_admin(transaction, actor_id).await?;
-    let hold = locked_hold_summary(transaction, hold_id).await?;
+    // The capability locks the header and takes the first-page fact barrier
+    // before any archive writer barrier. It does not grant raw DML rights.
+    let locked: bool = sqlx::query_scalar("SELECT northstar_lock_legal_hold_export($1,$2,$3)")
+        .bind(actor_id)
+        .bind(hold_id)
+        .bind(continuation.is_none())
+        .fetch_one(&mut **transaction)
+        .await
+        .map_err(|error| LegalHoldError::Internal(error.into()))?;
+    if !locked {
+        return Err(LegalHoldError::NotFound);
+    }
+    let hold = hold_summary(transaction, hold_id).await?;
     let active = hold.released_at.is_none();
 
     let (
@@ -194,6 +296,7 @@ pub async fn export_legal_hold_page_in_tx(
         after_order,
         after_created_at,
         after_record_id,
+        mode,
         mut previous,
     ) = if let Some(cursor) = continuation {
         if !active {
@@ -204,9 +307,11 @@ pub async fn export_legal_hold_page_in_tx(
             .await
             .map_err(|error| LegalHoldError::Internal(error.into()))?;
         let lease = sqlx::query(
-            "SELECT actor_id,hold_id,snapshot_at,expires_at,completed_at
-               FROM governance_export_leases
-              WHERE id=$1 AND export_kind='legal_hold' FOR UPDATE",
+            "SELECT l.actor_id,l.hold_id,l.snapshot_at,l.expires_at,l.completed_at,
+                    (SELECT c.max_display_sequence FROM legal_hold_export_display_cutoffs c
+                     WHERE c.export_id=l.id) AS max_display_sequence
+               FROM governance_export_leases l
+              WHERE l.id=$1 AND l.export_kind='legal_hold' FOR UPDATE OF l",
         )
         .bind(cursor.export_id)
         .fetch_optional(&mut **transaction)
@@ -226,6 +331,13 @@ pub async fn export_legal_hold_page_in_tx(
         {
             return Err(LegalHoldError::InvalidCursor);
         }
+        let max_display_sequence = lease.get::<Option<i64>, _>("max_display_sequence");
+        let mode = match max_display_sequence {
+            Some(_) => ExportMode::V3 {
+                max_display_sequence,
+            },
+            None => ExportMode::V2,
+        };
         (
             cursor.export_id,
             lease_snapshot,
@@ -233,10 +345,11 @@ pub async fn export_legal_hold_page_in_tx(
             Some(cursor.after_resource_order),
             Some(cursor.after_created_at),
             Some(cursor.after_record_id),
+            mode,
             cursor.chain_root,
         )
     } else {
-        if active {
+        let max_display_sequence = if active {
             // This barrier closes the "backdated uncommitted row" window:
             // every pre-cutoff writer commits before snapshot_at and later
             // writers receive a later database timestamp.
@@ -247,14 +360,28 @@ pub async fn export_legal_hold_page_in_tx(
             .execute(&mut **transaction)
             .await
             .map_err(|error| LegalHoldError::Internal(error.into()))?;
-        }
+            Some(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT CASE WHEN is_called THEN last_value ELSE 0 END
+                     FROM archive_display_change_seq",
+                )
+                .fetch_one(&mut **transaction)
+                .await
+                .map_err(|error| LegalHoldError::Internal(error.into()))?,
+            )
+        } else {
+            None
+        };
+        let mode = ExportMode::V3 {
+            max_display_sequence,
+        };
         let snapshot_at: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
             .fetch_one(&mut **transaction)
             .await
             .map_err(|error| LegalHoldError::Internal(error.into()))?;
         let expires_at =
             active.then(|| snapshot_at + Duration::seconds(GOVERNANCE_EXPORT_LEASE_SECONDS));
-        if let Some(expires_at) = expires_at {
+        if let (Some(expires_at), Some(sequence)) = (expires_at, max_display_sequence) {
             sqlx::query(
                 "INSERT INTO governance_export_leases(
                      id,export_kind,actor_id,hold_id,snapshot_at,expires_at
@@ -268,6 +395,15 @@ pub async fn export_legal_hold_page_in_tx(
             .execute(&mut **transaction)
             .await
             .map_err(|error| LegalHoldError::Internal(error.into()))?;
+            sqlx::query(
+                "INSERT INTO legal_hold_export_display_cutoffs (export_id,max_display_sequence)
+                 VALUES($1,$2)",
+            )
+            .bind(initial_export_id)
+            .bind(sequence)
+            .execute(&mut **transaction)
+            .await
+            .map_err(|error| LegalHoldError::Internal(error.into()))?;
         }
         (
             initial_export_id,
@@ -276,10 +412,17 @@ pub async fn export_legal_hold_page_in_tx(
             None,
             None,
             None,
-            legal_hold_chain_genesis(initial_export_id, actor_id, hold_id, snapshot_at),
+            mode,
+            legal_hold_chain_genesis(mode, initial_export_id, actor_id, hold_id, snapshot_at),
         )
     };
     let chain_start = previous;
+    let (include_display, max_display_sequence) = match mode {
+        ExportMode::V2 => (false, None),
+        ExportMode::V3 {
+            max_display_sequence,
+        } => (true, max_display_sequence),
+    };
     let rows = sqlx::query(HELD_RECORD_PAGE_SQL)
         .bind(hold_id)
         .bind(snapshot_at)
@@ -287,6 +430,8 @@ pub async fn export_legal_hold_page_in_tx(
         .bind(after_created_at)
         .bind(after_record_id)
         .bind(max_rows + 1)
+        .bind(include_display)
+        .bind(max_display_sequence)
         .fetch_all(&mut **transaction)
         .await
         .map_err(|error| LegalHoldError::Internal(error.into()))?;
@@ -307,7 +452,8 @@ pub async fn export_legal_hold_page_in_tx(
         let record_created_at = row.get("record_created_at");
         let payload: Option<String> = row.get("payload");
         let disposition: String = row.get("disposition");
-        let canonical = serde_json::to_vec(&HeldRecordHashPayload {
+        let display_change = decode_display_change(&row).map_err(LegalHoldError::Internal)?;
+        let original = HeldRecordHashPayload {
             resource_type: &resource_type,
             record_id,
             subject_id,
@@ -315,9 +461,10 @@ pub async fn export_legal_hold_page_in_tx(
             record_created_at,
             server_visible_payload: payload.as_deref(),
             payload_disposition: &disposition,
-        })
-        .context("could not canonicalize legal-hold export row")
-        .map_err(LegalHoldError::Internal)?;
+        };
+        let canonical = mode
+            .canonical_row(original, display_change.as_ref())
+            .map_err(LegalHoldError::Internal)?;
         let next_hash = chain_next(previous, &canonical);
         records.push(HeldRecordExport {
             resource_type,
@@ -327,6 +474,7 @@ pub async fn export_legal_hold_page_in_tx(
             record_created_at,
             server_visible_payload: payload,
             payload_disposition: disposition,
+            display_change,
             previous_hash: hex(&previous),
             entry_hash: hex(&next_hash),
         });
@@ -379,7 +527,7 @@ pub async fn export_legal_hold_page_in_tx(
         None
     };
     Ok(LegalHoldExport {
-        format: "northstar-legal-hold-chain-v2",
+        format: mode.format(),
         export_id,
         exported_at: sqlx::query_scalar("SELECT clock_timestamp()")
             .fetch_one(&mut **transaction)
@@ -396,3 +544,6 @@ pub async fn export_legal_hold_page_in_tx(
         next,
     })
 }
+
+#[cfg(test)]
+mod tests;

@@ -42,9 +42,18 @@ impl MamArchiveSource {
             // personal archive's optional client id. Expose no client id
             // through the shared row type instead of conflating the two.
             Self::Muc(_) => {
-                "id, sender_jid AS peer_jid, stanza, encrypted, NULL::TEXT AS stanza_id, created_at, \
-                 nick AS muc_nick, message_kind AS muc_kind, (retracted_at IS NOT NULL) AS muc_retracted"
+                "id, sender_jid AS peer_jid, COALESCE(d.display_stanza,muc_messages.stanza) AS stanza, \
+                 CASE WHEN d.message_id IS NULL THEN encrypted ELSE FALSE END AS encrypted, \
+                 NULL::TEXT AS stanza_id, created_at, nick AS muc_nick, message_kind AS muc_kind, \
+                 (retracted_at IS NOT NULL OR d.message_id IS NOT NULL) AS muc_retracted"
             }
+        }
+    }
+
+    fn payload_from(self) -> &'static str {
+        match self {
+            Self::User(_) => self.table(),
+            Self::Muc(_) => "muc_messages LEFT JOIN muc_archive_display_changes d ON d.message_id=muc_messages.id",
         }
     }
 
@@ -316,7 +325,7 @@ pub async fn mam_archive_page_for_in_transaction(
     if personal {
         page_builder.push(", source_by, source_stanza_id");
     }
-    page_builder.push(" FROM ").push(source.table());
+    page_builder.push(" FROM ").push(source.payload_from());
     push_mam_scope(
         &mut page_builder,
         source,
@@ -493,5 +502,76 @@ pub fn archive_from_row(source: MamArchiveSource, row: &sqlx::postgres::PgRow) -
                 retracted: row.get("muc_retracted"),
             }),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_projection_keeps_base_membership_and_encryption_semantics() {
+        use northstar_time::DateTime;
+
+        let personal = MamArchiveSource::User(Uuid::nil());
+        let muc = MamArchiveSource::Muc(Uuid::nil());
+        assert_eq!(personal.table(), "message_archive");
+        assert_eq!(personal.payload_from(), personal.table());
+        assert!(PERSONAL_DISPLAY_JOIN.contains("fact.first_for_target"));
+        assert!(PERSONAL_DISPLAY_JOIN.contains("d ON d.archive_id=page.id"));
+        assert!(PERSONAL_DISPLAY_SELECT.contains("d.display_stanza"));
+        assert_eq!(muc.table(), "muc_messages");
+        assert!(muc
+            .payload_from()
+            .contains("d ON d.message_id=muc_messages.id"));
+        assert!(muc
+            .select_columns()
+            .contains("COALESCE(d.display_stanza,muc_messages.stanza)"));
+        assert!(muc
+            .select_columns()
+            .contains("CASE WHEN d.message_id IS NULL THEN encrypted ELSE FALSE END"));
+        assert!(muc
+            .select_columns()
+            .contains("retracted_at IS NOT NULL OR d.message_id IS NOT NULL"));
+        let anchor = (DateTime::UNIX_EPOCH, Uuid::from_u128(1));
+        let query = MamArchiveQuery {
+            with_jid: Some("peer@example.test".into()),
+            start: None,
+            end: None,
+            before_id: None,
+            after_id: None,
+            ids: Vec::new(),
+            page: MamRsmPage::First,
+            max: 10,
+        };
+        for source in [personal, muc] {
+            let blocked = [MamBlockedPattern::Full(
+                "blocked@example.test/Resource".into(),
+            )];
+            let mut anchor_lookup = QueryBuilder::<Postgres>::new("SELECT id, created_at FROM ");
+            anchor_lookup.push(source.table());
+            push_mam_archive_base(&mut anchor_lookup, source, &blocked);
+            let mut count = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM ");
+            count.push(source.table());
+            push_mam_scope(
+                &mut count,
+                source,
+                &query,
+                &blocked,
+                MamQueryBounds {
+                    after: Some(anchor),
+                    before: None,
+                },
+            );
+            assert!(count.sql().as_str().contains("(created_at, id) >"));
+            for statement in [anchor_lookup.sql(), count.sql()] {
+                let sql = statement.as_str();
+                assert!(sql.contains(source.owner_column()));
+                assert!(sql.contains(source.visible_full_identity()));
+                assert!(!sql.contains("JOIN"));
+                assert!(!sql.contains("stanza"));
+                assert!(!sql.contains("encrypted"));
+            }
+        }
     }
 }

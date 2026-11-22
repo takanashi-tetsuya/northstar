@@ -326,6 +326,11 @@ pub async fn set_cluster_muc_subject(
         tx.commit().await?;
         return Ok(ClusterMucTransitionOutcome::Replay);
     }
+    if archive.eligible_stanza.is_some() {
+        sqlx::query(crate::muc::LOCK_MUC_ARCHIVE_WRITER)
+            .execute(&mut *tx)
+            .await?;
+    }
     let Some(room) = lock_room(&mut tx, mutation.room_id).await? else {
         tx.rollback().await?;
         return Ok(ClusterMucTransitionOutcome::Stale);

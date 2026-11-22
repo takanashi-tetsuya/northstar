@@ -242,6 +242,7 @@ pub async fn attest_runtime_role(pool: &PgPool) -> Result<()> {
                ('northstar_session_refresh_live(uuid[],int8)'),
                ('northstar_session_cleanup_live(int8)'),
                ('northstar_session_recovery_retention(uuid,timestamptz)'),
+               ('northstar_lock_legal_hold_export(uuid,uuid,bool)'),
                ('northstar_session_extend_live(uuid,int8)'),
                ('northstar_sm_create(uuid,bytea,uuid,int8,text,text,text,uuid,int8,int8,int8,int8,bool,bool,int2,bool,bool,text,bool,inet,uuid,jsonb,jsonb,text,int8,int8)'),
                ('northstar_sm_update_snapshot(uuid,uuid,int8,int8,int8,bool,bool,int2,bool,bool,text,bool,inet,uuid,jsonb,jsonb,text,bool,int8,int8)'),

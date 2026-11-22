@@ -29,6 +29,11 @@ fn embedded_capability_manifest_is_complete_and_partitioned() {
         .position(|signature| signature == "northstar_session_recovery_retention(uuid,timestamptz)")
         .expect("SM retention capability is absent");
     assert_eq!(workloads[retention], "runtime");
+    let hold_export_lock = signatures
+        .iter()
+        .position(|signature| signature == "northstar_lock_legal_hold_export(uuid,uuid,bool)")
+        .expect("legal-hold export lock capability is absent");
+    assert_eq!(workloads[hold_export_lock], "runtime");
     assert!(signatures
         .iter()
         .all(|signature| signature.contains('(') && signature.ends_with(')')));
@@ -74,6 +79,27 @@ fn embedded_runtime_relation_manifest_is_complete_and_exact() {
             "mix_pam_operation_capacity",
             [true, false, false, false],
             "0128",
+        ),
+        ("mix_source_retractions", [true, true, false, false], "0159"),
+        (
+            "s2s_outbox_enqueue_generation",
+            [true, false, true, false],
+            "0160",
+        ),
+        (
+            "personal_archive_display_changes",
+            [true, true, false, false],
+            "0161",
+        ),
+        (
+            "muc_archive_display_changes",
+            [true, true, false, false],
+            "0161",
+        ),
+        (
+            "legal_hold_export_display_cutoffs",
+            [true, true, false, false],
+            "0161",
         ),
     ] {
         let index = manifest
@@ -145,8 +171,8 @@ fn embedded_migration_ledger_is_complete_and_preserves_intentional_gaps() {
     // The ledger has one intentional historical gap (0021).  Keep this
     // assertion exact so adding a migration requires reviewing both the
     // embedded capability manifest and its attestation expectation.
-    assert_eq!(manifest.versions.last(), Some(&160));
-    assert_eq!(manifest.versions.len(), 159);
+    assert_eq!(manifest.versions.last(), Some(&161));
+    assert_eq!(manifest.versions.len(), 160);
     assert!(!manifest.versions.contains(&21));
     assert!(manifest
         .checksum_hex

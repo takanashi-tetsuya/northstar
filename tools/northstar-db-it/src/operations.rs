@@ -11,6 +11,7 @@ mod api_queries;
 mod control_conformance;
 mod data_lifecycle;
 mod governance_repository;
+mod hold_display_races;
 mod invitation_admin_repository;
 mod operation_journal_worker_repository;
 mod operation_muc_destroy_repository;

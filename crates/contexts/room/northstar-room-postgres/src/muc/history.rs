@@ -88,8 +88,8 @@ pub enum MucAuthorityCheck {
 
 /// Acquire the room-scoped affiliation namespace.
 ///
-/// This is the first database lock in every MUC transaction that participates
-/// in namespace 29. Callers lock `muc_rooms` next and, whenever both exact
+/// Archive writers take the archive relation fence first. Callers take this
+/// namespace before locking `muc_rooms` and, whenever both exact
 /// occupancy and affiliation rows are needed, lock occupancy before
 /// affiliation. They must never acquire this lock after a room, occupancy or
 /// affiliation row. Cluster writers intentionally do not use namespace 29 and
@@ -358,6 +358,11 @@ pub async fn admit_muc_discussion_inner(
         transaction.rollback().await?;
         return Ok(MucDiscussionAdmission::Unauthorized);
     }
+    if message.archive_eligible {
+        sqlx::query(LOCK_MUC_ARCHIVE_WRITER)
+            .execute(&mut *transaction)
+            .await?;
+    }
     let authority =
         lock_muc_actor_authority(&mut transaction, message.room_id, &message.authority).await?;
     let archived = match authority {
@@ -526,6 +531,11 @@ pub async fn set_local_muc_subject(
     }
 
     let mut transaction = pool.begin().await?;
+    if archive_stanza.is_some() {
+        sqlx::query(LOCK_MUC_ARCHIVE_WRITER)
+            .execute(&mut *transaction)
+            .await?;
+    }
     let locked =
         match lock_muc_actor_authority(&mut transaction, mutation.room_id, &authority).await? {
             MucAuthorityCheck::Authorized(actor) => actor,
@@ -594,6 +604,24 @@ pub async fn retract_muc_message_and_archive_action(
     pool: &PgPool,
     mutation: MucRetractionMutation<'_>,
 ) -> Result<MucRetractionOutcome> {
+    match retract_muc_message_once(pool, &mutation).await {
+        Err(error)
+            if error
+                .downcast_ref::<sqlx::Error>()
+                .and_then(sqlx::Error::as_database_error)
+                .and_then(|database| database.code())
+                .is_some_and(|code| matches!(code.as_ref(), "40P01" | "40001")) =>
+        {
+            retract_muc_message_once(pool, &mutation).await
+        }
+        result => result,
+    }
+}
+
+async fn retract_muc_message_once(
+    pool: &PgPool,
+    mutation: &MucRetractionMutation<'_>,
+) -> Result<MucRetractionOutcome> {
     let actor_scope = canonical_history_actor(mutation.actor_scope)?;
     let sender_jid = canonical_history_sender(mutation.sender_jid)?;
     validate_history_payload(mutation.nick, mutation.tombstone)?;
@@ -610,6 +638,9 @@ pub async fn retract_muc_message_and_archive_action(
     };
 
     let mut transaction = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        .execute(&mut *transaction)
+        .await?;
     // The retraction race fixture must stop before the authority snapshot.
     // A concurrent affiliation change can then commit, after which this
     // transaction takes the normal namespace/row locks and observes the
@@ -623,6 +654,11 @@ pub async fn retract_muc_message_and_archive_action(
         transaction.rollback().await?;
         return Ok(MucRetractionOutcome::Unauthorized);
     }
+    // Scoped holds take SHARE before inspecting the room subject. Take our
+    // compatible writer fence before the namespace and room locks.
+    sqlx::query(LOCK_MUC_ARCHIVE_WRITER)
+        .execute(&mut *transaction)
+        .await?;
     let actor =
         match lock_muc_actor_authority(&mut transaction, mutation.room_id, &mutation.authority)
             .await?
@@ -645,10 +681,34 @@ pub async fn retract_muc_message_and_archive_action(
         return Ok(MucRetractionOutcome::Unauthorized);
     }
 
-    let target = sqlx::query(
-        "SELECT stanza,actor_scope FROM muc_messages
+    let target = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM muc_messages
           WHERE room_id=$1 AND id=$2 AND message_kind='discussion'
             AND retracted_at IS NULL FOR UPDATE",
+    )
+    .bind(mutation.room_id)
+    .bind(mutation.target_id)
+    .fetch_optional(&mut *transaction)
+    .await?;
+    if target.is_none() {
+        transaction.rollback().await?;
+        return Ok(MucRetractionOutcome::Conflict);
+    }
+    let target = sqlx::query(
+        "SELECT a.stanza,a.actor_scope,
+                (EXISTS (
+                    SELECT 1 FROM legal_hold_muc_archives l
+                    JOIN legal_holds h ON h.id=l.hold_id
+                    WHERE l.message_id=a.id AND h.released_at IS NULL
+                ) OR EXISTS (
+                    SELECT 1 FROM legal_hold_scopes s
+                    JOIN legal_holds h ON h.id=s.hold_id
+                    WHERE s.scope_type='muc_archive_room'
+                      AND s.subject_id=a.room_id AND h.released_at IS NULL
+                )) AS held
+         FROM muc_messages a
+         WHERE a.room_id=$1 AND a.id=$2
+           AND NOT EXISTS (SELECT 1 FROM muc_archive_display_changes d WHERE d.message_id=a.id)",
     )
     .bind(mutation.room_id)
     .bind(mutation.target_id)
@@ -671,27 +731,47 @@ pub async fn retract_muc_message_and_archive_action(
         });
     }
 
-    let changed = sqlx::query(
-        "UPDATE muc_messages
-         SET stanza=$4, encrypted=FALSE, retracted_at=NOW(), retracted_by=$5,
-             retraction_reason=$6, retraction_action_id=$7
-         WHERE room_id=$1 AND id=$2 AND stanza=$3
-           AND message_kind='discussion' AND retracted_at IS NULL",
-    )
-    .bind(mutation.room_id)
-    .bind(mutation.target_id)
-    .bind(mutation.expected_stanza)
-    .bind(mutation.tombstone)
-    .bind(&actor_scope)
-    .bind(mutation.reason)
-    .bind(mutation.action_id)
-    .execute(&mut *transaction)
-    .await?
-    .rows_affected()
-        == 1;
-    if !changed {
-        transaction.rollback().await?;
-        return Ok(MucRetractionOutcome::Conflict);
+    if target.get::<bool, _>("held") {
+        let change_kind = match mutation.kind {
+            MucRetractionKind::Author => "muc_retraction",
+            MucRetractionKind::Moderator => "muc_moderation",
+        };
+        sqlx::query(
+            "INSERT INTO muc_archive_display_changes
+                (message_id,display_stanza,change_kind,actor_bare_jid,action_id,reason)
+             VALUES ($1,$2,$3,$4,$5,$6)",
+        )
+        .bind(mutation.target_id)
+        .bind(mutation.tombstone)
+        .bind(change_kind)
+        .bind(&actor_scope)
+        .bind(mutation.action_id)
+        .bind(mutation.reason)
+        .execute(&mut *transaction)
+        .await?;
+    } else {
+        let changed = sqlx::query(
+            "UPDATE muc_messages
+             SET stanza=$4, encrypted=FALSE, retracted_at=NOW(), retracted_by=$5,
+                 retraction_reason=$6, retraction_action_id=$7
+             WHERE room_id=$1 AND id=$2 AND stanza=$3
+               AND message_kind='discussion' AND retracted_at IS NULL",
+        )
+        .bind(mutation.room_id)
+        .bind(mutation.target_id)
+        .bind(mutation.expected_stanza)
+        .bind(mutation.tombstone)
+        .bind(&actor_scope)
+        .bind(mutation.reason)
+        .bind(mutation.action_id)
+        .execute(&mut *transaction)
+        .await?
+        .rows_affected()
+            == 1;
+        if !changed {
+            transaction.rollback().await?;
+            return Ok(MucRetractionOutcome::Conflict);
+        }
     }
     sqlx::query(
         "INSERT INTO muc_messages
@@ -717,7 +797,10 @@ pub async fn muc_message_by_id(
     message_id: Uuid,
 ) -> Result<Option<MucMessage>> {
     let row = sqlx::query(
-        "SELECT sender_jid, stanza, created_at FROM muc_messages WHERE room_id = $1 AND id = $2 AND retracted_at IS NULL",
+        "SELECT sender_jid, stanza, created_at FROM muc_messages
+         WHERE room_id=$1 AND id=$2 AND retracted_at IS NULL
+           AND NOT EXISTS (SELECT 1 FROM muc_archive_display_changes d
+                           WHERE d.message_id=muc_messages.id)",
     )
     .bind(room_id)
     .bind(message_id)
@@ -744,8 +827,9 @@ pub async fn muc_history_since(
         return Ok(Vec::new());
     }
     let rows = sqlx::query(
-        "SELECT sender_jid, stanza, created_at
-          FROM muc_messages
+        "SELECT sender_jid, COALESCE(d.display_stanza,a.stanza) AS stanza, created_at
+          FROM muc_messages a
+          LEFT JOIN muc_archive_display_changes d ON d.message_id=a.id
           WHERE room_id = $1
             AND ($3::timestamptz IS NULL OR created_at >= $3)
             AND message_kind <> 'subject'

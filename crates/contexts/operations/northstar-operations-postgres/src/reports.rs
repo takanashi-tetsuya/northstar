@@ -259,6 +259,15 @@ struct ArchivedEvidence {
     created_at: DateTime<Utc>,
 }
 
+const VISIBLE_REPORT_EVIDENCE: &str =
+    "FROM message_archive ma WHERE ma.owner_id=$1 AND ma.id=ANY($2)
+     AND NOT EXISTS (SELECT 1 FROM mix_source_retractions f
+         WHERE f.source_by=ma.source_by AND f.target_stanza_id=ma.source_stanza_id
+           AND f.first_for_target)
+     AND NOT EXISTS (SELECT 1 FROM personal_archive_display_changes d
+                     WHERE d.archive_id=ma.id)
+     ORDER BY ma.id";
+
 #[allow(clippy::too_many_arguments)]
 pub async fn create_report_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -279,19 +288,40 @@ pub async fn create_report_in_tx(
         .iter()
         .map(|item| item.archive_id)
         .collect::<Vec<_>>();
-    let rows = sqlx::query(
-        "SELECT ma.id,ma.peer_jid,ma.stanza,ma.encrypted,ma.stanza_id,ma.created_at
-         FROM message_archive ma WHERE ma.owner_id=$1 AND ma.id=ANY($2)
-         AND NOT EXISTS (SELECT 1 FROM mix_source_retractions f
-             WHERE f.source_by=ma.source_by AND f.target_stanza_id=ma.source_stanza_id
-               AND f.first_for_target)
-         ORDER BY ma.id FOR SHARE OF ma",
-    )
-    .bind(reporter_id)
-    .bind(&archive_ids)
-    .fetch_all(&mut **tx)
-    .await
-    .map_err(|error| ReportCreateError::Internal(error.into()))?;
+    let read_committed: bool =
+        sqlx::query_scalar("SELECT current_setting('transaction_isolation') = 'read committed'")
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(|error| ReportCreateError::Internal(error.into()))?;
+    if !read_committed {
+        return Err(ReportCreateError::Internal(anyhow::anyhow!(
+            "report evidence intake requires READ COMMITTED"
+        )));
+    }
+    let lock_sql = format!("SELECT ma.id {VISIBLE_REPORT_EVIDENCE} FOR SHARE OF ma");
+    let locked = sqlx::query_scalar::<_, Uuid>(sqlx::AssertSqlSafe(lock_sql.as_str()))
+        .bind(reporter_id)
+        .bind(&archive_ids)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(|error| ReportCreateError::Internal(error.into()))?;
+    if locked.len() != evidence.len() {
+        return Err(ReportCreateError::InvalidEvidence(
+            "archive_id is not owned by the reporter",
+        ));
+    }
+    // A held-display writer can commit an overlay without updating the
+    // tuple that the locking statement waited for. Check visibility again
+    // in the fresh READ COMMITTED snapshot before fetching any payload.
+    let payload_sql = format!(
+        "SELECT ma.id,ma.peer_jid,ma.stanza,ma.encrypted,ma.stanza_id,ma.created_at {VISIBLE_REPORT_EVIDENCE}"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(payload_sql.as_str()))
+        .bind(reporter_id)
+        .bind(&locked)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(|error| ReportCreateError::Internal(error.into()))?;
     if rows.len() != evidence.len() {
         return Err(ReportCreateError::InvalidEvidence(
             "archive_id is not owned by the reporter",

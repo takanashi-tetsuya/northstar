@@ -10,7 +10,7 @@ use northstar_operations_application::governance::{HeldRecordExport, LegalHoldTa
 use northstar_operations_application::reports::ReportEvidenceInput;
 use northstar_operations_postgres::data_lifecycle::{
     create_legal_hold_in_tx, export_legal_hold_page_in_tx, release_legal_hold_in_tx,
-    CreateLegalHold, GOVERNANCE_SNAPSHOT_ISOLATION_SQL,
+    CreateLegalHold,
 };
 use northstar_operations_postgres::reports::{create_report_in_tx, ReportCreateError};
 use northstar_room_application::mix_service::{
@@ -1033,12 +1033,14 @@ async fn verified_reflection_converges_action_before_original_and_rejects_rebind
 
 fn held_hash(previous: [u8; 32], record: &HeldRecordExport) -> [u8; 32] {
     let canonical = format!(concat!("{{\"resource_type\":{},\"record_id\":{},\"subject_id\":{},",
-        "\"encrypted\":{},\"record_created_at\":{},\"server_visible_payload\":{},\"payload_disposition\":{}}}"),
+        "\"encrypted\":{},\"record_created_at\":{},\"server_visible_payload\":{},\"payload_disposition\":{},",
+        "\"display_change\":{}}}"),
         serde_json::to_string(&record.resource_type).unwrap(), serde_json::to_string(&record.record_id).unwrap(),
         serde_json::to_string(&record.subject_id).unwrap(), record.encrypted,
         serde_json::to_string(&record.record_created_at).unwrap(),
         serde_json::to_string(&record.server_visible_payload).unwrap(),
-        serde_json::to_string(&record.payload_disposition).unwrap());
+        serde_json::to_string(&record.payload_disposition).unwrap(),
+        serde_json::to_string(&record.display_change).unwrap());
     let mut hasher = Sha256::new();
     hasher.update(previous);
     hasher.update((canonical.len() as u64).to_be_bytes());
@@ -1109,10 +1111,6 @@ async fn held_source_retraction_preserves_raw_evidence_and_survives_retention() 
     .unwrap();
     transaction.commit().await.unwrap();
     let mut export_tx = pool.begin().await.unwrap();
-    sqlx::query(GOVERNANCE_SNAPSHOT_ISOLATION_SQL)
-        .execute(&mut *export_tx)
-        .await
-        .unwrap();
     let export_id = Uuid::new_v4();
     let before = export_legal_hold_page_in_tx(
         &mut export_tx,
@@ -1211,10 +1209,6 @@ async fn held_source_retraction_preserves_raw_evidence_and_survives_retention() 
 
     let cursor = before.next.unwrap();
     let mut export_tx = pool.begin().await.unwrap();
-    sqlx::query(GOVERNANCE_SNAPSHOT_ISOLATION_SQL)
-        .execute(&mut *export_tx)
-        .await
-        .unwrap();
     let after = export_legal_hold_page_in_tx(
         &mut export_tx,
         admin.id,
@@ -1231,6 +1225,9 @@ async fn held_source_retraction_preserves_raw_evidence_and_survives_retention() 
     let record = &after.records[0];
     assert_eq!(record.record_id, second);
     assert!(record.encrypted);
+    // The first page froze the display-change cutoff before the source
+    // retraction committed, so the continuation annotates nothing.
+    assert!(record.display_change.is_none());
     assert_eq!(
         record.server_visible_payload.as_deref(),
         Some(scope_xml.as_str())

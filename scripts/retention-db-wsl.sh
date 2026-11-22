@@ -30,10 +30,26 @@ TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
   -- --ignored --exact --nocapture
 TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
   cargo test --locked --offline -p northstar-db-it \
-  operations::data_lifecycle::legal_hold_blocks_sender_retractions_until_release \
+  operations::data_lifecycle::legal_hold_retractions_succeed_without_replacing_evidence \
   -- --ignored --exact --nocapture
 TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
   cargo test --locked --offline \
   -p northstar-pubsub-postgres \
   subscription_cleanup::tests::postgres_cleanup_preserves_live_subscriptions_and_event_snapshots_and_is_bounded \
+  -- --ignored --exact --nocapture
+TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
+  cargo test --locked --offline -p northstar-db-it \
+  operations::hold_display_races::hold_creation_and_retraction_serialize_in_both_orders \
+  -- --ignored --exact --nocapture
+TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
+  cargo test --locked --offline -p northstar-db-it \
+  operations::hold_display_races::held_retraction_projection_and_delivery_roll_back_together \
+  -- --ignored --exact --nocapture
+TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
+  cargo test --locked --offline -p northstar-db-it \
+  operations::hold_display_races::display_readers_use_one_snapshot_and_never_refetch_held_bytes \
+  -- --ignored --exact --nocapture
+TEST_DATABASE_URL="$(northstar_test_database_url_for_schema "$test_schema")" \
+  cargo test --locked --offline -p northstar-db-it \
+  operations::hold_display_races::hold_export_cutoff_freezes_annotations_across_pages \
   -- --ignored --exact --nocapture

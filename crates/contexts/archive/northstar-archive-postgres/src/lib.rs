@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 mod account_fence;
 mod admission_facts;
+pub mod display_changes;
 mod mam_query;
 pub mod mix_source_retractions;
 pub mod personal_display;

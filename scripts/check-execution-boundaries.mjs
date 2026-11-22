@@ -30,12 +30,12 @@ const files = {
 // Sources read as whole production modules (the file plus its non-test
 // child module files), so items keep being found after a module split.
 const productionModules = new Set([
-  'mix', 'mixDb', 'state',
+  'bosh', 'mix', 'mixDb', 'state',
 ]);
 
 // These directories hold independently owned modules, so read the file plus
 // its role-split children listed in catalog/source-role-splits.json.
-const roleSplitSources = new Set(['protocol', 'bosh']);
+const roleSplitSources = new Set(['protocol']);
 
 function requireBoundary(condition, message) {
   if (!condition) throw new Error(`execution boundary: ${message}`);

@@ -1282,8 +1282,8 @@ if grep -Fq 'SECURITY DEFINER' "$mix_transport_handoff_migration"; then
     echo "migration 0135 must not add a broad database capability for transport ownership" >&2
     exit 1
 fi
-bosh_role_split_files=$(node scripts/lib/source-module.mjs files --role-split crates/edges/northstar-bosh/src/lib.rs) || {
-    echo "cannot read Rust role-split files: crates/edges/northstar-bosh/src/lib.rs" >&2
+bosh_production_files=$(node scripts/lib/source-module.mjs files --production crates/edges/northstar-bosh/src/lib.rs) || {
+    echo "cannot read Rust production module files: crates/edges/northstar-bosh/src/lib.rs" >&2
     exit 1
 }
 for required_source_fragment in \
@@ -1294,7 +1294,7 @@ for required_source_fragment in \
     'BoshResponseOwnership'
 do
     if ! printf '%s\n' "$mix_db_production_source" "$replay_db_production_source" "$sm_db_production_source" "$mix_service_production_source" | grep -F "$required_source_fragment" >/dev/null \
-       && ! grep -Fq "$required_source_fragment" crates/contexts/session/northstar-session-application/src/replay.rs crates/contexts/session/northstar-session-application/src/sm.rs $bosh_role_split_files; then
+       && ! grep -Fq "$required_source_fragment" crates/contexts/session/northstar-session-application/src/replay.rs crates/contexts/session/northstar-session-application/src/sm.rs $bosh_production_files; then
         echo "MIX transport ownership source invariant is missing: $required_source_fragment" >&2
         exit 1
     fi

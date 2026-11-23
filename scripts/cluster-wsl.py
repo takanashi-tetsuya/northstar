@@ -1098,7 +1098,7 @@ def run() -> None:
 
     # Redis is a bounded, disposable MUC routing projection. Every live exact
     # occupant refresh must keep all three companion keys leased, while a
-    # crashed node must not block healthy-node fan-out, and a room read must
+    # crashed node must not block healthy-node fan-out, and maintenance must
     # remove its occupants instead of renewing them behind a live room lease.
     muc_prefix = f"northstar:{DOMAIN}"
     occupants_key = f"{muc_prefix}:muc_occupants:{room}"
@@ -1119,7 +1119,8 @@ def run() -> None:
     )
     alice_a.receive_until("cluster-muc-prune")
     # Volatile fan-out only filters bounded node hints. An explicit room read
-    # owns the full occupant/index sweep, independently of stanza delivery.
+    # answers from one PostgreSQL snapshot and writes nothing, Redis included
+    # (WP-701), so the crashed-node member is absent from the reply at once.
     bob_b.send(
         f"<iq xmlns='jabber:client' type='get' id='cluster-muc-prune-read' to='{room}'>"
         "<query xmlns='http://jabber.org/protocol/disco#items'/></iq>"
@@ -1132,16 +1133,22 @@ def run() -> None:
         and f"{room}/Ghost" not in room_items,
         "explicit MUC room read did not reconcile the stale occupant projection",
     )
-    deadline = time.monotonic() + 3
-    while time.monotonic() < deadline:
-        if redis_cli("hexists", occupants_key, "Ghost") == "0":
-            break
-        time.sleep(0.05)
+    # The maintenance pass (every 30 seconds) owns the full occupant/index
+    # sweep: it refreshes the live exact occupants of each active room and
+    # then removes members whose node and process leases are gone.
+    def ghost_swept():
+        return (
+            redis_cli("hexists", occupants_key, "Ghost") == "0"
+            and redis_cli("hexists", owners_key, "Ghost") == "0"
+            and "crashed-node" not in redis_cli("smembers", nodes_key).splitlines()
+        )
+
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline and not ghost_swept():
+        time.sleep(0.1)
     fixture.check(
-        redis_cli("hexists", occupants_key, "Ghost") == "0"
-        and redis_cli("hexists", owners_key, "Ghost") == "0"
-        and "crashed-node" not in redis_cli("smembers", nodes_key).splitlines(),
-        "explicit room read retained a crashed-node MUC soft-state member",
+        ghost_swept(),
+        "cluster maintenance retained a crashed-node MUC soft-state member",
     )
 
     # A maintenance snapshot can outlive a kick/rejoin. Inject that stale

@@ -716,12 +716,15 @@ const mixProducerMappings = [
   ['store_mix_message_observed', 'store_mix_message_inner'],
   ['publish_mix_avatar', 'publish_mix_avatar'],
   ['retract_mix_avatar', 'retract_mix_avatar'],
-  ['update_mix_info', 'update_mix_info'],
-  ['update_mix_config', 'update_mix_config'],
+  ['update_mix_info', 'apply_info_update', 'update_mix_info'],
+  ['update_info', 'apply_info_update', 'apply_info_patch'],
+  ['update_mix_config', 'apply_config_update', 'update_mix_config'],
+  ['update_config', 'apply_config_update', 'apply_config_patch'],
   ['set_mix_access_entry', 'set_mix_access_entry'],
   ['set_mix_access_entry_committed', 'set_mix_access_entry', 'set_mix_access_entry'],
   ['register_mix_nick', 'register_mix_nick'],
-  ['update_mix_participant_preference', 'update_mix_participant_preference'],
+  ['update_mix_participant_preference', 'apply_preference_update', 'update_mix_participant_preference'],
+  ['update_preference', 'apply_preference_update', 'apply_preference_patch'],
   ['retract_mix_message', 'retract_mix_message'],
   ['requeue_mix_delivery_dead_letter', 'requeue_mix_delivery_dead_letter'],
 ];
@@ -953,11 +956,11 @@ const mixRepositoryTransactionEntries = [
   'store_mix_message_inner',
   'publish_mix_avatar',
   'retract_mix_avatar',
-  'update_mix_info',
-  'update_mix_config',
+  'apply_info_update',
+  'apply_config_update',
   'set_mix_access_entry',
   'register_mix_nick',
-  'update_mix_participant_preference',
+  'apply_preference_update',
   'retract_mix_message',
 ];
 // whole production module (the file and its non-test child files)
@@ -966,6 +969,17 @@ const mixRepositoryProduction = productionWithoutCfgTestModules(
   mixRepositorySource,
   'crates/contexts/room/northstar-room-postgres/src/mix.rs',
 );
+for (const [serviceMethod, fenced, entry] of mixProducerMappings) {
+  // Only form producers name a wrapper that delegates to a different fenced entry.
+  if (entry === undefined || entry === fenced) continue;
+  const service = structBody(mixServiceProduction, `pub async fn ${serviceMethod}(`);
+  const guard = service.indexOf('self.delivery_admission_guard().await');
+  const repositoryCall = service.search(new RegExp(`self\\s*\\.\\s*repository\\s*\\.\\s*${serviceMethod}\\s*\\(`));
+  const wrapper = structBody(mixRepositoryProduction, `async fn ${entry}(`);
+  if (guard < 0 || repositoryCall <= guard || !wrapper.includes(`${fenced}(`)) {
+    throw new Error(`MIX form producer ${serviceMethod} must hold process admission and delegate to ${fenced}`);
+  }
+}
 const mixRepositoryFunctions = asyncFunctionSpans(mixRepositoryProduction, 'crates/contexts/room/northstar-room-postgres/src/mix.rs');
 const actualMixRepositoryEntries = [];
 const mixAdmissionPattern = /begin_mix_delivery_admission\(pool\)\.await\?/g;

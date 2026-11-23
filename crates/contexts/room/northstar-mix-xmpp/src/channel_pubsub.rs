@@ -5,9 +5,7 @@ use super::*;
 mod access;
 mod admin;
 
-pub use self::admin::{
-    field_bool, field_first, validate_fixed_config, validate_fixed_field, validate_form_fields,
-};
+pub use self::admin::{field_first, validate_form_fields};
 
 pub async fn pubsub_get(
     state: &Arc<impl MixHost>,

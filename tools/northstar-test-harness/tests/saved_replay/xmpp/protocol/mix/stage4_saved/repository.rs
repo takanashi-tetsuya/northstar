@@ -8,6 +8,7 @@ use northstar_room_core::mix as room;
 use northstar_time::{DateTime, Utc};
 use std::sync::Mutex;
 
+mod administration;
 mod pam_delivery_repository;
 
 #[derive(Clone)]

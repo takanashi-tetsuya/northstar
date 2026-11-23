@@ -4,6 +4,7 @@ use northstar_time::{DateTime, Utc};
 use std::time::Duration;
 
 mod addressed_delivery;
+mod administration;
 mod pam_delivery_repository;
 mod pam_projection_repository;
 

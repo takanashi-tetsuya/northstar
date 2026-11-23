@@ -38,6 +38,7 @@ mod projection;
 mod publish;
 
 pub use self::admin::*;
+pub(crate) use self::admin::{apply_config_patch, apply_info_patch};
 pub use self::channel::*;
 pub use self::delivery_capacity::*;
 pub use self::delivery_queue::*;
@@ -49,6 +50,7 @@ pub use self::jid_map_retract::*;
 pub use self::mam::{mix_mam_boundaries, mix_mam_page, mix_mam_page_visible};
 pub(crate) use self::mam::{mix_mam_boundaries_tx, mix_mam_page_tx};
 pub use self::membership::*;
+pub(crate) use self::nick_preference::apply_preference_patch;
 pub use self::nick_preference::*;
 pub use self::pam_completion::*;
 pub use self::pam_join::*;

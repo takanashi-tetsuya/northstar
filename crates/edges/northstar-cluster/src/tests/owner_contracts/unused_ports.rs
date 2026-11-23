@@ -2,6 +2,7 @@
 #[derive(Clone)]
 pub(super) struct UnusedPorts;
 
+mod administration;
 mod direct_invitation_stub;
 mod pam_delivery_repository;
 

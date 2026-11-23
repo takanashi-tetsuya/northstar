@@ -1,4 +1,5 @@
 use super::*;
+use northstar_room_core::mix::{MixClock, MixRealJid, SystemMixClock};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn create_mix_channel(
@@ -12,7 +13,36 @@ pub async fn create_mix_channel(
     federated: Option<&FederatedMixMutation>,
 ) -> Result<(CreateChannelOutcome, String)> {
     let service_domain = canonical_service_domain(service_domain)?;
-    let creator_jid = canonical_user_bare(creator_jid)?;
+    let creator_jid = MixRealJid::parse(creator_jid)?;
+    create_mix_channel_at(
+        effects,
+        pool,
+        &service_domain,
+        requested_localpart,
+        &creator_jid,
+        max_channels_per_owner,
+        SystemMixClock.now_utc(),
+        payloads,
+        federated,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn create_mix_channel_at(
+    effects: &impl crate::effects::RoomEffects,
+    pool: &PgPool,
+    service_domain: &str,
+    requested_localpart: Option<&str>,
+    creator_jid: &MixRealJid,
+    max_channels_per_owner: i64,
+    item_timestamp: DateTime<Utc>,
+    payloads: &dyn MixEventPayloadRenderer,
+    federated: Option<&FederatedMixMutation>,
+) -> Result<(CreateChannelOutcome, String)> {
+    let service_domain = canonical_service_domain(service_domain)?;
+    let creator_jid = creator_jid.as_str();
+    let item_id = mix_timestamp_item_id(item_timestamp);
     let discoverable = requested_localpart.is_some();
     let localpart = match requested_localpart {
         Some(value) => canonical_channel_localpart(value)?,
@@ -21,11 +51,11 @@ pub async fn create_mix_channel(
     let mut transaction = pool.begin().await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(&creator_jid)
+        .bind(creator_jid)
         .execute(&mut *transaction)
         .await?;
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mix_channels WHERE creator_jid = $1")
-        .bind(&creator_jid)
+        .bind(creator_jid)
         .fetch_one(&mut *transaction)
         .await?;
     if count >= max_channels_per_owner.max(1) {
@@ -39,7 +69,7 @@ pub async fn create_mix_channel(
     .bind(id)
     .bind(&service_domain)
     .bind(&localpart)
-    .bind(&creator_jid)
+    .bind(creator_jid)
     .bind(discoverable)
     .execute(&mut *transaction)
     .await?
@@ -50,7 +80,7 @@ pub async fn create_mix_channel(
     }
     sqlx::query("INSERT INTO mix_channel_roles (channel_id, jid, role) VALUES ($1, $2, 'owner')")
         .bind(id)
-        .bind(&creator_jid)
+        .bind(creator_jid)
         .execute(&mut *transaction)
         .await?;
     let channel_row = sqlx::query("SELECT * FROM mix_channels WHERE id = $1")
@@ -62,7 +92,7 @@ pub async fn create_mix_channel(
         &mut transaction,
         &channel,
         NODE_INFO,
-        &mix_timestamp_item_id(),
+        &item_id,
         None,
         &payloads.info_payload(&channel),
     )
@@ -71,12 +101,12 @@ pub async fn create_mix_channel(
         &mut transaction,
         &channel,
         NODE_CONFIG,
-        &mix_timestamp_item_id(),
+        &item_id,
         None,
         &payloads.config_payload(
             &channel,
-            &creator_jid,
-            &BTreeSet::from([creator_jid.clone()]),
+            creator_jid,
+            &BTreeSet::from([creator_jid.to_owned()]),
             &BTreeSet::new(),
         ),
     )

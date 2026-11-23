@@ -416,7 +416,7 @@ class TestEvidenceTests(unittest.TestCase):
             result = self.validate(self.log(name), name)
             self.assertTrue(result['complete'])
             self.assertEqual(result['passed_exact_tests'], len(DB.EXPECTED_TESTS[name]))
-        self.assertEqual(sum(len(tests) for tests in DB.EXPECTED_TESTS.values()), 92)
+        self.assertEqual(sum(len(tests) for tests in DB.EXPECTED_TESTS.values()), 99)
 
     def test_current_scripts_match_the_fixed_selector_manifest(self):
         for name, script in DB.SUITES:

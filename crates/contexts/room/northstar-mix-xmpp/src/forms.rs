@@ -1,6 +1,7 @@
 use super::{field_first, validate_form_fields, ANON_NS};
 use anyhow::{Context, Result};
-use northstar_room_application::mix_service::MixParticipantPreference;
+use northstar_room_application::mix_service::{MixParticipantPreference, PreferencePatch};
+use northstar_room_core::mix::{MixAllowBlock, MixJidVisibilityPreference};
 use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
 use std::collections::BTreeMap;
@@ -119,6 +120,19 @@ pub fn parse_preference_submission(
     fields: &BTreeMap<String, Vec<String>>,
     current: Option<&MixParticipantPreference>,
 ) -> Result<MixParticipantPreference> {
+    let preference = parse_preference_patch(fields)?.apply(current.cloned().unwrap_or_default());
+    anyhow::ensure!(
+        MixJidVisibilityPreference::parse(&preference.jid_visibility).is_ok()
+            && MixAllowBlock::parse(&preference.private_messages).is_ok()
+            && MixAllowBlock::parse(&preference.vcard).is_ok(),
+        "invalid MIX participant preference"
+    );
+    Ok(preference)
+}
+
+pub(super) fn parse_preference_patch(
+    fields: &BTreeMap<String, Vec<String>>,
+) -> Result<PreferencePatch> {
     validate_form_fields(
         fields,
         &[
@@ -134,32 +148,26 @@ pub fn parse_preference_submission(
         field_first(fields, "FORM_TYPE") == Some(ANON_NS),
         "invalid MIX-ANON preference form"
     );
-    let default = MixParticipantPreference::default();
-    let current = current.unwrap_or(&default);
-    let preference = MixParticipantPreference {
-        jid_visibility: field_first(fields, "JID Visibility")
-            .unwrap_or(&current.jid_visibility)
-            .to_owned(),
-        private_messages: field_first(fields, "Private Messages")
-            .unwrap_or(&current.private_messages)
-            .to_owned(),
-        vcard: field_first(fields, "vCard")
-            .unwrap_or(&current.vcard)
-            .to_owned(),
-        share_presence: match field_first(fields, "Presence") {
-            None => current.share_presence,
-            Some("share") => true,
-            Some("not share") => false,
-            Some(_) => anyhow::bail!("invalid MIX presence preference"),
-        },
+    let share_presence = match field_first(fields, "Presence") {
+        None => None,
+        Some("share") => Some(true),
+        Some("not share") => Some(false),
+        Some(_) => anyhow::bail!("invalid MIX presence preference"),
     };
-    anyhow::ensure!(
-        matches!(
-            preference.jid_visibility.as_str(),
-            "default" | "never" | "always" | "prefer not"
-        ) && matches!(preference.private_messages.as_str(), "allow" | "block")
-            && matches!(preference.vcard.as_str(), "allow" | "block"),
-        "invalid MIX participant preference"
-    );
-    Ok(preference)
+    Ok(PreferencePatch {
+        jid_visibility: field_first(fields, "JID Visibility")
+            .map(MixJidVisibilityPreference::parse)
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("invalid MIX participant preference"))?,
+        private_messages: field_first(fields, "Private Messages")
+            .map(MixAllowBlock::parse)
+            .transpose()?,
+        vcard: field_first(fields, "vCard")
+            .map(MixAllowBlock::parse)
+            .transpose()?,
+        share_presence,
+    })
 }
+
+#[cfg(test)]
+mod tests;

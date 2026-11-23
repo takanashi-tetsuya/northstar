@@ -1,4 +1,6 @@
 use super::*;
+use crate::forms::parse_preference_patch;
+use northstar_room_core::mix::{MixChannelId, MixRealJid};
 
 pub(super) async fn get_user_preference(
     state: &Arc<impl MixHost>,
@@ -41,15 +43,15 @@ pub(super) async fn set_user_preference(
     fields: &BTreeMap<String, Vec<String>>,
     federated: Option<&FederatedMixMutation>,
 ) -> Result<String> {
-    let current = state
-        .mix_service()
-        .mix_participant_preference(channel.id, actor_bare)
-        .await?
-        .unwrap_or_default();
-    let preference = parse_preference_submission(fields, Some(&current))?;
+    let patch = parse_preference_patch(fields)?;
     let Some(outcome) = state
         .mix_service()
-        .update_mix_participant_preference(channel.id, actor_bare, &preference, federated)
+        .update_preference(
+            MixChannelId::new(channel.id),
+            &MixRealJid::parse(actor_bare)?,
+            patch,
+            federated,
+        )
         .await?
     else {
         return Ok(iq_error_to(
@@ -71,13 +73,13 @@ pub(super) async fn set_user_preference(
                     *user_id,
                     &user.username,
                     change,
-                    Some(&outcome.participant.participant_id.to_string()),
+                    Some(&outcome.participant_id.to_string()),
                 )
                 .await?;
         }
     }
     let preference_payload = XmlElement::namespaced("user-preference", ANON_NS)
-        .validated_fragment(&preference_result_form(&preference))?
+        .validated_fragment(&preference_result_form(&outcome.preference))?
         .finish();
     Ok(iq_result_to(
         &request.id,

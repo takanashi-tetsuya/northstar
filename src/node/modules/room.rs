@@ -117,7 +117,8 @@ impl RoomModule {
                     mix_retraction_content_identity,
                     durable_outbox_database_admission.clone(),
                     sm_authority_schema,
-                )?,
+                )?
+                .with_item_clock(northstar_room_core::mix::SystemMixClock),
             muc_occupants: LocalMucOccupantTable::default(),
             suspended_muc_sessions: Arc::new(DashMap::new()),
             pending_mix_iq: Arc::new(northstar_room_core::mix_iq_relay::MixIqRelayIndex::new()),

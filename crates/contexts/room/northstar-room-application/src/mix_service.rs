@@ -14,6 +14,7 @@ use std::sync::Arc;
 use tokio::sync::{watch, Mutex, MutexGuard, OwnedSemaphorePermit};
 use uuid::Uuid;
 
+mod administration_repository;
 mod contracts;
 mod delivery_repository;
 mod identity_policy;
@@ -31,6 +32,9 @@ pub use self::pam_projection_repository::{
     MixPamProjectionRepository, RemotePamJoinEvidence, RemotePamJoinOptions, RemotePamResponse,
 };
 
+pub use self::administration_repository::{
+    CommittedPreference, ConfigPatch, InfoPatch, MixAdministrationRepository, PreferencePatch,
+};
 pub use self::contracts::{
     AccessChangeOutcome, BeginRemotePamJoin, BeginRemotePamLeave, ClaimedMixDelivery,
     ClaimedPamResult, CreateChannelOutcome, ExpiredMixPresence, FederatedMixIqReplay,
@@ -74,12 +78,11 @@ pub use self::presence_recovery_repository::{
     RecoveryProbeTarget, RecoveryProgress, RECOVERY_PRESENCE_PAGE_CAP,
 };
 pub use self::wake::{MixDeliveryWakeBroker, MixDeliveryWakeSubscription};
-pub use northstar_room_core::mix::MixChannelId;
 
 pub mod foreground;
 pub mod outbox;
 pub use northstar_room_core::mix::{
-    Admission as StoreMixMessageAdmission, Outcome as StoreEventOutcome,
+    Admission as StoreMixMessageAdmission, MixChannelId, MixRealJid, Outcome as StoreEventOutcome,
     Participant as MixParticipant, Replay as MixBusinessReplay,
     ReplayIdentity as MixReplayIdentity,
 };
@@ -146,6 +149,7 @@ pub use northstar_federation_core::FederationOutboxAdmission;
 #[derive(Clone)]
 pub struct MixService<R> {
     repository: R,
+    item_clock: Arc<dyn northstar_room_core::mix::MixClock>,
     /// Receiving configuration, independent of any per-call claimed domain.
     configured_mix_domain: String,
     message_identity: MixMessageContentKeyring,
@@ -211,6 +215,7 @@ impl<R> MixService<R> {
             northstar_xmpp_types::prepare_domainpart(&format!("mix.{configured_domain}"))?;
         Ok(Self {
             repository,
+            item_clock: Arc::new(northstar_room_core::mix::SystemMixClock),
             configured_mix_domain,
             message_identity,
             retraction_identity,

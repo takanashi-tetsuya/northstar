@@ -6,6 +6,7 @@ mod access;
 mod forms;
 
 pub use self::access::{authorized_mix_access_entries, set_mix_access_entry};
+pub(crate) use self::forms::{apply_config_patch, apply_info_patch};
 pub use self::forms::{update_mix_config, update_mix_info};
 
 pub struct MixInfoUpdate<'a> {

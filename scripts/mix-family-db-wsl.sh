@@ -120,6 +120,27 @@ run_exact_ignored \
 run_exact_ignored \
   room::mix_pam_projection::channel_destroyed_after_lookup_is_typed_not_found
 
+run_exact_ignored \
+  room::mix_admin_patches::disjoint_preference_patches_both_survive
+
+run_exact_ignored \
+  room::mix_admin_patches::preference_patch_races_identity_visibility
+
+run_exact_ignored \
+  room::mix_admin_patches::info_fixed_field_mismatch_racing_config_is_rejected
+
+run_exact_ignored \
+  room::mix_admin_patches::info_patch_matches_the_locked_payload
+
+run_exact_ignored \
+  room::mix_admin_patches::config_change_racing_owner_change_is_refused_without_artifacts
+
+run_exact_ignored \
+  room::mix_admin_patches::admin_cannot_apply_owner_only_config
+
+run_exact_ignored \
+  room::mix_admin_patches::initial_items_share_the_prepared_public_timestamp
+
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline -p northstar-db-it \
   room::mix_mam::mix_anon_misc_permissions_are_atomic_and_private \

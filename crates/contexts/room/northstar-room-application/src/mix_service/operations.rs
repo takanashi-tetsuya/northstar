@@ -510,8 +510,8 @@ impl<R: MixRepository> MixService<R> {
 pub fn valid_stable_participant_id(value: &str) -> bool {
     northstar_room_core::mix::MixStableParticipantId::parse(value).is_ok()
 }
-pub fn mix_timestamp_item_id() -> String {
-    Utc::now().to_rfc3339_opts(northstar_time::SecondsFormat::Nanos, true)
+pub fn mix_timestamp_item_id(timestamp: DateTime<Utc>) -> String {
+    timestamp.to_rfc3339_opts(northstar_time::SecondsFormat::Nanos, true)
 }
 pub fn valid_join_nodes(nodes: &[String]) -> Result<Vec<String>> {
     let mut unique = std::collections::BTreeSet::new();

@@ -4,6 +4,7 @@ use northstar_federation_core::{FederationOutboxAdmission, S2sOutboxPolicy};
 use northstar_room_application::mix_service::*;
 use northstar_time::{DateTime, Utc};
 
+mod administration;
 mod pam_delivery_repository;
 
 #[derive(Clone, Debug, PartialEq)]

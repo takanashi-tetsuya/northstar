@@ -6,6 +6,7 @@ use northstar_time::{DateTime, Utc};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+mod administration;
 mod pam_delivery_repository;
 
 #[derive(Clone)]

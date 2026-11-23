@@ -212,6 +212,21 @@ pub fn validate_mix_participant_preference(preference: &MixParticipantPreference
     Ok(())
 }
 
+enum PreferenceUpdate<'a> {
+    Replacement(&'a MixParticipantPreference),
+    Patch(northstar_room_application::mix_service::PreferencePatch),
+}
+
+fn incompatible_preference(channel: &MixChannel, preference: &MixParticipantPreference) -> bool {
+    matches!(
+        (
+            channel.jid_visibility.as_str(),
+            preference.jid_visibility.as_str()
+        ),
+        ("visible", "never") | ("hidden", "always")
+    )
+}
+
 pub async fn update_mix_participant_preference(
     effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
@@ -221,8 +236,66 @@ pub async fn update_mix_participant_preference(
     payloads: &dyn MixEventPayloadRenderer,
     federated: Option<&FederatedMixMutation>,
 ) -> Result<Option<MixParticipantPreferenceUpdateOutcome>> {
-    let actor = canonical_user_bare(actor)?;
+    let actor = northstar_room_core::mix::MixRealJid::parse(actor)?;
     validate_mix_participant_preference(preference)?;
+    Ok(apply_preference_update(
+        effects,
+        pool,
+        northstar_room_core::mix::MixChannelId::new(channel_id),
+        &actor,
+        PreferenceUpdate::Replacement(preference),
+        payloads,
+        federated,
+    )
+    .await?
+    .map(|(outcome, _)| outcome))
+}
+
+pub(crate) async fn apply_preference_patch(
+    effects: &impl crate::effects::RoomEffects,
+    pool: &PgPool,
+    channel_id: northstar_room_core::mix::MixChannelId,
+    actor: &northstar_room_core::mix::MixRealJid,
+    patch: northstar_room_application::mix_service::PreferencePatch,
+    payloads: &dyn MixEventPayloadRenderer,
+    federated: Option<&FederatedMixMutation>,
+) -> Result<Option<northstar_room_application::mix_service::CommittedPreference>> {
+    Ok(apply_preference_update(
+        effects,
+        pool,
+        channel_id,
+        actor,
+        PreferenceUpdate::Patch(patch),
+        payloads,
+        federated,
+    )
+    .await?
+    .map(|(outcome, preference)| {
+        northstar_room_application::mix_service::CommittedPreference {
+            participant_id: northstar_room_core::mix::MixLocalParticipantId::new(
+                outcome.participant.participant_id,
+            ),
+            preference,
+            roster_changes: outcome.roster_changes,
+        }
+    }))
+}
+
+async fn apply_preference_update(
+    effects: &impl crate::effects::RoomEffects,
+    pool: &PgPool,
+    channel_id: northstar_room_core::mix::MixChannelId,
+    actor: &northstar_room_core::mix::MixRealJid,
+    update: PreferenceUpdate<'_>,
+    payloads: &dyn MixEventPayloadRenderer,
+    federated: Option<&FederatedMixMutation>,
+) -> Result<
+    Option<(
+        MixParticipantPreferenceUpdateOutcome,
+        MixParticipantPreference,
+    )>,
+> {
+    let channel_id = channel_id.as_uuid();
     let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
     let channel = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
@@ -235,10 +308,7 @@ pub async fn update_mix_participant_preference(
         transaction.rollback().await?;
         return Ok(None);
     };
-    // An explicit preference incompatible with a mandatory visibility mode
-    // cannot be accepted; this prevents a later response from lying about it.
-    if (channel.jid_visibility == "visible" && preference.jid_visibility == "never")
-        || (channel.jid_visibility == "hidden" && preference.jid_visibility == "always")
+    if matches!(&update, PreferenceUpdate::Replacement(preference) if incompatible_preference(&channel, preference))
     {
         transaction.rollback().await?;
         return Ok(None);
@@ -247,7 +317,7 @@ pub async fn update_mix_participant_preference(
         "SELECT channel_id, participant_id, jid, nick, role, joined_at FROM mix_participants WHERE channel_id = $1 AND jid = $2 FOR UPDATE",
     )
     .bind(channel_id)
-    .bind(&actor)
+    .bind(actor.as_str())
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(participant_row) = participant_row else {
@@ -270,6 +340,18 @@ pub async fn update_mix_participant_preference(
         vcard: old_row.get("vcard"),
         share_presence: old_row.get("share_presence"),
     };
+    let preference = match update {
+        PreferenceUpdate::Replacement(preference) => preference.clone(),
+        PreferenceUpdate::Patch(patch) => {
+            let preference = patch.apply(old_preference.clone());
+            validate_mix_participant_preference(&preference)?;
+            if incompatible_preference(&channel, &preference) {
+                transaction.rollback().await?;
+                return Ok(None);
+            }
+            preference
+        }
+    };
     sqlx::query(
         "INSERT INTO mix_participant_preferences (channel_id, participant_id, jid_visibility, private_messages, vcard, share_presence) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (channel_id, participant_id) DO UPDATE SET jid_visibility = EXCLUDED.jid_visibility, private_messages = EXCLUDED.private_messages, vcard = EXCLUDED.vcard, share_presence = EXCLUDED.share_presence, updated_at = NOW()",
     )
@@ -282,7 +364,7 @@ pub async fn update_mix_participant_preference(
     .execute(&mut *transaction)
     .await?;
     let old_visible = participant_jid_visible(&channel, &old_preference);
-    let new_visible = participant_jid_visible(&channel, preference);
+    let new_visible = participant_jid_visible(&channel, &preference);
     if old_preference.share_presence != preference.share_presence || old_visible != new_visible {
         let old_presence = sqlx::query(
             "DELETE FROM mix_events
@@ -365,7 +447,7 @@ pub async fn update_mix_participant_preference(
                     MixPresenceProjection {
                         channel: &channel,
                         participant: &participant,
-                        preference,
+                        preference: &preference,
                         item: &new_item,
                         unavailable: false,
                         event_id,
@@ -377,7 +459,7 @@ pub async fn update_mix_participant_preference(
             }
         }
     }
-    let rendered = payloads.participant_payload(&channel, &participant, preference);
+    let rendered = payloads.participant_payload(&channel, &participant, &preference);
     let participant_event_id = store_mix_event_tx(
         &mut transaction,
         &channel,
@@ -437,8 +519,11 @@ pub async fn update_mix_participant_preference(
     )
     .await?;
     transaction.commit().await?;
-    Ok(Some(MixParticipantPreferenceUpdateOutcome {
-        participant,
-        roster_changes,
-    }))
+    Ok(Some((
+        MixParticipantPreferenceUpdateOutcome {
+            participant,
+            roster_changes,
+        },
+        preference,
+    )))
 }

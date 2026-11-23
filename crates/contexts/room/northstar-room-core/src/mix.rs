@@ -2,7 +2,9 @@
 //! from the fresh message transaction and from durable outbox delivery.
 
 mod authority;
+mod clock;
 pub use authority::*;
+pub use clock::{FixedMixClock, MixClock, SystemMixClock};
 
 pub const CORE_NS: &str = "urn:xmpp:mix:core:1";
 pub const PAM_NS: &str = "urn:xmpp:mix:pam:2";

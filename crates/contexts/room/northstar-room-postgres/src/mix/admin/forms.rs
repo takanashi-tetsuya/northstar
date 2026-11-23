@@ -1,4 +1,15 @@
 use super::super::*;
+use northstar_room_application::mix_service::{ConfigPatch, InfoPatch};
+use northstar_room_core::mix::{MixChannelId, MixJidVisibility, MixRealJid};
+
+mod config_patch;
+
+const LOCK_FORM_CHANNEL: &str = "SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE";
+
+enum InfoInput<'a> {
+    Replacement(MixInfoUpdate<'a>, serde_json::Value),
+    Patch(&'a InfoPatch, &'a str),
+}
 
 pub async fn update_mix_info(
     effects: &impl crate::effects::RoomEffects,
@@ -9,29 +20,87 @@ pub async fn update_mix_info(
     payloads: &dyn MixEventPayloadRenderer,
     federated: Option<&FederatedMixMutation>,
 ) -> Result<MixMutationOutcome> {
-    let actor = canonical_user_bare(actor)?;
+    let actor = MixRealJid::parse(actor)?;
+    let contacts = validate_info(update.name, update.description, update.contacts)?;
+    apply_info_update(
+        effects,
+        pool,
+        MixChannelId::new(channel_id),
+        &actor,
+        InfoInput::Replacement(update, contacts),
+        payloads,
+        federated,
+    )
+    .await
+}
+
+fn validate_info(
+    name: Option<&str>,
+    description: Option<&str>,
+    contacts: &[String],
+) -> Result<serde_json::Value> {
     anyhow::ensure!(
-        update.name.is_none_or(|value| value.len() <= 512),
+        name.is_none_or(|value| value.len() <= 512),
         "MIX name too large"
     );
     anyhow::ensure!(
-        update.description.is_none_or(|value| value.len() <= 4096),
+        description.is_none_or(|value| value.len() <= 4096),
         "MIX description too large"
     );
-    anyhow::ensure!(update.contacts.len() <= 64, "too many MIX contacts");
-    let contacts = update
-        .contacts
+    anyhow::ensure!(contacts.len() <= 64, "too many MIX contacts");
+    let contacts = contacts
         .iter()
-        .map(|jid| canonical_user_bare(jid))
+        .map(|jid| MixRealJid::parse(jid))
         .collect::<Result<Vec<_>>>()?;
     anyhow::ensure!(
-        contacts.iter().collect::<BTreeSet<_>>().len() == contacts.len(),
+        contacts
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            == contacts.len(),
         "MIX contacts contain duplicate canonical JIDs"
     );
-    let contacts = serde_json::to_value(contacts)?;
+    let contacts =
+        serde_json::to_value(contacts.iter().map(MixRealJid::as_str).collect::<Vec<_>>())?;
+    Ok(contacts)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn apply_info_patch(
+    effects: &impl crate::effects::RoomEffects,
+    pool: &PgPool,
+    channel_id: MixChannelId,
+    actor: &MixRealJid,
+    patch: &InfoPatch,
+    item_id: &str,
+    payloads: &dyn MixEventPayloadRenderer,
+    federated: Option<&FederatedMixMutation>,
+) -> Result<MixMutationOutcome> {
+    apply_info_update(
+        effects,
+        pool,
+        channel_id,
+        actor,
+        InfoInput::Patch(patch, item_id),
+        payloads,
+        federated,
+    )
+    .await
+}
+
+async fn apply_info_update(
+    effects: &impl crate::effects::RoomEffects,
+    pool: &PgPool,
+    channel_id: MixChannelId,
+    actor: &MixRealJid,
+    input: InfoInput<'_>,
+    payloads: &dyn MixEventPayloadRenderer,
+    federated: Option<&FederatedMixMutation>,
+) -> Result<MixMutationOutcome> {
+    let channel_id = channel_id.as_uuid();
     let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
-    let locked = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
+    let locked = sqlx::query(LOCK_FORM_CHANNEL)
         .bind(channel_id)
         .fetch_optional(&mut *transaction)
         .await?;
@@ -39,7 +108,38 @@ pub async fn update_mix_info(
         transaction.rollback().await?;
         return Ok(MixMutationOutcome::NotFound);
     };
-    if locked.get::<i64, _>("revision") != update.expected_revision {
+    let current = channel_from_row(&locked);
+    let (item_id, expected_revision, name, description, contacts) = match input {
+        InfoInput::Replacement(update, contacts) => (
+            update.item_id,
+            update.expected_revision,
+            update.name,
+            update.description,
+            contacts,
+        ),
+        InfoInput::Patch(patch, item_id) => {
+            if let Some(assertion) = patch.visibility {
+                anyhow::ensure!(
+                    MixJidVisibility::parse(&current.jid_visibility)? == assertion,
+                    "unsupported MIX configuration value"
+                );
+            }
+            let name = patch.name.as_deref().or(current.name.as_deref());
+            let description = patch
+                .description
+                .as_deref()
+                .or(current.description.as_deref());
+            let contacts = patch.contacts.as_deref().unwrap_or(&current.contacts);
+            (
+                item_id,
+                current.revision,
+                name,
+                description,
+                validate_info(name, description, contacts)?,
+            )
+        }
+    };
+    if current.revision != expected_revision {
         transaction.rollback().await?;
         return Ok(MixMutationOutcome::Conflict);
     }
@@ -47,7 +147,7 @@ pub async fn update_mix_info(
         "SELECT EXISTS(SELECT 1 FROM mix_channel_roles WHERE channel_id = $1 AND jid = $2 AND role IN ('owner', 'administrator'))",
     )
     .bind(channel_id)
-    .bind(&actor)
+    .bind(actor.as_str())
     .fetch_one(&mut *transaction)
     .await?;
     if !authorized {
@@ -60,10 +160,10 @@ pub async fn update_mix_info(
           WHERE id=$1 AND revision=$5 RETURNING *",
     )
     .bind(channel_id)
-    .bind(update.name)
-    .bind(update.description)
+    .bind(name)
+    .bind(description)
     .bind(contacts)
-    .bind(update.expected_revision)
+    .bind(expected_revision)
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(row) = row else {
@@ -76,7 +176,7 @@ pub async fn update_mix_info(
         &mut transaction,
         &channel,
         NODE_INFO,
-        update.item_id,
+        item_id,
         None,
         &payload,
     )
@@ -90,7 +190,7 @@ pub async fn update_mix_info(
                 &channel,
                 recipient,
                 NODE_INFO,
-                update.item_id,
+                item_id,
                 Some(&payload),
                 false,
             )
@@ -117,7 +217,7 @@ pub async fn update_mix_info(
         federated,
         FederatedMixSuccess::PubSubPublish {
             node: NODE_INFO.to_owned(),
-            item_id: update.item_id.to_owned(),
+            item_id: item_id.to_owned(),
         },
         payloads,
     )
@@ -127,25 +227,28 @@ pub async fn update_mix_info(
         MixMutationAdmission {
             channel,
             node: NODE_INFO.to_owned(),
-            item_id: update.item_id.to_owned(),
+            item_id: item_id.to_owned(),
             payload,
             recipients,
         },
     )))
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn update_mix_config(
-    effects: &impl crate::effects::RoomEffects,
-    pool: &PgPool,
-    channel_id: Uuid,
-    actor: &str,
-    update: MixConfigUpdate<'_>,
+struct ValidatedConfig<'a> {
+    update: MixConfigUpdate<'a>,
+    requested_owners: Option<BTreeSet<String>>,
+    requested_administrators: Option<BTreeSet<String>>,
+}
+
+enum ConfigInput<'a> {
+    Replacement(ValidatedConfig<'a>),
+    Patch(&'a ConfigPatch, &'a str),
+}
+
+fn validate_config<'a>(
+    update: MixConfigUpdate<'a>,
     roles: MixRoleUpdate<'_>,
-    payloads: &dyn MixEventPayloadRenderer,
-    federated: Option<&FederatedMixMutation>,
-) -> Result<MixMutationOutcome> {
-    let actor = canonical_user_bare(actor)?;
+) -> Result<ValidatedConfig<'a>> {
     anyhow::ensure!(
         matches!(update.access_model, "open" | "allowlist"),
         "invalid access model"
@@ -212,9 +315,74 @@ pub async fn update_mix_config(
     if let Some(administrators) = &requested_administrators {
         anyhow::ensure!(administrators.len() <= 256, "too many MIX administrators");
     }
+    Ok(ValidatedConfig {
+        update,
+        requested_owners,
+        requested_administrators,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn update_mix_config(
+    effects: &impl crate::effects::RoomEffects,
+    pool: &PgPool,
+    channel_id: Uuid,
+    actor: &str,
+    update: MixConfigUpdate<'_>,
+    roles: MixRoleUpdate<'_>,
+    payloads: &dyn MixEventPayloadRenderer,
+    federated: Option<&FederatedMixMutation>,
+) -> Result<MixMutationOutcome> {
+    let actor = MixRealJid::parse(actor)?;
+    let update = validate_config(update, roles)?;
+    apply_config_update(
+        effects,
+        pool,
+        MixChannelId::new(channel_id),
+        &actor,
+        ConfigInput::Replacement(update),
+        payloads,
+        federated,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn apply_config_patch(
+    effects: &impl crate::effects::RoomEffects,
+    pool: &PgPool,
+    channel_id: MixChannelId,
+    actor: &MixRealJid,
+    patch: &ConfigPatch,
+    item_id: &str,
+    payloads: &dyn MixEventPayloadRenderer,
+    federated: Option<&FederatedMixMutation>,
+) -> Result<MixMutationOutcome> {
+    apply_config_update(
+        effects,
+        pool,
+        channel_id,
+        actor,
+        ConfigInput::Patch(patch, item_id),
+        payloads,
+        federated,
+    )
+    .await
+}
+
+async fn apply_config_update(
+    effects: &impl crate::effects::RoomEffects,
+    pool: &PgPool,
+    channel_id: MixChannelId,
+    actor: &MixRealJid,
+    input: ConfigInput<'_>,
+    payloads: &dyn MixEventPayloadRenderer,
+    federated: Option<&FederatedMixMutation>,
+) -> Result<MixMutationOutcome> {
+    let channel_id = channel_id.as_uuid();
     let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
-    let locked = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
+    let locked = sqlx::query(LOCK_FORM_CHANNEL)
         .bind(channel_id)
         .fetch_optional(&mut *transaction)
         .await?;
@@ -222,21 +390,37 @@ pub async fn update_mix_config(
         transaction.rollback().await?;
         return Ok(MixMutationOutcome::NotFound);
     };
-    if locked.get::<i64, _>("revision") != update.expected_revision {
+    let old_channel = channel_from_row(&locked);
+    if matches!(&input, ConfigInput::Replacement(config) if old_channel.revision != config.update.expected_revision)
+    {
         transaction.rollback().await?;
         return Ok(MixMutationOutcome::Conflict);
     }
-    let old_channel = channel_from_row(&locked);
     let actor_is_owner: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM mix_channel_roles WHERE channel_id = $1 AND jid = $2 AND role = 'owner')",
     )
     .bind(channel_id)
-    .bind(&actor)
+    .bind(actor.as_str())
     .fetch_one(&mut *transaction)
     .await?;
     if !actor_is_owner {
         transaction.rollback().await?;
         return Ok(MixMutationOutcome::Forbidden);
+    }
+    let ValidatedConfig {
+        update,
+        requested_owners,
+        requested_administrators,
+    } = match input {
+        ConfigInput::Replacement(config) => config,
+        ConfigInput::Patch(patch, item_id) => {
+            let (update, roles) = config_patch::resolve_config(patch, item_id, &old_channel)?;
+            validate_config(update, roles)?
+        }
+    };
+    if old_channel.revision != update.expected_revision {
+        transaction.rollback().await?;
+        return Ok(MixMutationOutcome::Conflict);
     }
     let current_owners = sqlx::query_scalar::<_, String>(
         "SELECT jid FROM mix_channel_roles WHERE channel_id = $1 AND role = 'owner' ORDER BY jid",
@@ -274,7 +458,7 @@ pub async fn update_mix_config(
         RETURNING *",
     )
     .bind(channel_id)
-    .bind(&actor)
+    .bind(actor.as_str())
     .bind(update.access_model)
     .bind(update.jid_visibility)
     .bind(update.nick_required)
@@ -339,7 +523,7 @@ pub async fn update_mix_config(
         payloads,
     )
     .await?;
-    let payload = payloads.config_payload(&channel, &actor, owners, administrators);
+    let payload = payloads.config_payload(&channel, actor.as_str(), owners, administrators);
     let event_id = store_mix_event_tx(
         &mut transaction,
         &channel,

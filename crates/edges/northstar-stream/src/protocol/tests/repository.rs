@@ -1,5 +1,7 @@
 use std::sync::{Arc, Mutex};
 
+mod administration;
+
 #[derive(Clone)]
 pub(super) struct UnusedRepository {
     pub(super) events: Arc<Mutex<Vec<&'static str>>>,

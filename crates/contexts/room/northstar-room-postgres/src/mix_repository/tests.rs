@@ -78,7 +78,7 @@ fn pam_membership_map_preserves_every_field() {
 fn event_and_page_maps_preserve_ordering_and_metadata() {
     let row = crate::mix::MixEvent {
         id: Uuid::new_v4(),
-        item_id: crate::mix::mix_timestamp_item_id(),
+        item_id: crate::mix::mix_timestamp_item_id(Utc::now()),
         payload: "<body/>".to_owned(),
         created_at: Utc::now(),
     };

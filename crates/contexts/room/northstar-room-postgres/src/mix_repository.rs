@@ -6,6 +6,7 @@ use northstar_time::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+mod administration_impl;
 mod delivery_impl;
 mod mam_read_impl;
 mod pam_delivery_impl;

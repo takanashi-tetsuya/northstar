@@ -6,7 +6,7 @@ mod create;
 mod destroy;
 mod discovery;
 
-pub use self::create::create_mix_channel;
+pub use self::create::{create_mix_channel, create_mix_channel_at};
 pub use self::destroy::destroy_mix_channel;
 pub use self::discovery::{discoverable_mix_channel_page, mix_channel_discoverable_to};
 

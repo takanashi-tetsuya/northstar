@@ -173,6 +173,8 @@ impl MixMamReadRepository for Repository {
     }
 }
 
+mod invitation_stub;
+
 impl MixRepository for Repository {
     async fn federated_mix_iq_replay(
         &self,

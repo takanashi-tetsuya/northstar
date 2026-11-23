@@ -17,8 +17,10 @@ use uuid::Uuid;
 mod administration_repository;
 mod contracts;
 mod delivery_repository;
+mod federated_result;
 mod hosted_disco_repository;
 mod identity_policy;
+mod invitation_repository;
 mod mam_read;
 mod operations;
 mod pam_delivery_repository;
@@ -54,8 +56,14 @@ pub use self::contracts::{
     StoreMixMessageRequest, UpdateSubscriptionsOutcome, VerifiedMixReflection,
 };
 pub use self::delivery_repository::MixDeliveryRepository;
+pub use self::federated_result::{
+    FederatedMixIqAlreadyFinalized, FederatedMixIqConflict, FederatedMixOutcome,
+};
 pub use self::hosted_disco_repository::{HostedDiscoView, MixHostedDiscoRepository};
 pub use self::identity_policy::MixPublisherIdentity;
+pub use self::invitation_repository::{
+    IssueMixInvitation, MixInvitationRepository, PreparedMixInvitationToken,
+};
 pub use self::mam_read::{
     MixMamAdmissionOutcome, MixMamReadActor, MixMamReadCommand, MixMamReadOperation,
     MixMamReadOutcome, MixMamReadRepository, MixMamReadResult, MixMamReadTarget,

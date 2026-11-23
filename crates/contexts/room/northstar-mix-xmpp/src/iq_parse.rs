@@ -1,6 +1,7 @@
 //! Parsing of client MIX IQ requests into channel operations.
 
 use super::*;
+use northstar_room_core::mix::MixRealJid;
 
 mod remote_pam_join;
 
@@ -115,12 +116,26 @@ pub enum IqOperation {
     RegisterNick(Option<String>),
     UserPreferenceGet,
     UserPreferenceSet(BTreeMap<String, Vec<String>>),
-    Invite {
-        invitee: String,
+    IssueMixInvitation {
+        invitee: Option<MixRealJid>,
     },
     /// An IQ result/error whose payload is empty or not otherwise a MIX
     /// request. Used only to correlate federated PAM replies.
     Response,
+}
+
+impl IqOperation {
+    pub(super) fn is_channel_command(&self, kind: &str) -> bool {
+        match self {
+            Self::IssueMixInvitation { .. } => true,
+            Self::Mam(_)
+            | Self::MamForm
+            | Self::MamMetadata
+            | Self::MamError(_)
+            | Self::Response => false,
+            _ => kind == "set",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -304,10 +319,11 @@ pub fn parse_iq(raw: &str) -> Result<Option<OwnedIq>> {
                         && !invitees[0].children().any(|node| node.is_element()),
                     "invalid MIX invitation request"
                 );
-                IqOperation::Invite {
-                    invitee: northstar_xmpp_types::jid::canonicalize_bare(
-                        invitees[0].text().unwrap_or_default(),
-                    )?,
+                let invitee = northstar_xmpp_types::jid::canonicalize_bare(
+                    invitees[0].text().unwrap_or_default(),
+                )?;
+                IqOperation::IssueMixInvitation {
+                    invitee: MixRealJid::parse(&invitee).ok(),
                 }
             }
             Some((child, "query", Some(MAM_NS))) if kind == "get" => {
@@ -600,3 +616,6 @@ pub fn parse_pubsub(pubsub: Node<'_, '_>, raw: &str) -> Result<IqOperation> {
         _ => anyhow::bail!("unsupported MIX PubSub operation"),
     }
 }
+
+#[cfg(test)]
+mod command_tests;

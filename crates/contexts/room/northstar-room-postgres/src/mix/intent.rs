@@ -1,6 +1,15 @@
 //! MIX business-intent idempotency and federated MIX IQ replay admission.
 
 use super::*;
+use northstar_room_application::mix_service::{
+    FederatedMixIqAlreadyFinalized, FederatedMixIqConflict, FederatedMixOutcome,
+};
+
+mod federated_result;
+pub use self::federated_result::finalize_mix_iq;
+use self::federated_result::{
+    insert_federated_result, lock_federated_result_key, read_federated_result,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MixIntentEvidence {
@@ -226,9 +235,9 @@ pub fn validate_federated_mix_mutation(context: &FederatedMixMutation) -> Result
 
 /// Serialize equal authenticated mutation keys before touching authority.
 /// If a concurrent/exact replay already finalized while this transaction was
-/// waiting, fail before any state change; the protocol then reads and returns
-/// the durable result. A changed request digest is handled by the same lookup
-/// as a conflict. The advisory key is only a serialization fence, never a
+/// waiting, stop before any state change and return the durable response to
+/// the protocol. A changed digest returns the typed conflict instead. The
+/// advisory key is only a serialization fence, never a
 /// security identity or durable commitment.
 pub async fn guard_federated_mix_mutation_tx(
     transaction: &mut Transaction<'_, Postgres>,
@@ -238,42 +247,21 @@ pub async fn guard_federated_mix_mutation_tx(
         return Ok(());
     };
     validate_federated_mix_mutation(context)?;
-    sqlx::query(
-        "SELECT pg_advisory_xact_lock(
-             hashtextextended($1 || E'\\n' || $2 || E'\\n' || $3, 0)
-         )",
+    match lock_federated_result_key(
+        transaction,
+        &context.authenticated_domain,
+        &context.actor_jid,
+        &context.request_id,
+        &context.request_digest,
     )
-    .bind(&context.authenticated_domain)
-    .bind(&context.actor_jid)
-    .bind(&context.request_id)
-    .execute(&mut **transaction)
-    .await?;
-    sqlx::query(
-        "DELETE FROM mix_federated_iq_results
-          WHERE authenticated_domain=$1 AND actor_jid=$2 AND request_id=$3
-            AND expires_at<=clock_timestamp()",
-    )
-    .bind(&context.authenticated_domain)
-    .bind(&context.actor_jid)
-    .bind(&context.request_id)
-    .execute(&mut **transaction)
-    .await?;
-    let already_finalized: bool = sqlx::query_scalar(
-        "SELECT EXISTS(
-             SELECT 1 FROM mix_federated_iq_results
-              WHERE authenticated_domain=$1 AND actor_jid=$2 AND request_id=$3
-         )",
-    )
-    .bind(&context.authenticated_domain)
-    .bind(&context.actor_jid)
-    .bind(&context.request_id)
-    .fetch_one(&mut **transaction)
-    .await?;
-    anyhow::ensure!(
-        !already_finalized,
-        "federated MIX mutation was already finalized"
-    );
-    Ok(())
+    .await?
+    {
+        FederatedMixIqReplay::Miss => Ok(()),
+        FederatedMixIqReplay::Replay(response) => {
+            Err(FederatedMixIqAlreadyFinalized::new(response).into())
+        }
+        FederatedMixIqReplay::Conflict => Err(FederatedMixIqConflict.into()),
+    }
 }
 
 /// Persist the exact successful IQ result and its durable S2S delivery in the
@@ -287,42 +275,14 @@ pub async fn finalize_federated_mix_mutation_tx(
     success: FederatedMixSuccess,
     payloads: &dyn MixEventPayloadRenderer,
 ) -> Result<()> {
-    let Some(context) = context else {
-        return Ok(());
-    };
-    let response = payloads.federated_iq_result(context, &success)?;
-    anyhow::ensure!(
-        !response.is_empty() && response.len() <= 2_097_152,
-        "invalid federated MIX IQ result"
-    );
-    let inserted = sqlx::query(
-        "INSERT INTO mix_federated_iq_results(
-             authenticated_domain,actor_jid,request_id,request_digest,response
-         ) VALUES($1,$2,$3,$4,$5)
-         ON CONFLICT(authenticated_domain,actor_jid,request_id) DO NOTHING",
+    finalize_mix_iq(
+        effects,
+        transaction,
+        context,
+        FederatedMixOutcome::Success(success),
+        payloads,
     )
-    .bind(&context.authenticated_domain)
-    .bind(&context.actor_jid)
-    .bind(&context.request_id)
-    .bind(context.request_digest.as_slice())
-    .bind(&response)
-    .execute(&mut **transaction)
-    .await?
-    .rows_affected();
-    anyhow::ensure!(
-        inserted == 1,
-        "federated MIX result fence changed inside one transaction"
-    );
-    effects
-        .enqueue_federated_stanza(
-            transaction,
-            &context.authenticated_domain,
-            &response,
-            None,
-            context.policy,
-        )
-        .await?;
-    Ok(())
+    .await
 }
 
 pub async fn federated_mix_iq_replay(
@@ -338,24 +298,15 @@ pub async fn federated_mix_iq_replay(
         !request_id.is_empty() && request_id.len() <= 1_024,
         "invalid federated MIX IQ id"
     );
-    let row = sqlx::query(
-        "SELECT request_digest,response FROM mix_federated_iq_results
-          WHERE authenticated_domain=$1 AND actor_jid=$2 AND request_id=$3
-            AND expires_at>clock_timestamp()",
+    read_federated_result(
+        pool,
+        &authenticated_domain,
+        &actor_jid,
+        request_id,
+        request_digest,
+        false,
     )
-    .bind(authenticated_domain)
-    .bind(actor_jid)
-    .bind(request_id)
-    .fetch_optional(pool)
-    .await?;
-    let Some(row) = row else {
-        return Ok(FederatedMixIqReplay::Miss);
-    };
-    if row.get::<Vec<u8>, _>("request_digest").as_slice() == request_digest {
-        Ok(FederatedMixIqReplay::Replay(row.get("response")))
-    } else {
-        Ok(FederatedMixIqReplay::Conflict)
-    }
+    .await
 }
 
 /// Persist the exact authenticated mutation result and admit its S2S reply in
@@ -383,47 +334,32 @@ pub async fn admit_federated_mix_iq_result(
         "invalid federated MIX IQ result"
     );
     let mut transaction = pool.begin().await?;
-    sqlx::query(
-        "DELETE FROM mix_federated_iq_results
-          WHERE authenticated_domain=$1 AND actor_jid=$2 AND request_id=$3
-            AND expires_at<=clock_timestamp()",
+    let exact_response = match lock_federated_result_key(
+        &mut transaction,
+        &authenticated_domain,
+        &actor_jid,
+        request_id,
+        request_digest,
     )
-    .bind(&authenticated_domain)
-    .bind(&actor_jid)
-    .bind(request_id)
-    .execute(&mut *transaction)
-    .await?;
-    let inserted = sqlx::query(
-        "INSERT INTO mix_federated_iq_results(
-             authenticated_domain,actor_jid,request_id,request_digest,response
-         ) VALUES($1,$2,$3,$4,$5)
-         ON CONFLICT(authenticated_domain,actor_jid,request_id) DO NOTHING",
-    )
-    .bind(&authenticated_domain)
-    .bind(&actor_jid)
-    .bind(request_id)
-    .bind(request_digest.as_slice())
-    .bind(response)
-    .execute(&mut *transaction)
     .await?
-    .rows_affected();
-    let exact_response = if inserted == 1 {
-        response.to_owned()
-    } else {
-        let row = sqlx::query(
-            "SELECT request_digest,response FROM mix_federated_iq_results
-              WHERE authenticated_domain=$1 AND actor_jid=$2 AND request_id=$3 FOR SHARE",
-        )
-        .bind(&authenticated_domain)
-        .bind(&actor_jid)
-        .bind(request_id)
-        .fetch_one(&mut *transaction)
-        .await?;
-        if row.get::<Vec<u8>, _>("request_digest").as_slice() != request_digest {
+    {
+        FederatedMixIqReplay::Miss => {
+            insert_federated_result(
+                &mut transaction,
+                &authenticated_domain,
+                &actor_jid,
+                request_id,
+                request_digest,
+                response,
+            )
+            .await?;
+            response.to_owned()
+        }
+        FederatedMixIqReplay::Replay(response) => response,
+        FederatedMixIqReplay::Conflict => {
             transaction.rollback().await?;
             return Ok(FederatedMixIqReplay::Conflict);
         }
-        row.get("response")
     };
     effects
         .enqueue_federated_stanza(

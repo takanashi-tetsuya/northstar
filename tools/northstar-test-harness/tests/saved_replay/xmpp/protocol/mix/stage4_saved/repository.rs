@@ -10,6 +10,7 @@ use std::sync::Mutex;
 
 mod administration;
 mod hosted_disco;
+mod invitation_stub;
 mod pam_delivery_repository;
 mod publication_stub;
 

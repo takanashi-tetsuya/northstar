@@ -189,6 +189,21 @@ run_exact_ignored \
 run_exact_ignored \
   room::mix_delivery_route_wake::dead_letter_requeue_preserves_the_bound_account
 
+run_exact_ignored \
+  room::mix_federated_result::denied_invitation_issues_no_token
+
+run_exact_ignored \
+  room::mix_federated_result::invitation_replay_returns_the_same_token
+
+run_exact_ignored \
+  room::mix_federated_result::invited_token_is_consumed_once
+
+run_exact_ignored \
+  room::mix_federated_result::denial_racing_a_different_digest_success_has_one_outcome
+
+run_exact_ignored \
+  room::mix_federated_result::denial_replay_does_not_mutate
+
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline -p northstar-db-it \
   room::mix_mam::mix_anon_misc_permissions_are_atomic_and_private \

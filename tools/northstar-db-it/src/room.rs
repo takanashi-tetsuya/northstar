@@ -10,6 +10,7 @@ mod mix_delivery_capacity;
 mod mix_delivery_identity;
 mod mix_delivery_route_wake;
 mod mix_discovery;
+mod mix_federated_result;
 mod mix_identity;
 mod mix_mam;
 mod mix_mam_authority;

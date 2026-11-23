@@ -4,6 +4,11 @@ use super::publish::matches_locked_publisher_identity;
 use super::*;
 use crate::effects::RoomEffects;
 use northstar_room_application::mix_service::MixPublisherIdentity;
+use northstar_room_core::mix::{MixChannelId, MixRealJid};
+
+mod invitation;
+pub(crate) use self::invitation::execute_mix_invitation;
+use self::invitation::{store_mix_invitation, InvitationWrite};
 
 #[cfg(any(test, feature = "test-support"))]
 pub async fn mix_jid_map_entries(
@@ -99,64 +104,29 @@ pub async fn issue_mix_invitation(
     payloads: &dyn MixEventPayloadRenderer,
     federated: Option<&FederatedMixMutation>,
 ) -> Result<bool> {
-    let inviter = canonical_user_bare(inviter)?;
-    let invitee = canonical_user_bare(invitee)?;
+    let inviter = MixRealJid::parse(inviter)?;
+    let invitee = MixRealJid::parse(invitee)?;
     anyhow::ensure!(
         (16..=1024).contains(&token.len()),
         "invalid MIX invitation token"
     );
-    let token_hash = Sha256::digest(token.as_bytes()).to_vec();
-    let mut transaction = pool.begin().await?;
-    guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
-    let channel = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
-        .bind(channel_id)
-        .fetch_optional(&mut *transaction)
-        .await?;
-    let Some(channel) = channel else {
-        transaction.rollback().await?;
-        return Ok(false);
-    };
-    let channel = channel_from_row(&channel);
-    let authorized: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM mix_channel_roles WHERE channel_id = $1 AND jid = $2 AND role IN ('owner', 'administrator')) OR (SELECT allow_participant_invites AND EXISTS(SELECT 1 FROM mix_participants WHERE channel_id = $1 AND jid = $2) FROM mix_channels WHERE id = $1)",
-    )
-    .bind(channel_id)
-    .bind(&inviter)
-    .fetch_one(&mut *transaction)
-    .await?;
-    if !authorized {
-        transaction.rollback().await?;
-        return Ok(false);
-    }
-    sqlx::query("DELETE FROM mix_invitations WHERE expires_at <= NOW() OR consumed_at IS NOT NULL")
-        .execute(&mut *transaction)
-        .await?;
-    sqlx::query(
-        "INSERT INTO mix_invitations (id, channel_id, inviter_jid, invitee_jid, token_hash, expires_at) VALUES ($1, $2, $3, $4, $5, NOW() + $6::interval)",
-    )
-    .bind(Uuid::new_v4())
-    .bind(channel_id)
-    .bind(&inviter)
-    .bind(&invitee)
-    .bind(token_hash)
-    .bind(format!("{} seconds", lifetime.num_seconds().clamp(60, 86400)))
-    .execute(&mut *transaction)
-    .await?;
-    finalize_federated_mix_mutation_tx(
+    store_mix_invitation(
         effects,
-        &mut transaction,
-        federated,
-        FederatedMixSuccess::Invitation {
-            inviter: inviter.clone(),
-            invitee: invitee.clone(),
-            channel: channel.jid(),
-            token: token.to_owned(),
+        pool,
+        InvitationWrite {
+            channel_id: &MixChannelId::new(channel_id),
+            channel: None,
+            inviter: &inviter,
+            invitee: &invitee,
+            token,
+            token_hash: Sha256::digest(token.as_bytes()).into(),
+            token_id: Uuid::new_v4(),
+            lifetime,
         },
         payloads,
+        federated,
     )
-    .await?;
-    transaction.commit().await?;
-    Ok(true)
+    .await
 }
 
 pub async fn mix_private_message_recipient(

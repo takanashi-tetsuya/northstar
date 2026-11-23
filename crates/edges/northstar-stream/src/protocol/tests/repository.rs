@@ -1007,6 +1007,7 @@ mod push_ports {
 }
 
 mod hosted_disco;
+mod invitation_stub;
 mod pam_delivery_repository;
 
 mod mix_ports {

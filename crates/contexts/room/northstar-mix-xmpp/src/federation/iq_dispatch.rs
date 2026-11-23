@@ -1,6 +1,8 @@
 use super::*;
 use northstar_federation_core::S2sOutboxCapacityExceeded;
-use northstar_room_application::mix_service::MixMamAdmissionOutcome;
+use northstar_room_application::mix_service::{
+    FederatedMixIqAlreadyFinalized, FederatedMixIqConflict, MixMamAdmissionOutcome,
+};
 
 #[allow(clippy::needless_return)]
 pub(super) async fn dispatch_disco_info(
@@ -114,34 +116,11 @@ pub(super) async fn dispatch_channel_iq(
             .await?
         {
             FederatedMixIqReplay::Replay(response) => {
-                state
-                    .mix_service()
-                    .enqueue_s2s_response_batch(
-                        authenticated_domain,
-                        &[response],
-                        state.federation_outbox().outbox_policy(),
-                    )
-                    .await?;
-                state.federation_outbox().wake_outbox();
+                enqueue_result(state, authenticated_domain, response).await?;
                 return Ok(true);
             }
             FederatedMixIqReplay::Conflict => {
-                let response = iq_error_to(
-                    &request.id,
-                    &to_jid.to_string(),
-                    &actor.reply_to,
-                    "cancel",
-                    "conflict",
-                );
-                state
-                    .mix_service()
-                    .enqueue_s2s_response_batch(
-                        authenticated_domain,
-                        &[response],
-                        state.federation_outbox().outbox_policy(),
-                    )
-                    .await?;
-                state.federation_outbox().wake_outbox();
+                send_conflict(state, authenticated_domain, request, to_jid, &actor).await?;
                 return Ok(true);
             }
             FederatedMixIqReplay::Miss => {}
@@ -158,7 +137,15 @@ pub(super) async fn dispatch_channel_iq(
     .await
     {
         Ok(response) => response,
+        Err(error) if admission_conflict(&error) == Some(FederatedMixIqReplay::Conflict) => {
+            send_conflict(state, authenticated_domain, request, to_jid, &actor).await?;
+            return Ok(true);
+        }
         Err(error) if mutation => {
+            if let Some(replay) = error.downcast_ref::<FederatedMixIqAlreadyFinalized>() {
+                enqueue_result(state, authenticated_domain, replay.response().to_owned()).await?;
+                return Ok(true);
+            }
             // A process/task can fail after the mutation transaction has
             // atomically committed its exact result (for example while
             // performing a non-authoritative local projection). Recover
@@ -184,22 +171,7 @@ pub(super) async fn dispatch_channel_iq(
                     return Ok(true);
                 }
                 FederatedMixIqReplay::Conflict => {
-                    let conflict = iq_error_to(
-                        &request.id,
-                        &to_jid.to_string(),
-                        &actor.reply_to,
-                        "cancel",
-                        "conflict",
-                    );
-                    state
-                        .mix_service()
-                        .enqueue_s2s_response_batch(
-                            authenticated_domain,
-                            &[conflict],
-                            state.federation_outbox().outbox_policy(),
-                        )
-                        .await?;
-                    state.federation_outbox().wake_outbox();
+                    send_conflict(state, authenticated_domain, request, to_jid, &actor).await?;
                     return Ok(true);
                 }
                 FederatedMixIqReplay::Miss => return Err(error),
@@ -226,22 +198,7 @@ pub(super) async fn dispatch_channel_iq(
                 state.federation_outbox().wake_outbox();
             }
             FederatedMixIqReplay::Conflict => {
-                let conflict = iq_error_to(
-                    &request.id,
-                    &to_jid.to_string(),
-                    &actor.reply_to,
-                    "cancel",
-                    "conflict",
-                );
-                state
-                    .mix_service()
-                    .enqueue_s2s_response_batch(
-                        authenticated_domain,
-                        &[conflict],
-                        state.federation_outbox().outbox_policy(),
-                    )
-                    .await?;
-                state.federation_outbox().wake_outbox();
+                send_conflict(state, authenticated_domain, request, to_jid, &actor).await?;
             }
             FederatedMixIqReplay::Miss => {
                 let response_kind = Document::parse(&response).ok().and_then(|document| {
@@ -265,7 +222,7 @@ pub(super) async fn dispatch_channel_iq(
                 {
                     FederatedMixIqReplay::Replay(_) => state.federation_outbox().wake_outbox(),
                     FederatedMixIqReplay::Conflict => {
-                        anyhow::bail!("federated MIX error result raced a changed request")
+                        send_conflict(state, authenticated_domain, request, to_jid, &actor).await?;
                     }
                     FederatedMixIqReplay::Miss => {
                         anyhow::bail!("federated MIX error result admission lost its row")
@@ -281,3 +238,58 @@ pub(super) async fn dispatch_channel_iq(
     }
     return Ok(true);
 }
+
+fn admission_conflict(error: &anyhow::Error) -> Option<FederatedMixIqReplay> {
+    error
+        .is::<FederatedMixIqConflict>()
+        .then_some(FederatedMixIqReplay::Conflict)
+}
+
+async fn send_conflict(
+    state: &Arc<impl MixHost>,
+    authenticated_domain: &str,
+    request: &OwnedIq,
+    to_jid: &CanonicalJid,
+    actor: &AuthenticatedMixIqActor,
+) -> Result<()> {
+    enqueue_result(
+        state,
+        authenticated_domain,
+        conflict_response(request, to_jid, actor),
+    )
+    .await
+}
+
+async fn enqueue_result(
+    state: &Arc<impl MixHost>,
+    authenticated_domain: &str,
+    response: String,
+) -> Result<()> {
+    state
+        .mix_service()
+        .enqueue_s2s_response_batch(
+            authenticated_domain,
+            &[response],
+            state.federation_outbox().outbox_policy(),
+        )
+        .await?;
+    state.federation_outbox().wake_outbox();
+    Ok(())
+}
+
+fn conflict_response(
+    request: &OwnedIq,
+    to_jid: &CanonicalJid,
+    actor: &AuthenticatedMixIqActor,
+) -> String {
+    iq_error_to(
+        &request.id,
+        &to_jid.to_string(),
+        &actor.reply_to,
+        "cancel",
+        "conflict",
+    )
+}
+
+#[cfg(test)]
+mod tests;

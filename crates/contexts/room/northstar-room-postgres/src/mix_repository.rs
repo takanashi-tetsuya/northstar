@@ -9,6 +9,7 @@ use uuid::Uuid;
 mod administration_impl;
 mod delivery_impl;
 mod hosted_disco_impl;
+mod invitation_impl;
 mod mam_read_impl;
 mod pam_delivery_impl;
 mod pam_impl;

@@ -92,6 +92,8 @@ impl MixMamReadRepository for Repository {
     }
 }
 
+mod invitation_stub;
+
 impl MixRepository for Repository {
     recording_ports! {
         destroy_mix_channel(channel_id: Uuid, actor: &str, federated: Option<&FederatedMixMutation>) -> bool;

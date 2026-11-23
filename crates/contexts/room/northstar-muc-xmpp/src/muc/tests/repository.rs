@@ -264,6 +264,8 @@ impl MucRepository for Repository {
     }
 }
 
+mod invitation_stub;
+
 mod mix {
     use anyhow::Result;
     use northstar_abuse_policy::ContentIdentityAuthenticators;

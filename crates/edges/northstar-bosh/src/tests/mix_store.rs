@@ -43,6 +43,8 @@ impl MixMamReadRepository for MixStore {
     }
 }
 
+mod invitation_stub;
+
 impl MixRepository for MixStore {
     #[allow(clippy::too_many_arguments)]
     async fn link_local_muc_mirror(

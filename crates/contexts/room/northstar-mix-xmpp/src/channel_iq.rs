@@ -245,9 +245,17 @@ pub async fn handle_channel_iq(
             )
             .await
         }
-        IqOperation::Invite { invitee } if request.kind == "get" => {
+        IqOperation::IssueMixInvitation { invitee } => {
             invitation::invite(
-                state, request, &channel, actor_bare, reply_to, invitee, federated,
+                state,
+                request,
+                &channel,
+                actor_bare,
+                reply_to,
+                invitee
+                    .as_ref()
+                    .context("MIX participants require a user bare JID")?,
+                federated,
             )
             .await
         }

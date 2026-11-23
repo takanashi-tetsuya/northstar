@@ -8,6 +8,8 @@ mod hosted_disco;
 mod pam_delivery_repository;
 mod publication_stub;
 
+mod invitation_stub;
+
 mod mix {
     use super::UnusedPorts;
     use anyhow::Result;

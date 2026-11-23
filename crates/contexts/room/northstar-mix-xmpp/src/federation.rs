@@ -91,8 +91,7 @@ pub fn pam_membership_receives(membership: &PamMembership, node: &str) -> bool {
 }
 
 pub fn federated_mix_iq_is_mutation(request: &OwnedIq) -> bool {
-    !is_mix_mam_request(request)
-        && (request.kind == "set" || matches!(&request.operation, IqOperation::Invite { .. }))
+    request.operation.is_channel_command(&request.kind)
 }
 
 /// S2S entry point.  The S2S layer must call this only after authenticating

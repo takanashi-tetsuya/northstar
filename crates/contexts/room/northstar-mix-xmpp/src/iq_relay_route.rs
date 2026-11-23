@@ -3,10 +3,11 @@
 use crate::ports::{MixFederationPolicy, MixIqRelayRoutePort};
 use dashmap::DashMap;
 use northstar_federation_core::FederationRoute;
+use northstar_room_core::mix_iq_relay::RelayReturnRoute;
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::local_routes::session_table::session_entries_for_in;
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
-use std::sync::Arc;
+use std::sync::{atomic::Ordering, Arc};
 
 pub struct MixIqRelayRoute<F, P> {
     sessions: Arc<DashMap<String, OnlineSession>>,
@@ -46,6 +47,34 @@ impl<F: FederationRoute, P: MixFederationPolicy> MixIqRelayRoutePort for MixIqRe
             }
         } else if self.policy.prepared_domain_allowed(&domain) {
             let _ = self.federation.send(&domain, stanza, None).await;
+        }
+    }
+
+    async fn deliver_return(&self, route: &RelayReturnRoute, stanza: String) {
+        match route {
+            RelayReturnRoute::Local {
+                jid,
+                account,
+                auth_generation,
+                connection,
+            } => {
+                let Some(current) = self.sessions.get(&jid.to_string()) else {
+                    return;
+                };
+                if current.connection_id == *connection
+                    && current.user_id == *account
+                    && current.auth_generation == *auth_generation
+                    && current.routable.load(Ordering::Acquire)
+                {
+                    let _ = current.sender.try_send(stanza);
+                }
+            }
+            RelayReturnRoute::Federated(jid) => {
+                let domain = jid.domainpart();
+                if domain != self.local_domain && self.policy.prepared_domain_allowed(domain) {
+                    let _ = self.federation.send(domain, stanza, None).await;
+                }
+            }
         }
     }
 }
@@ -238,5 +267,33 @@ mod tests {
             *sends.lock().unwrap(),
             vec![("remote.test".into(), "<iq/>".into(), None)],
         );
+    }
+
+    #[tokio::test]
+    async fn relay_reply_stays_on_the_exact_local_connection() {
+        let sessions = Arc::new(DashMap::new());
+        let jid = "alice@example.test/phone";
+        let account = Uuid::new_v4();
+        let connection = Uuid::new_v4();
+        let (original, mut original_receiver) =
+            test_online_session(account, 1, connection, "phone", 2);
+        sessions.insert(jid.to_owned(), original);
+        let (route, sends) = route(Arc::clone(&sessions), true, true);
+        let admitted = RelayReturnRoute::Local {
+            jid: CanonicalJid::parse(jid).unwrap(),
+            account,
+            auth_generation: 1,
+            connection,
+        };
+        route.deliver_return(&admitted, "<iq/>".into()).await;
+        assert_eq!(original_receiver.try_recv().unwrap().stanza, "<iq/>");
+
+        let (replacement, mut replacement_receiver) =
+            test_online_session(account, 1, Uuid::new_v4(), "phone", 2);
+        sessions.insert(jid.to_owned(), replacement);
+        route.deliver_return(&admitted, "<iq/>".into()).await;
+        assert!(original_receiver.try_recv().is_err());
+        assert!(replacement_receiver.try_recv().is_err());
+        assert!(sends.lock().unwrap().is_empty());
     }
 }

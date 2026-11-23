@@ -402,6 +402,7 @@ mod read_snapshots;
 
 #[cfg(test)]
 mod presence_recovery;
+mod relay_return;
 #[cfg(test)]
 mod retirement_identity;
 #[cfg(test)]

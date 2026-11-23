@@ -1,8 +1,14 @@
 //! The MIX IQ relay correlation index: one linearizable budget of pending relays.
 
 use dashmap::DashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+mod authority;
+mod clock;
+
+pub use authority::{RelayPamIncarnation, RelayReturnAuthority, RelayReturnRoute};
+pub use clock::{MixRelayMonotonic, SystemMixRelayMonotonic};
 
 pub const MIX_IQ_RELAY_LIMIT: usize = 1_024;
 pub const MIX_IQ_RELAY_TTL: Duration = Duration::from_secs(30);
@@ -35,6 +41,14 @@ pub enum MixIqRelayStage {
 pub struct PendingMixIqRelay {
     pub stage: MixIqRelayStage,
     pub expires_at: Instant,
+    pub return_authority: Option<RelayReturnAuthority>,
+    token: Arc<()>,
+}
+
+pub enum ResponseTake {
+    MissingOrReplaced,
+    Response(PendingMixIqRelay),
+    Expired(PendingMixIqRelay),
 }
 
 /// One linearizable correlation budget for every MIX IQ relay. Expiry is
@@ -45,6 +59,7 @@ pub struct MixIqRelayIndex {
     admission: Mutex<()>,
     max_entries: usize,
     ttl: Duration,
+    clock: Arc<dyn MixRelayMonotonic>,
 }
 
 impl Default for MixIqRelayIndex {
@@ -59,16 +74,48 @@ impl MixIqRelayIndex {
     }
 
     pub fn with_limits(max_entries: usize, ttl: Duration) -> Self {
+        Self::with_clock(max_entries, ttl, Arc::new(SystemMixRelayMonotonic))
+    }
+
+    pub fn with_clock(
+        max_entries: usize,
+        ttl: Duration,
+        clock: Arc<dyn MixRelayMonotonic>,
+    ) -> Self {
         assert!(max_entries > 0, "MIX relay capacity must be positive");
         Self {
             entries: DashMap::new(),
             admission: Mutex::new(()),
             max_entries,
             ttl,
+            clock,
         }
     }
 
     pub fn admit(&self, id: String, stage: MixIqRelayStage, now: Instant) -> bool {
+        self.insert(id, stage, None, now)
+    }
+
+    pub fn now(&self) -> Instant {
+        self.clock.now()
+    }
+
+    pub fn admit_with_authority(
+        &self,
+        id: String,
+        stage: MixIqRelayStage,
+        authority: RelayReturnAuthority,
+    ) -> bool {
+        self.insert(id, stage, Some(authority), self.now())
+    }
+
+    fn insert(
+        &self,
+        id: String,
+        stage: MixIqRelayStage,
+        return_authority: Option<RelayReturnAuthority>,
+        now: Instant,
+    ) -> bool {
         let _admission = self
             .admission
             .lock()
@@ -81,6 +128,8 @@ impl MixIqRelayIndex {
             PendingMixIqRelay {
                 stage,
                 expires_at: now + self.ttl,
+                return_authority,
+                token: Arc::new(()),
             },
         );
         debug_assert!(self.entries.len() <= self.max_entries);
@@ -116,6 +165,26 @@ impl MixIqRelayIndex {
             .collect()
     }
 
+    pub fn take_response(
+        &self,
+        id: &str,
+        expected: &PendingMixIqRelay,
+        now: Instant,
+    ) -> ResponseTake {
+        let _admission = self
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let removed = self.entries.remove_if(id, |_, pending| {
+            Arc::ptr_eq(&pending.token, &expected.token)
+        });
+        match removed {
+            Some((_, pending)) if pending.expires_at <= now => ResponseTake::Expired(pending),
+            Some((_, pending)) => ResponseTake::Response(pending),
+            None => ResponseTake::MissingOrReplaced,
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -127,3 +196,5 @@ impl MixIqRelayIndex {
 
 #[cfg(test)]
 mod concurrency_tests;
+#[cfg(test)]
+mod return_tests;

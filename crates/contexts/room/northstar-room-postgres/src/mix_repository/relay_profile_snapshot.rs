@@ -4,7 +4,9 @@ use crate::{accounts::find_enabled_user, effects::RoomEffects, mix};
 use anyhow::{Context, Result};
 use northstar_room_application::mix_service::{
     MixRelayProfileDenial, MixRelayProfileQuery, MixRelayProfileRequester, MixRelayProfileResult,
+    RelayProfileSnapshot,
 };
+use northstar_room_core::mix::MixChannelId;
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -17,21 +19,43 @@ pub(super) async fn read(
     effects: &impl RoomEffects,
     query: MixRelayProfileQuery,
 ) -> Result<MixRelayProfileResult> {
+    Ok(read_with_incarnation(pool, effects, query).await?.result)
+}
+
+pub(super) async fn read_with_incarnation(
+    pool: &PgPool,
+    effects: &impl RoomEffects,
+    query: MixRelayProfileQuery,
+) -> Result<RelayProfileSnapshot> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .execute(&mut *transaction)
         .await?;
+    let mut channel_incarnation = None;
     let result = match &query.requester {
         MixRelayProfileRequester::ChannelParticipant {
             actor,
             local_domain,
-        } => read_channel_profile(&mut transaction, effects, &query, actor, local_domain).await?,
+        } => {
+            read_channel_profile(
+                &mut transaction,
+                effects,
+                &query,
+                actor,
+                local_domain,
+                &mut channel_incarnation,
+            )
+            .await?
+        }
         MixRelayProfileRequester::FederatedPam {
             authenticated_service,
         } => read_pam_profile(&mut transaction, effects, &query, authenticated_service).await?,
     };
     transaction.commit().await?;
-    Ok(result)
+    Ok(RelayProfileSnapshot {
+        result,
+        channel_incarnation,
+    })
 }
 
 async fn read_channel_profile(
@@ -40,6 +64,7 @@ async fn read_channel_profile(
     query: &MixRelayProfileQuery,
     actor: &CanonicalJid,
     local_domain: &str,
+    channel_incarnation: &mut Option<MixChannelId>,
 ) -> Result<MixRelayProfileResult> {
     anyhow::ensure!(
         actor.resourcepart().is_some(),
@@ -121,6 +146,7 @@ async fn read_channel_profile(
     let target_jid_address = CanonicalJid::parse_bare(&target.jid)?;
     let target_domain = target_jid_address.domainpart();
     if local_domain.as_deref() != Some(target_domain) {
+        *channel_incarnation = Some(MixChannelId::new(channel.id));
         return Ok(RemoteRoute {
             requester_participant_id: requester.participant_id,
             target_domain: target_domain.to_owned(),

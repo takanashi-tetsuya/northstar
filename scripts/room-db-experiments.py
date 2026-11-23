@@ -128,6 +128,8 @@ EXPECTED_TESTS = {
         'room::mix_discovery::hidden_and_absent_channels_answer_alike',
         'room::mix_discovery::link_error_after_create_keeps_the_create_success',
         'room::mix_discovery::recreated_localpart_is_not_linked_by_a_waiting_link',
+        'room::relay_profile_snapshot::recreated_channel_with_the_same_jid_does_not_receive_a_relay_reply',
+        'room::relay_profile_snapshot::pam_replacement_with_the_same_jid_does_not_receive_a_relay_reply',
         'room::mix_mam::mix_anon_misc_permissions_are_atomic_and_private',
         'room::mix_delivery_capacity::delivery_ack_is_independent_of_the_producer_fence_and_release_is_atomic',
         'room::mix_delivery_route_wake::leased_route_wake_defeats_defer_and_retry_but_not_unrelated_backoff',

@@ -1,0 +1,10 @@
+use crate::mix_service::{MixRelayProfileQuery, MixRelayReturnRepository, RelayProfileSnapshot};
+
+impl MixRelayReturnRepository for super::Repository {
+    async fn relay_profile_with_incarnation(
+        &self,
+        _query: MixRelayProfileQuery,
+    ) -> anyhow::Result<RelayProfileSnapshot> {
+        panic!("unexpected repository call: relay_profile_with_incarnation")
+    }
+}

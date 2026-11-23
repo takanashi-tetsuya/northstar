@@ -156,6 +156,12 @@ run_exact_ignored \
 run_exact_ignored \
   room::mix_discovery::recreated_localpart_is_not_linked_by_a_waiting_link
 
+run_exact_ignored \
+  room::relay_profile_snapshot::recreated_channel_with_the_same_jid_does_not_receive_a_relay_reply
+
+run_exact_ignored \
+  room::relay_profile_snapshot::pam_replacement_with_the_same_jid_does_not_receive_a_relay_reply
+
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline -p northstar-db-it \
   room::mix_mam::mix_anon_misc_permissions_are_atomic_and_private \

@@ -1,4 +1,4 @@
-use super::super::{expire_mix_iq_relay, Arc, Duration, Instant, MixIqRelayExpiryPort};
+use super::super::{expire_mix_iq_relay, Arc, Duration, MixIqRelayExpiryPort};
 
 pub fn start_mix_iq_relay_expiry(
     context: Arc<impl MixIqRelayExpiryPort>,
@@ -21,8 +21,16 @@ pub fn start_mix_iq_relay_expiry(
                     tokio::select! {
                         _ = cancel.cancelled() => return Ok(()),
                         _ = interval.tick() => {
-                            for pending in context.take_expired(Instant::now()) {
-                                expire_mix_iq_relay(context.route(), pending).await;
+                            for pending in context.take_expired(context.relay_now()) {
+                                let Some(authority) = &pending.return_authority else {
+                                    continue;
+                                };
+                                match context.relay_service().relay_return_is_current(authority).await {
+                                    Ok(true) => expire_mix_iq_relay(context.route(), pending).await,
+                                    Ok(false) => {}
+                                    Err(error) => tracing::warn!(%error, "MIX relay timeout authority read failed"),
+                                }
+                                heartbeat.ok();
                             }
                             heartbeat.ok();
                         }

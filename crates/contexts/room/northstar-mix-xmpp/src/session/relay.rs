@@ -1,4 +1,7 @@
 use super::*;
+use crate::relay::handle_channel_relay_request_for;
+use northstar_room_core::mix::{MixChannelAddress, MixPamState};
+use northstar_room_core::mix_iq_relay::{RelayReturnAuthority, RelayReturnRoute};
 
 pub async fn try_mix_iq_relay(session: &impl MixSession, raw: &str) -> Result<Option<MixAction>> {
     let Some(request) = parse_relay_iq(raw)? else {
@@ -42,10 +45,17 @@ pub async fn try_mix_iq_relay(session: &impl MixSession, raw: &str) -> Result<Op
             "not-authorized",
         ))));
     }
-    let channel_address = CanonicalJid::parse_bare(&channel_jid)?;
-    let channel_domain = channel_address.domainpart();
+    let channel_address = MixChannelAddress::parse(&channel_jid)?;
+    let channel_domain = channel_address.domain();
+    let exact_route = RelayReturnRoute::Local {
+        jid: CanonicalJid::parse(full_jid)?,
+        account: user.id,
+        auth_generation: user.auth_generation,
+        connection: session.connection_id(),
+    };
     if channel_domain == mix_domain(session) {
-        let response = handle_channel_relay_request(session.host(), &request, full_jid).await?;
+        let response =
+            handle_channel_relay_request_for(session.host(), &request, exact_route).await?;
         return Ok(Some(if response.is_empty() {
             MixAction::None
         } else {
@@ -57,7 +67,9 @@ pub async fn try_mix_iq_relay(session: &impl MixSession, raw: &str) -> Result<Op
         .mix_service()
         .pam_membership(user.id, &channel_jid)
         .await?;
-    if !membership.is_some_and(|membership| membership.state == "joined")
+    let membership =
+        membership.filter(|membership| membership.state == MixPamState::Joined.as_str());
+    if membership.is_none()
         || session
             .host()
             .mix_service()
@@ -82,6 +94,15 @@ pub async fn try_mix_iq_relay(session: &impl MixSession, raw: &str) -> Result<Op
             original_id: request.id.clone(),
             expected_from: request.to.clone(),
             channel_jid: channel_jid.clone(),
+        },
+        RelayReturnAuthority {
+            exact_route,
+            channel: channel_address.clone(),
+            channel_incarnation: None,
+            pam_incarnation: membership
+                .as_ref()
+                .map(PamMembership::relay_incarnation)
+                .transpose()?,
         },
     ) {
         return Ok(Some(MixAction::Send(relay_error(

@@ -1,10 +1,18 @@
 //! Force profile reads to wait after MIX admission while a revocation commits.
 
 use anyhow::Result;
-use northstar_room_application::mix_service::{
-    MixRelayProfileDenial, MixRelayProfileKind, MixRelayProfileQuery, MixRelayProfileRequester,
-    MixRelayProfileResult, MixRepository,
+use northstar_abuse_application::guard::{
+    test_mix_message_content_keyring, test_mix_retraction_content_keyring,
 };
+use northstar_room_application::mix_service::{
+    CreateChannelOutcome, JoinChannelOutcome, JoinMixRequest, MixParticipantPreference,
+    MixRelayProfileDenial, MixRelayProfileKind, MixRelayProfileQuery, MixRelayProfileRequester,
+    MixRelayProfileResult, MixRelayReturnRepository, MixRepository, MixService,
+};
+use northstar_room_core::mix::{
+    MixChannelAddress, MixChannelId, MixLocalParticipantId, MixParticipantId, MixRelayAddress,
+};
+use northstar_room_core::mix_iq_relay::{RelayReturnAuthority, RelayReturnRoute};
 use northstar_workflows::room_effects::PostgresMixRepository;
 use northstar_xmpp_types::jid::CanonicalJid;
 use sqlx::{postgres::PgPoolOptions, PgPool, Postgres, Transaction};
@@ -400,6 +408,174 @@ async fn relay_profile_snapshots_work_on_a_read_only_connection() -> Result<()> 
             repository.relay_profile_snapshot(pam_query).await?,
             MixRelayProfileResult::VCard4(OLD_ITEM.to_owned())
         );
+        Ok(())
+    }
+    .await;
+    fixture.close().await?;
+    result
+}
+
+fn return_service(fixture: &Fixture) -> Result<MixService<PostgresMixRepository>> {
+    MixService::new(
+        PostgresMixRepository::new(fixture.pool.clone()),
+        test_mix_message_content_keyring(),
+        test_mix_retraction_content_keyring(),
+        4,
+        fixture.schema.clone(),
+    )
+}
+
+async fn hosted_remote_relay(
+    repository: &PostgresMixRepository,
+    address: &MixChannelAddress,
+) -> Result<(MixChannelId, MixRelayProfileQuery)> {
+    let (outcome, _) = repository
+        .create_mix_channel(
+            address.domain(),
+            Some(address.localpart()),
+            REQUESTER,
+            4,
+            None,
+        )
+        .await?;
+    let CreateChannelOutcome::Created(channel) = outcome else {
+        anyhow::bail!("expected an empty channel address, got {outcome:?}");
+    };
+    let mut target = None;
+    for (actor, nick) in [(REQUESTER, "Requester"), ("target@remote.test", "Target")] {
+        let outcome = repository
+            .join_mix_channel(
+                channel,
+                JoinMixRequest {
+                    actor_jid: actor.to_owned(),
+                    nick: Some(nick.to_owned()),
+                    nodes: Vec::new(),
+                    pam_user_id: None,
+                    invitation: None,
+                    preference: Some(MixParticipantPreference {
+                        vcard: "allow".into(),
+                        ..MixParticipantPreference::default()
+                    }),
+                    anonymous_profile: false,
+                },
+                None,
+            )
+            .await?;
+        let JoinChannelOutcome::Joined { participant, .. } = outcome else {
+            anyhow::bail!("failed to join {actor}: {outcome:?}");
+        };
+        if actor != REQUESTER {
+            target = Some(MixParticipantId::Local(MixLocalParticipantId::new(
+                participant.participant_id,
+            )));
+        }
+    }
+    let target =
+        MixRelayAddress::new(address.clone(), target.expect("remote target joined"), None)?;
+    Ok((
+        MixChannelId::new(channel),
+        MixRelayProfileQuery {
+            channel: CanonicalJid::parse_bare(address.as_str())?,
+            requester: MixRelayProfileRequester::ChannelParticipant {
+                actor: CanonicalJid::parse(&format!("{REQUESTER}/phone"))?,
+                local_domain: LOCAL_DOMAIN.to_owned(),
+            },
+            target: CanonicalJid::parse_bare(target.as_str())?,
+            kind: MixRelayProfileKind::VCardTemp,
+        },
+    ))
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn recreated_channel_with_the_same_jid_does_not_receive_a_relay_reply() -> Result<()> {
+    let fixture = Fixture::new().await?;
+    let result: Result<()> = async {
+        let account = fixture.account("requester").await?;
+        let repository = PostgresMixRepository::new(fixture.pool.clone());
+        let service = return_service(&fixture)?;
+        let address = MixChannelAddress::parse(LOCAL_CHANNEL)?;
+        let (original, query) = hosted_remote_relay(&repository, &address).await?;
+        let snapshot = repository.relay_profile_with_incarnation(query).await?;
+        assert!(matches!(
+            snapshot.result,
+            MixRelayProfileResult::RemoteRoute { .. }
+        ));
+        assert_eq!(snapshot.channel_incarnation.as_ref(), Some(&original));
+        let admitted = RelayReturnAuthority {
+            exact_route: RelayReturnRoute::Local {
+                jid: CanonicalJid::parse(&format!("{REQUESTER}/phone"))?,
+                account,
+                auth_generation: 0,
+                connection: Uuid::new_v4(),
+            },
+            channel: address.clone(),
+            channel_incarnation: snapshot.channel_incarnation,
+            pam_incarnation: None,
+        };
+        assert!(service.relay_return_is_current(&admitted).await?);
+        assert!(
+            repository
+                .destroy_mix_channel(original.as_uuid(), REQUESTER, None)
+                .await?
+        );
+        let (replacement, query) = hosted_remote_relay(&repository, &address).await?;
+        assert_ne!(original, replacement);
+        assert!(matches!(
+            repository.relay_profile_snapshot(query).await?,
+            MixRelayProfileResult::RemoteRoute { .. },
+        ));
+        assert!(!service.relay_return_is_current(&admitted).await?);
+        Ok(())
+    }
+    .await;
+    fixture.close().await?;
+    result
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn pam_replacement_with_the_same_jid_does_not_receive_a_relay_reply() -> Result<()> {
+    let fixture = Fixture::new().await?;
+    let result: Result<()> = async {
+        let (account, query) = fixture.pam_relay("target", "open").await?;
+        let service = return_service(&fixture)?;
+        let original = service
+            .pam_membership(account, REMOTE_CHANNEL)
+            .await?
+            .unwrap();
+        let admitted = RelayReturnAuthority {
+            exact_route: RelayReturnRoute::Local {
+                jid: CanonicalJid::parse(&format!("target@{LOCAL_DOMAIN}/phone"))?,
+                account,
+                auth_generation: 0,
+                connection: Uuid::new_v4(),
+            },
+            channel: MixChannelAddress::parse(REMOTE_CHANNEL)?,
+            channel_incarnation: None,
+            pam_incarnation: Some(original.relay_incarnation()?),
+        };
+        assert!(service.relay_return_is_current(&admitted).await?);
+        sqlx::query("DELETE FROM mix_pam_memberships WHERE id = $1")
+            .bind(original.id)
+            .execute(&fixture.pool)
+            .await?;
+        assert!(service.relay_return_is_current(&admitted).await?);
+        sqlx::query(
+            "INSERT INTO mix_pam_memberships (id, user_id, channel_jid, participant_id, state)
+             VALUES ($1, $2, $3, $4, 'joined')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(account)
+        .bind(REMOTE_CHANNEL)
+        .bind(original.participant_id)
+        .execute(&fixture.pool)
+        .await?;
+        assert_eq!(
+            service.relay_profile_snapshot(query).await?,
+            MixRelayProfileResult::VCard4(OLD_ITEM.to_owned()),
+        );
+        assert!(!service.relay_return_is_current(&admitted).await?);
         Ok(())
     }
     .await;

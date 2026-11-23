@@ -26,6 +26,7 @@ mod pam_projection_repository;
 mod pam_repository;
 mod payloads;
 mod presence_recovery_repository;
+mod relay_return_repository;
 mod wake;
 
 pub use self::pam_projection_repository::{
@@ -79,6 +80,7 @@ pub use self::presence_recovery_repository::{
     MixPresenceRecoveryRepository, RecoveryEpoch, RecoveryEpochAndTargets, RecoveryPresenceSource,
     RecoveryProbeTarget, RecoveryProgress, RECOVERY_PRESENCE_PAGE_CAP,
 };
+pub use self::relay_return_repository::{MixRelayReturnRepository, RelayProfileSnapshot};
 pub use self::wake::{MixDeliveryWakeBroker, MixDeliveryWakeSubscription};
 
 pub mod foreground;

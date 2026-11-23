@@ -15,6 +15,7 @@ mod pam_impl;
 mod pam_projection_impl;
 mod presence_recovery_impl;
 mod relay_profile_snapshot;
+mod relay_return_impl;
 mod repository_impl;
 #[derive(Clone)]
 pub struct PostgresMixRepository<E> {

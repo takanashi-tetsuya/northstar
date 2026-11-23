@@ -15,7 +15,7 @@ use northstar_room_application::mix_service::{
     PamMembership, PresenceOutcome, RecoveryEpoch, RecoveryPresenceSource, RecoveryProgress,
 };
 use northstar_room_core::mix::{MixChannelAddress, MixChannelId, MixSessionCapability};
-use northstar_room_core::mix_iq_relay::{MixIqRelayIndex, PendingMixIqRelay};
+use northstar_room_core::mix_iq_relay::{MixIqRelayIndex, PendingMixIqRelay, RelayReturnRoute};
 use northstar_roster_core::RosterChange;
 use northstar_stream::frame_execution::{SessionExecutions, Stage};
 use northstar_stream::local_routes::session::OnlineSession;
@@ -140,6 +140,14 @@ pub trait MixFederationPolicy: Send + Sync + 'static {
 /// Delivery of one relayed MIX IQ response to a local or federated JID.
 pub trait MixIqRelayRoutePort: Send + Sync + 'static {
     fn deliver(&self, recipient: &str, stanza: String) -> impl Future<Output = ()> + Send;
+
+    fn deliver_return(
+        &self,
+        _route: &RelayReturnRoute,
+        _stanza: String,
+    ) -> impl Future<Output = ()> + Send {
+        std::future::ready(())
+    }
 }
 
 /// The MIX IQ timeout worker's view of the correlation index.
@@ -148,6 +156,10 @@ pub trait MixIqRelayExpiryPort: Send + Sync + 'static {
 
     fn take_expired(&self, now: Instant) -> Vec<PendingMixIqRelay>;
     fn route(&self) -> &Self::Route;
+
+    type Repository: MixRepository + 'static;
+    fn relay_service(&self) -> &MixService<Self::Repository>;
+    fn relay_now(&self) -> Instant;
 }
 
 /// The durable MIX delivery lanes' view of routing.

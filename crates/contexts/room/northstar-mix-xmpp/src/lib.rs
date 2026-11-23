@@ -66,8 +66,8 @@ pub use self::presence::{mix_presence_route_is_current, publish_verified_mix_pre
 use self::presence::{presence_children, process_channel_presence};
 pub use self::protocol_session::MixHandlers;
 use self::relay::{
-    deliver_mix_relay_stanza, expire_mix_iq_relay, handle_channel_relay_request, parse_relay_iq,
-    register_mix_iq_relay, relay_error, relay_iq_xml, RelayIq,
+    expire_mix_iq_relay, handle_channel_relay_request, parse_relay_iq, register_mix_iq_relay,
+    relay_error, relay_iq_xml, RelayIq,
 };
 use self::session::push_mix_roster_update;
 pub use self::workers::iq_relay_expiry::start_mix_iq_relay_expiry;
@@ -112,7 +112,7 @@ use roxmltree::{Document, Node};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use uuid::Uuid;
 
 const PUBSUB_NS: &str = "http://jabber.org/protocol/pubsub";

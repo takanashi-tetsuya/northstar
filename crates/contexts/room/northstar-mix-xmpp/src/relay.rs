@@ -5,6 +5,8 @@ pub use northstar_room_application::mix_service::MixRelayProfileKind as RelayPay
 use northstar_room_application::mix_service::{
     MixRelayProfileDenial, MixRelayProfileQuery, MixRelayProfileRequester, MixRelayProfileResult,
 };
+use northstar_room_core::mix::MixChannelAddress;
+use northstar_room_core::mix_iq_relay::{RelayReturnAuthority, RelayReturnRoute};
 
 #[derive(Clone, Debug)]
 pub struct RelayIq {
@@ -143,48 +145,44 @@ pub fn register_mix_iq_relay(
     state: &Arc<impl MixHost>,
     id: String,
     stage: MixIqRelayStage,
+    authority: RelayReturnAuthority,
 ) -> bool {
-    state.pending_mix_iq().admit(id, stage, Instant::now())
+    state
+        .pending_mix_iq()
+        .admit_with_authority(id, stage, authority)
 }
 
 pub async fn expire_mix_iq_relay(route: &impl MixIqRelayRoutePort, pending: PendingMixIqRelay) {
-    let (requester, stanza) = match pending.stage {
+    let Some(authority) = pending.return_authority else {
+        return;
+    };
+    let stanza = match pending.stage {
         MixIqRelayStage::Participant {
             requester_full_jid,
             original_id,
             expected_from,
             ..
-        } => {
-            let stanza = relay_error(
-                &original_id,
-                &expected_from,
-                &requester_full_jid,
-                "wait",
-                "remote-server-timeout",
-            );
-            (requester_full_jid, stanza)
-        }
+        } => relay_error(
+            &original_id,
+            &expected_from,
+            &requester_full_jid,
+            "wait",
+            "remote-server-timeout",
+        ),
         MixIqRelayStage::Channel {
             requester_full_jid,
             original_id,
             target_encoded_jid,
             ..
-        } => {
-            let stanza = relay_error(
-                &original_id,
-                &target_encoded_jid,
-                &requester_full_jid,
-                "wait",
-                "remote-server-timeout",
-            );
-            (requester_full_jid, stanza)
-        }
+        } => relay_error(
+            &original_id,
+            &target_encoded_jid,
+            &requester_full_jid,
+            "wait",
+            "remote-server-timeout",
+        ),
     };
-    route.deliver(&requester, stanza).await;
-}
-
-pub async fn deliver_mix_relay_stanza(state: &Arc<impl MixHost>, recipient: &str, stanza: String) {
-    state.mix_iq_relay_route().deliver(recipient, stanza).await;
+    route.deliver_return(&authority.exact_route, stanza).await;
 }
 
 pub(super) fn relay_profile_reply(
@@ -232,7 +230,18 @@ pub async fn handle_channel_relay_request(
     request: &RelayIq,
     actor_full: &str,
 ) -> Result<String> {
-    let actor = northstar_xmpp_types::jid::CanonicalJid::parse(actor_full)?;
+    let route = RelayReturnRoute::Federated(CanonicalJid::parse(actor_full)?);
+    handle_channel_relay_request_for(state, request, route).await
+}
+
+pub(super) async fn handle_channel_relay_request_for(
+    state: &Arc<impl MixHost>,
+    request: &RelayIq,
+    exact_route: RelayReturnRoute,
+) -> Result<String> {
+    let actor = exact_route.jid();
+    let actor_full = actor.to_string();
+    let actor_full = actor_full.as_str();
     let actor_resource = actor
         .resourcepart()
         .context("MIX IQ relay requires a full participant JID")?;
@@ -246,7 +255,7 @@ pub async fn handle_channel_relay_request(
     );
     let result = state
         .mix_service()
-        .relay_profile_snapshot(MixRelayProfileQuery {
+        .relay_profile_with_incarnation(MixRelayProfileQuery {
             channel,
             requester: MixRelayProfileRequester::ChannelParticipant {
                 actor: actor.clone(),
@@ -260,10 +269,13 @@ pub async fn handle_channel_relay_request(
         requester_participant_id,
         target_domain,
         target_jid,
-    } = result
+    } = result.result
     else {
-        return relay_profile_reply(&request.id, &request.to, actor_full, result);
+        return relay_profile_reply(&request.id, &request.to, actor_full, result.result);
     };
+    let channel_incarnation = result
+        .channel_incarnation
+        .context("missing hosted relay incarnation")?;
     let requester_encoded = encoded_participant_full_jid(
         &channel_jid,
         &requester_participant_id.to_string(),
@@ -289,6 +301,12 @@ pub async fn handle_channel_relay_request(
             target_real_jid: target_jid.clone(),
             target_encoded_jid: request.to.clone(),
             channel_jid: channel_jid.clone(),
+        },
+        RelayReturnAuthority {
+            exact_route,
+            channel: MixChannelAddress::parse(&channel_jid)?,
+            channel_incarnation: Some(channel_incarnation),
+            pam_incarnation: None,
         },
     ) {
         return Ok(relay_error(

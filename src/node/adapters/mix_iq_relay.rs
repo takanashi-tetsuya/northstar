@@ -4,7 +4,9 @@ use crate::node::FederationRouter;
 use crate::node::ServerNode;
 use northstar_federation_application::effective_policy::EffectiveFederationPolicy;
 use northstar_mix_xmpp::ports::{MixFederationPolicy, MixIqRelayExpiryPort};
+use northstar_room_application::mix_service::MixService;
 use northstar_room_core::mix_iq_relay::{MixIqRelayIndex, PendingMixIqRelay};
+use northstar_workflows::room_effects::PostgresMixRepository;
 use std::{sync::Arc, time::Instant};
 
 pub struct MixIqFederationPolicy(EffectiveFederationPolicy);
@@ -21,6 +23,7 @@ pub type MixIqRelayRoute =
 pub struct MixIqRelayExpiryContext {
     pending: Arc<MixIqRelayIndex>,
     route: MixIqRelayRoute,
+    service: MixService<PostgresMixRepository>,
 }
 
 impl ServerNode {
@@ -37,6 +40,7 @@ impl ServerNode {
         MixIqRelayExpiryContext {
             pending: Arc::clone(&self.room.pending_mix_iq),
             route: self.mix_iq_relay_route(),
+            service: self.room.mix_service().clone(),
         }
     }
 }
@@ -50,5 +54,15 @@ impl MixIqRelayExpiryPort for MixIqRelayExpiryContext {
 
     fn route(&self) -> &MixIqRelayRoute {
         &self.route
+    }
+
+    type Repository = PostgresMixRepository;
+
+    fn relay_service(&self) -> &MixService<Self::Repository> {
+        &self.service
+    }
+
+    fn relay_now(&self) -> Instant {
+        self.pending.now()
     }
 }

@@ -535,6 +535,7 @@ pub trait MixRepository:
     + MixPamDeliveryRepository
     + MixAdministrationRepository
     + MixHostedDiscoRepository
+    + MixRelayReturnRepository
 {
     fn link_local_muc_mirror(
         &self,

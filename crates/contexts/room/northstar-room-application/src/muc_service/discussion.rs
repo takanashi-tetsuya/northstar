@@ -1,8 +1,57 @@
 //! One lazy frame-owned discussion slot. Absence is selected by the session,
 //! never by converting retired/conflicting registration into a legacy path.
 
+use super::{DiscussionCommit, MucRepository, MucService, RetractionCommit};
 pub use crate::discussion::{Observation, PreparedDiscussion, Rejected, Summary, TerminalReason};
+use crate::{
+    validate_muc_retraction_command, MucDiscussion, MucDiscussionAdmission, MucRetractionCommand,
+    MucRetractionMutation, MucRetractionOutcome,
+};
 use std::sync::Mutex;
+
+impl<R: MucRepository> MucService<R> {
+    pub async fn execute_muc_live_discussion(
+        &self,
+        command: &MucDiscussion,
+    ) -> anyhow::Result<DiscussionCommit> {
+        if !command.authority_is_consistent(&self.configured_domain) {
+            return Ok(DiscussionCommit {
+                outcome: MucDiscussionAdmission::Unauthorized,
+                audience: None,
+            });
+        }
+        self.repository.admit_live_discussion(command).await
+    }
+
+    pub async fn execute_muc_live_retraction(
+        &self,
+        command: MucRetractionCommand<'_>,
+    ) -> anyhow::Result<RetractionCommit> {
+        if validate_muc_retraction_command(&command).is_err() {
+            return Ok(RetractionCommit {
+                outcome: MucRetractionOutcome::Unauthorized,
+                audience: None,
+            });
+        }
+        self.commit_live_retraction(command.mutation).await
+    }
+
+    pub async fn commit_live_retraction(
+        &self,
+        mutation: MucRetractionMutation<'_>,
+    ) -> anyhow::Result<RetractionCommit> {
+        if !mutation
+            .authority
+            .matches_authenticated_scope(&self.configured_domain)
+        {
+            return Ok(RetractionCommit {
+                outcome: MucRetractionOutcome::Unauthorized,
+                audience: None,
+            });
+        }
+        self.repository.commit_live_retraction(mutation).await
+    }
+}
 
 #[derive(Default)]
 struct SlotState {

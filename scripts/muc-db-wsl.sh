@@ -212,3 +212,21 @@ cargo test --locked --offline -p northstar-db-it \
 cargo test --locked --offline -p northstar-db-it \
   operations::operation_muc_destroy_repository::missing_exact_destroy_intent_rolls_back_without_audit_or_room_mutation \
   -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_live_audience::discussion_audience_is_the_occupancy_at_admission \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_live_audience::retraction_audience_is_the_occupancy_at_admission \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_live_audience::account_deletion_then_groupchat_admission_completes_in_one_order \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_live_audience::groupchat_admission_then_account_deletion_completes_in_one_order \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_live_audience::retraction_and_account_deletion_take_user_before_room \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_live_audience::disabled_account_is_rejected_under_the_user_fence \
+  -- --ignored --exact --nocapture

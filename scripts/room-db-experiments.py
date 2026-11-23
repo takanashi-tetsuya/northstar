@@ -46,6 +46,12 @@ EXPECTED_TESTS = {
         'room::cluster_muc::federated_rebind_is_atomic_and_fences_the_old_connection',
         'room::cluster_muc::postgres_failure_fixture_covers_cluster_muc_authority',
         'operations::operation_muc_destroy_repository::missing_exact_destroy_intent_rolls_back_without_audit_or_room_mutation',
+        'room::muc_live_audience::discussion_audience_is_the_occupancy_at_admission',
+        'room::muc_live_audience::retraction_audience_is_the_occupancy_at_admission',
+        'room::muc_live_audience::account_deletion_then_groupchat_admission_completes_in_one_order',
+        'room::muc_live_audience::groupchat_admission_then_account_deletion_completes_in_one_order',
+        'room::muc_live_audience::retraction_and_account_deletion_take_user_before_room',
+        'room::muc_live_audience::disabled_account_is_rejected_under_the_user_fence',
     ),
     'mix': (
         'room::mix_pam_durability::pam_restart_and_result_claims_preserve_authority_and_token_fencing',

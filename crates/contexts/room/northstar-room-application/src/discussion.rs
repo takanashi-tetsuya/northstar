@@ -1,6 +1,7 @@
 //! One discussion invocation's acceptance knowledge and consuming live effects.
 //! SQL authority, clocks, I/O, and asynchronous work on Drop stay in adapters.
 
+use crate::muc_service::LiveAudience;
 use northstar_room_core::{MucDiscussion, MucDiscussionAdmission};
 use std::{
     future::Future,
@@ -238,6 +239,7 @@ impl Snapshot {
 struct Invocation {
     prepared: PreparedDiscussion,
     state: Mutex<Snapshot>,
+    committed_audience: Mutex<Option<LiveAudience>>,
 }
 
 /// Cloning observation does not clone request, COMMIT or fanout authority.
@@ -269,6 +271,7 @@ impl Observation {
     pub fn new(prepared: PreparedDiscussion) -> Self {
         Self(Arc::new(Invocation {
             prepared,
+            committed_audience: Mutex::new(None),
             state: Mutex::new(Snapshot {
                 request_issued: false,
                 repository_started: false,
@@ -283,6 +286,13 @@ impl Observation {
     fn state(&self) -> MutexGuard<'_, Snapshot> {
         self.0
             .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn committed_audience(&self) -> MutexGuard<'_, Option<LiveAudience>> {
+        self.0
+            .committed_audience
             .lock()
             .unwrap_or_else(|error| error.into_inner())
     }
@@ -315,6 +325,7 @@ impl Observation {
         let mut state = self.state();
         if state.terminal.is_none() {
             state.terminal = Some(reason);
+            *self.committed_audience() = None;
         }
         state.summary()
     }
@@ -392,7 +403,18 @@ impl Request {
         &self,
         outcome: MucDiscussionAdmission,
     ) -> Result<PreparedCommit, Rejected> {
+        self.enter_commit_with_audience(outcome, None)
+    }
+
+    fn enter_commit_with_audience(
+        &self,
+        outcome: MucDiscussionAdmission,
+        audience: Option<LiveAudience>,
+    ) -> Result<PreparedCommit, Rejected> {
         let fact = self.proposed(outcome)?;
+        if audience.is_some() && fact.fresh_class.is_none() {
+            return Err(Rejected::Result);
+        }
         let mut state = self.observation.state();
         awaiting_return(&state)?;
         if !state.repository_started {
@@ -405,6 +427,7 @@ impl Request {
         Ok(PreparedCommit {
             observation: self.observation.clone(),
             fact,
+            audience,
         })
     }
 
@@ -417,6 +440,7 @@ impl Request {
         if state.knowledge != Knowledge::CommitCallEntered(prepared.fact) {
             return Err(Rejected::Knowledge);
         }
+        *self.observation.committed_audience() = prepared.audience;
         state.knowledge = Knowledge::ReceiptKnown(prepared.fact);
         Ok(())
     }
@@ -454,6 +478,7 @@ impl Request {
             state.fanout.stage = FanoutStage::Ready;
             Some(FanoutPermit {
                 observation: self.observation.clone(),
+                audience: self.observation.committed_audience().take(),
             })
         } else {
             None
@@ -481,6 +506,7 @@ impl Request {
 pub struct PreparedCommit {
     observation: Observation,
     fact: CommitFact,
+    audience: Option<LiveAudience>,
 }
 
 #[derive(Debug)]
@@ -496,8 +522,17 @@ pub async fn commit_observed<E>(
     request: &Request,
     outcome: MucDiscussionAdmission,
 ) -> Result<(), CommitError<E>> {
+    commit_observed_with_audience(commit, request, outcome, None).await
+}
+
+pub async fn commit_observed_with_audience<E>(
+    commit: impl Future<Output = Result<(), E>>,
+    request: &Request,
+    outcome: MucDiscussionAdmission,
+    audience: Option<LiveAudience>,
+) -> Result<(), CommitError<E>> {
     let prepared = request
-        .enter_commit(outcome)
+        .enter_commit_with_audience(outcome, audience)
         .map_err(CommitError::Observation)?;
     commit.await.map_err(CommitError::Commit)?;
     request.received(prepared).map_err(CommitError::Observation)
@@ -533,9 +568,14 @@ impl Completion {
 /// acknowledgement, repository authority or asynchronous Drop is available.
 pub struct FanoutPermit {
     observation: Observation,
+    audience: Option<LiveAudience>,
 }
 
 impl FanoutPermit {
+    pub fn audience(&self) -> Option<&LiveAudience> {
+        self.audience.as_ref()
+    }
+
     pub fn start(self) -> Result<Fanout, Rejected> {
         {
             let mut state = self.observation.state();
@@ -680,6 +720,7 @@ pub(crate) fn assert_commit_fact_cannot_be_substituted() {
         let substitute = PreparedCommit {
             observation: observation.clone(),
             fact,
+            audience: None,
         };
         assert_eq!(
             request.received(substitute),
@@ -1138,4 +1179,6 @@ mod tests {
             Knowledge::NoCommitRequested
         );
     }
+
+    mod live_audience;
 }

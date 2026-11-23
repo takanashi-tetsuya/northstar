@@ -291,3 +291,5 @@ async fn discussion_service_preserves_receiving_authority() {
         );
     }
 }
+
+mod live_audience;

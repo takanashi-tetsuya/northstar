@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod live_audience;
+
 impl ClusterManager {
     pub async fn send_to_muc(&self, room_jid: &str, stanza: &str) -> Result<()> {
         self.send_to_muc_internal(room_jid, stanza, None).await

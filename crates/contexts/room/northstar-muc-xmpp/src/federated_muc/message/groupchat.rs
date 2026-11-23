@@ -4,6 +4,8 @@ use super::archive_eligibility::{
     archive_payload, cluster_subject_archive, federated_archive_eligible,
 };
 use super::*;
+use crate::muc::discussion::{live_recipients, refresh_live_recipient};
+use northstar_room_application::muc_service::LiveAudience;
 use northstar_room_core::{stanza::apply_muc_discussion_reflection, ClusterMucOccupancyTarget};
 use tokio::sync::OwnedMutexGuard;
 
@@ -22,6 +24,7 @@ pub(super) struct GroupchatOccupancy<S: MucHost> {
 pub(super) struct GroupchatReflection {
     reflected: String,
     actor_scope: String,
+    audience: Option<LiveAudience>,
 }
 
 pub(super) struct GroupchatAdmission<'a> {
@@ -271,6 +274,7 @@ pub(super) fn prepare_groupchat<'a, S: MucHost>(
         GroupchatReflection {
             reflected,
             actor_scope,
+            audience: None,
         },
         GroupchatAdmission {
             subject_command,
@@ -303,6 +307,7 @@ pub(super) async fn admit_groupchat<S: MucHost>(
     let &mut GroupchatReflection {
         ref mut reflected,
         ref actor_scope,
+        ref mut audience,
     } = reflection;
     let GroupchatAdmission {
         subject_command,
@@ -379,9 +384,9 @@ pub(super) async fn admit_groupchat<S: MucHost>(
                     .attr("stamp", stamp.format("%Y-%m-%dT%H:%M:%SZ")),
             )
             .finish();
-        match state
+        let commit = state
             .muc_service()
-            .retract_local_message_and_archive_action(MucRetractionMutation {
+            .commit_live_retraction(MucRetractionMutation {
                 action_id: stable_id,
                 room_id: room.id,
                 target_id,
@@ -395,9 +400,9 @@ pub(super) async fn admit_groupchat<S: MucHost>(
                 kind: MucRetractionKind::Author,
                 authority: actor_authority,
             })
-            .await?
-        {
-            MucRetractionOutcome::Applied => {}
+            .await?;
+        match commit.outcome {
+            MucRetractionOutcome::Applied => *audience = commit.audience,
             MucRetractionOutcome::Unauthorized => {
                 return Ok(MessageStep::Done(federated_error(
                     &request.stanza,
@@ -526,9 +531,9 @@ pub(super) async fn admit_groupchat<S: MucHost>(
             }
         }
     } else {
-        let admission = state
+        let commit = state
             .muc_service()
-            .admit_local_discussion(MucDiscussion {
+            .execute_muc_live_discussion(&MucDiscussion {
                 id: stable_id,
                 room_id: room.id,
                 actor_scope: actor_scope.clone(),
@@ -543,6 +548,8 @@ pub(super) async fn admit_groupchat<S: MucHost>(
                 authority: actor_authority,
             })
             .await?;
+        let admission = commit.outcome;
+        *audience = commit.audience;
         match admission {
             MucDiscussionAdmission::Stored { .. } => apply_muc_discussion_reflection(
                 reflected,
@@ -585,19 +592,24 @@ pub(super) async fn fan_out_groupchat<S: MucHost>(
         ..
     } = address;
     let GroupchatOccupancy { own, .. } = occupancy;
-    let GroupchatReflection { reflected, .. } = reflection;
-    if state
-        .federated_muc_publish_room_message(room_jid, reflected, Some(actor_full_jid))
-        .await
-        .is_err()
-    {
+    let GroupchatReflection {
+        reflected,
+        audience,
+        ..
+    } = reflection;
+    let publication = if let Some(audience) = audience {
+        state
+            .publish_muc_live_audience(room_jid, reflected, Some(actor_full_jid), audience)
+            .await
+    } else {
+        state
+            .federated_muc_publish_room_message(room_jid, reflected, Some(actor_full_jid))
+            .await
+    };
+    if publication.is_err() {
         record_federated_muc_post_commit_failure(state, room_jid, "*", "cluster groupchat fan-out");
     }
-    let occupants = state
-        .muc_occupants_for(room_jid)
-        .into_iter()
-        .map(|(_, occupant)| occupant)
-        .collect::<Vec<_>>();
+    let occupants = live_recipients(state, room_jid, audience.as_ref());
     let blocked = state
         .blocked_muc_recipient_accounts(
             &occupants,
@@ -610,6 +622,9 @@ pub(super) async fn fan_out_groupchat<S: MucHost>(
         {
             continue;
         }
+        let Some(occupant) = refresh_live_recipient(state, &occupant, audience.as_ref()) else {
+            continue;
+        };
         let delivery = set_to(reflected, &occupant.full_jid);
         if !state
             .deliver_to_muc_occupant_unchecked(&occupant, delivery)

@@ -49,6 +49,20 @@ pub async fn enabled_user_id(pool: &PgPool, username: &str) -> Result<Option<Uui
     Ok(find_enabled_user(pool, username).await?.map(|user| user.id))
 }
 
+pub(crate) async fn lock_enabled_user_name(
+    transaction: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    username: &str,
+) -> Result<bool> {
+    Ok(
+        sqlx::query_scalar("SELECT northstar_lock_enabled_user_name($1,$2)")
+            .bind(user_id)
+            .bind(username)
+            .fetch_one(&mut **transaction)
+            .await?,
+    )
+}
+
 /// Lock a deterministic set of enabled account incarnations for the lifetime
 /// of an application-owned write transaction.  Administrative disable/delete
 /// takes an exclusive row lock, so a durable projection either commits before

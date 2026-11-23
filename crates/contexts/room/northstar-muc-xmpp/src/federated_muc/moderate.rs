@@ -213,9 +213,9 @@ pub async fn federated_muc_moderate<H: MucHost>(
         &moderator.room_jid,
         action_id,
     );
-    match state
+    let commit = state
         .muc_service()
-        .retract_local_message_and_archive_action(MucRetractionMutation {
+        .commit_live_retraction(MucRetractionMutation {
             action_id,
             room_id: room.id,
             target_id,
@@ -244,8 +244,8 @@ pub async fn federated_muc_moderate<H: MucHost>(
                 cluster_target,
             },
         })
-        .await?
-    {
+        .await?;
+    match commit.outcome {
         MucRetractionOutcome::Applied => {}
         MucRetractionOutcome::Unauthorized => {
             return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"));
@@ -254,10 +254,17 @@ pub async fn federated_muc_moderate<H: MucHost>(
             return Ok(federated_error(stanza, &stanza.from, "cancel", "conflict"));
         }
     }
-    match state
-        .federated_muc_publish_room_message(&moderator.room_jid, &notice, None)
-        .await
-    {
+    let audience = commit.audience.as_ref();
+    let publication = if let Some(audience) = audience {
+        state
+            .publish_muc_live_audience(&moderator.room_jid, &notice, None, audience)
+            .await
+    } else {
+        state
+            .federated_muc_publish_room_message(&moderator.room_jid, &notice, None)
+            .await
+    };
+    match publication {
         Ok(()) => {}
         Err(_) => record_federated_muc_post_commit_failure(
             state,
@@ -266,7 +273,12 @@ pub async fn federated_muc_moderate<H: MucHost>(
             "cluster moderation fan-out",
         ),
     }
-    for (_, occupant) in state.muc_occupants_for(&moderator.room_jid) {
+    for occupant in crate::muc::discussion::live_recipients(state, &moderator.room_jid, audience) {
+        let Some(occupant) =
+            crate::muc::discussion::refresh_live_recipient(state, &occupant, audience)
+        else {
+            continue;
+        };
         let delivery = set_to(&notice, &occupant.full_jid);
         if !state.deliver_to_muc_occupant(&occupant, delivery).await {
             record_federated_muc_post_commit_failure(

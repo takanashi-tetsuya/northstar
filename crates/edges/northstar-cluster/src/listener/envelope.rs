@@ -1,7 +1,44 @@
 //! Verify signed listener envelopes and classify their command payloads.
 
 use super::*;
+use northstar_room_core::occupancy::{
+    MucOccupantRoute, MUC_EXACT_ROUTE_ENVELOPE_VERSION, MUC_ROUTE_ENVELOPE_LIMIT,
+};
 use northstar_security::cluster_bus::SignedClusterEnvelope;
+
+pub(super) fn decode_muc_broadcast_audience(
+    json: &serde_json::Value,
+) -> Result<Option<Vec<MucOccupantRoute>>> {
+    let Some(version) = json.get("envelope_version") else {
+        anyhow::ensure!(
+            json.get("audience").is_none(),
+            "unversioned MUC broadcast audience"
+        );
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        version.as_u64() == Some(MUC_EXACT_ROUTE_ENVELOPE_VERSION),
+        "unsupported MUC broadcast version"
+    );
+    let entries = json["audience"]
+        .as_array()
+        .context("missing exact MUC broadcast audience")?;
+    anyhow::ensure!(
+        !entries.is_empty() && entries.len() <= MUC_ROUTE_ENVELOPE_LIMIT,
+        "invalid MUC broadcast audience size"
+    );
+    let mut seen = std::collections::HashSet::with_capacity(entries.len());
+    let mut routes = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let route = serde_json::from_value::<MucOccupantRoute>(entry.clone())?;
+        anyhow::ensure!(
+            route.is_exact() && seen.insert(route.clone()),
+            "invalid exact MUC broadcast route"
+        );
+        routes.push(route);
+    }
+    Ok(Some(routes))
+}
 
 pub(super) struct VerifiedListenerEnvelope {
     pub(super) envelope: SignedClusterEnvelope,

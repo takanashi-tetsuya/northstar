@@ -39,6 +39,16 @@ pub(super) struct Host {
 }
 
 impl MucHost for Host {
+    async fn publish_muc_live_audience(
+        &self,
+        _room: &str,
+        _stanza: &str,
+        _real_sender: Option<&str>,
+        _audience: &northstar_room_application::muc_service::LiveAudience,
+    ) -> Result<()> {
+        panic!("unexpected exact audience publication")
+    }
+
     type Repository = repository::Repository;
     type MixRepository = repository::UnusedMix;
     type Outbound = OutboundSender;

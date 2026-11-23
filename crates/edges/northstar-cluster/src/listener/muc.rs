@@ -327,13 +327,21 @@ pub(super) async fn deliver_muc_private_stanza<A: ClusterAdapters>(
 pub(super) async fn broadcast_muc_stanza<A: ClusterAdapters>(
     muc_endpoints: &ClusterMucDeliveryEndpoints,
     muc_delivery: &ClusterMucDelivery<A>,
+    json: &serde_json::Value,
     target: &str,
     stanza: &str,
     muc_senders: &[String],
     turn: &mut ListenerTurn,
 ) {
     let delivered = &mut turn.delivered;
-    let sessions = muc_endpoints.room_occupants(target);
+    let audience = match super::envelope::decode_muc_broadcast_audience(json) {
+        Ok(audience) => audience,
+        Err(error) => {
+            tracing::warn!(room = target, ?error, "invalid MUC broadcast envelope");
+            return;
+        }
+    };
+    let sessions = broadcast_recipients(muc_endpoints, target, audience.as_deref());
     let blocked = muc_delivery
         .blocked_muc_recipient_accounts(&sessions, muc_senders)
         .await;
@@ -343,6 +351,26 @@ pub(super) async fn broadcast_muc_stanza<A: ClusterAdapters>(
         {
             continue;
         }
+        let session = if audience.is_some() {
+            use northstar_room_core::occupancy::LocalMucOccupantIdentity;
+            use northstar_stream::local_routes::muc_table::with_local_muc_occupant_exact;
+            let Some(current) = with_local_muc_occupant_exact(
+                &muc_endpoints.occupants,
+                LocalMucOccupantIdentity {
+                    room_jid: target,
+                    nick: &session.nick,
+                    full_jid: &session.full_jid,
+                    connection_id: session.connection_id,
+                    cluster_epoch: session.cluster_epoch,
+                },
+                |current| current.clone(),
+            ) else {
+                continue;
+            };
+            current
+        } else {
+            session
+        };
         let delivery = set_to(stanza, &session.full_jid);
         *delivered += usize::from(
             muc_delivery
@@ -351,3 +379,27 @@ pub(super) async fn broadcast_muc_stanza<A: ClusterAdapters>(
         );
     }
 }
+
+fn broadcast_recipients(
+    endpoints: &ClusterMucDeliveryEndpoints,
+    room_jid: &str,
+    audience: Option<&[northstar_room_core::occupancy::MucOccupantRoute]>,
+) -> Vec<northstar_stream::local_routes::muc::MucOccupant> {
+    use northstar_stream::local_routes::muc_table::with_local_muc_occupant_exact;
+    match audience {
+        Some(audience) => audience
+            .iter()
+            .filter_map(|route| {
+                with_local_muc_occupant_exact(
+                    &endpoints.occupants,
+                    route.identity(room_jid),
+                    |current| current.clone(),
+                )
+            })
+            .collect(),
+        None => endpoints.room_occupants(room_jid),
+    }
+}
+
+#[cfg(test)]
+mod broadcast_tests;

@@ -1,6 +1,9 @@
 //! Validate and authorize room history operations and persist discussion, subject, and retraction transactions.
 
 use super::*;
+use northstar_room_application::muc_service::{DiscussionCommit, LiveAudience};
+
+mod live_audience;
 
 pub fn canonical_history_actor(actor_scope: &str) -> Result<String> {
     anyhow::ensure!(
@@ -107,7 +110,7 @@ pub async fn lock_muc_affiliation_namespace(
 
 /// Establish the linearization point for a MUC operation.
 ///
-/// Advisory namespace 29 is always acquired before the room row.  Legacy
+/// The local account fence precedes advisory namespace 29 and the room row. Legacy
 /// affiliation writers already use that order (and may then lock affiliation
 /// rows), while clustered writers begin with the room row and then take exact
 /// occupancy before affiliation. Keeping one order prevents a room-row ->
@@ -150,6 +153,28 @@ pub async fn lock_muc_actor_authority(
         return Ok(MucAuthorityCheck::Unauthorized);
     }
 
+    if let MucActorPrincipal::Local {
+        user_id,
+        local_domain,
+    } = &authority.principal
+    {
+        let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
+        let Ok(actor) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(authority.actor_scope)
+        else {
+            return Ok(MucAuthorityCheck::Unauthorized);
+        };
+        if actor.domainpart() != local_domain
+            || actor.resourcepart().is_some()
+            || !crate::accounts::lock_enabled_user_name(
+                transaction,
+                *user_id,
+                actor.localpart().unwrap_or_default(),
+            )
+            .await?
+        {
+            return Ok(MucAuthorityCheck::Unauthorized);
+        }
+    }
     lock_muc_affiliation_namespace(transaction, room_id).await?;
     #[cfg(any(test, feature = "test-support"))]
     maybe_pause_muc_authorization_for_test("discussion_after_advisory").await;
@@ -206,24 +231,7 @@ pub async fn lock_muc_actor_authority(
     };
 
     let (current_affiliation, principal_matches) = match &authority.principal {
-        MucActorPrincipal::Local {
-            user_id,
-            local_domain,
-        } => {
-            let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
-            let principal_matches = if let Ok(actor) =
-                northstar_xmpp_types::jid::CanonicalJid::parse_bare(authority.actor_scope)
-            {
-                let name_matches: bool =
-                    sqlx::query_scalar("SELECT northstar_lock_enabled_user_name($1,$2)")
-                        .bind(user_id)
-                        .bind(actor.localpart().unwrap_or_default())
-                        .fetch_one(&mut **transaction)
-                        .await?;
-                name_matches && actor.domainpart() == local_domain && actor.resourcepart().is_none()
-            } else {
-                false
-            };
+        MucActorPrincipal::Local { user_id, .. } => {
             let affiliation: Option<String> = sqlx::query_scalar(
                 "SELECT affiliation FROM muc_affiliations
                   WHERE room_id=$1 AND user_id=$2 FOR UPDATE",
@@ -232,10 +240,7 @@ pub async fn lock_muc_actor_authority(
             .bind(user_id)
             .fetch_optional(&mut **transaction)
             .await?;
-            (
-                affiliation.unwrap_or_else(|| "none".to_owned()),
-                principal_matches,
-            )
+            (affiliation.unwrap_or_else(|| "none".to_owned()), true)
         }
         MucActorPrincipal::Federated {
             bare_jid,
@@ -319,14 +324,15 @@ pub async fn lock_muc_actor_authority(
     }))
 }
 
-pub async fn commit_muc_discussion(
+async fn commit_muc_discussion(
     transaction: Transaction<'_, Postgres>,
     request: Option<&northstar_room_application::discussion::Request>,
     outcome: MucDiscussionAdmission,
-) -> Result<MucDiscussionAdmission> {
+    audience: Option<LiveAudience>,
+) -> Result<DiscussionCommit> {
     if let Some(request) = request {
-        use northstar_room_application::discussion::{commit_observed, CommitError};
-        commit_observed(transaction.commit(), request, outcome)
+        use northstar_room_application::discussion::{commit_observed_with_audience, CommitError};
+        commit_observed_with_audience(transaction.commit(), request, outcome, audience.clone())
             .await
             .map_err(|error| match error {
                 CommitError::Observation(error) => anyhow::Error::from(error),
@@ -335,7 +341,7 @@ pub async fn commit_muc_discussion(
     } else {
         transaction.commit().await?;
     }
-    Ok(outcome)
+    Ok(DiscussionCommit { outcome, audience })
 }
 
 pub async fn admit_muc_discussion_inner(
@@ -343,6 +349,16 @@ pub async fn admit_muc_discussion_inner(
     message: MucDiscussion<'_>,
     request: Option<&northstar_room_application::discussion::Request>,
 ) -> Result<MucDiscussionAdmission> {
+    Ok(admit_muc_discussion_live(pool, message, request)
+        .await?
+        .outcome)
+}
+
+pub(crate) async fn admit_muc_discussion_live(
+    pool: &PgPool,
+    message: MucDiscussion<'_>,
+    request: Option<&northstar_room_application::discussion::Request>,
+) -> Result<DiscussionCommit> {
     let actor_scope = canonical_history_actor(message.actor_scope)?;
     let sender_jid = canonical_history_sender(message.sender_jid)?;
     if message.unarchived_stanza_bytes.is_none() {
@@ -356,7 +372,10 @@ pub async fn admit_muc_discussion_inner(
         || message.authority.nick != message.nick
     {
         transaction.rollback().await?;
-        return Ok(MucDiscussionAdmission::Unauthorized);
+        return Ok(DiscussionCommit {
+            outcome: MucDiscussionAdmission::Unauthorized,
+            audience: None,
+        });
     }
     if message.archive_eligible {
         sqlx::query(LOCK_MUC_ARCHIVE_WRITER)
@@ -371,11 +390,17 @@ pub async fn admit_muc_discussion_inner(
         }
         MucAuthorityCheck::Authorized(_) | MucAuthorityCheck::Unauthorized => {
             transaction.rollback().await?;
-            return Ok(MucDiscussionAdmission::Unauthorized);
+            return Ok(DiscussionCommit {
+                outcome: MucDiscussionAdmission::Unauthorized,
+                audience: None,
+            });
         }
         MucAuthorityCheck::Stale => {
             transaction.rollback().await?;
-            return Ok(MucDiscussionAdmission::Stale);
+            return Ok(DiscussionCommit {
+                outcome: MucDiscussionAdmission::Stale,
+                audience: None,
+            });
         }
     };
     if let Some(live_bytes) = message.unarchived_stanza_bytes {
@@ -409,7 +434,9 @@ pub async fn admit_muc_discussion_inner(
             .execute(&mut *transaction)
             .await?;
         }
-        return commit_muc_discussion(transaction, request, fresh).await;
+        let audience =
+            live_audience::capture(&mut transaction, message.room_id, &message.authority).await?;
+        return commit_muc_discussion(transaction, request, fresh, audience).await;
     };
     validate_origin_id(origin_id)?;
     let digest = muc_origin_digest(&actor_scope, origin_id);
@@ -467,7 +494,9 @@ pub async fn admit_muc_discussion_inner(
             .execute(&mut *transaction)
             .await?;
         }
-        return commit_muc_discussion(transaction, request, fresh).await;
+        let audience =
+            live_audience::capture(&mut transaction, message.room_id, &message.authority).await?;
+        return commit_muc_discussion(transaction, request, fresh, audience).await;
     }
 
     let existing = sqlx::query(
@@ -494,6 +523,7 @@ pub async fn admit_muc_discussion_inner(
         transaction,
         request,
         MucDiscussionAdmission::Replay(existing_id),
+        None,
     )
     .await
 }
@@ -604,6 +634,13 @@ pub async fn retract_muc_message_and_archive_action(
     pool: &PgPool,
     mutation: MucRetractionMutation<'_>,
 ) -> Result<MucRetractionOutcome> {
+    Ok(retract_muc_message_live(pool, mutation).await?.0)
+}
+
+pub(crate) async fn retract_muc_message_live(
+    pool: &PgPool,
+    mutation: MucRetractionMutation<'_>,
+) -> Result<(MucRetractionOutcome, Option<LiveAudience>)> {
     match retract_muc_message_once(pool, &mutation).await {
         Err(error)
             if error
@@ -621,7 +658,7 @@ pub async fn retract_muc_message_and_archive_action(
 async fn retract_muc_message_once(
     pool: &PgPool,
     mutation: &MucRetractionMutation<'_>,
-) -> Result<MucRetractionOutcome> {
+) -> Result<(MucRetractionOutcome, Option<LiveAudience>)> {
     let actor_scope = canonical_history_actor(mutation.actor_scope)?;
     let sender_jid = canonical_history_sender(mutation.sender_jid)?;
     validate_history_payload(mutation.nick, mutation.tombstone)?;
@@ -652,7 +689,7 @@ async fn retract_muc_message_once(
         || mutation.authority.nick != mutation.nick
     {
         transaction.rollback().await?;
-        return Ok(MucRetractionOutcome::Unauthorized);
+        return Ok((MucRetractionOutcome::Unauthorized, None));
     }
     // Scoped holds take SHARE before inspecting the room subject. Take our
     // compatible writer fence before the namespace and room locks.
@@ -666,11 +703,11 @@ async fn retract_muc_message_once(
             MucAuthorityCheck::Authorized(actor) => actor,
             MucAuthorityCheck::Unauthorized => {
                 transaction.rollback().await?;
-                return Ok(MucRetractionOutcome::Unauthorized);
+                return Ok((MucRetractionOutcome::Unauthorized, None));
             }
             MucAuthorityCheck::Stale => {
                 transaction.rollback().await?;
-                return Ok(MucRetractionOutcome::Stale);
+                return Ok((MucRetractionOutcome::Stale, None));
             }
         };
     if mutation.kind == MucRetractionKind::Moderator
@@ -678,7 +715,7 @@ async fn retract_muc_message_once(
         && !matches!(actor.affiliation.as_str(), "owner" | "admin")
     {
         transaction.rollback().await?;
-        return Ok(MucRetractionOutcome::Unauthorized);
+        return Ok((MucRetractionOutcome::Unauthorized, None));
     }
 
     let target = sqlx::query_scalar::<_, Uuid>(
@@ -692,7 +729,7 @@ async fn retract_muc_message_once(
     .await?;
     if target.is_none() {
         transaction.rollback().await?;
-        return Ok(MucRetractionOutcome::Conflict);
+        return Ok((MucRetractionOutcome::Conflict, None));
     }
     let target = sqlx::query(
         "SELECT a.stanza,a.actor_scope,
@@ -716,7 +753,7 @@ async fn retract_muc_message_once(
     .await?;
     let Some(target) = target else {
         transaction.rollback().await?;
-        return Ok(MucRetractionOutcome::Conflict);
+        return Ok((MucRetractionOutcome::Conflict, None));
     };
     if target.get::<String, _>("stanza") != mutation.expected_stanza
         || (mutation.kind == MucRetractionKind::Author
@@ -724,11 +761,12 @@ async fn retract_muc_message_once(
                 != Some(actor_scope.as_str()))
     {
         transaction.rollback().await?;
-        return Ok(if mutation.kind == MucRetractionKind::Author {
+        let outcome = if mutation.kind == MucRetractionKind::Author {
             MucRetractionOutcome::Unauthorized
         } else {
             MucRetractionOutcome::Conflict
-        });
+        };
+        return Ok((outcome, None));
     }
 
     if target.get::<bool, _>("held") {
@@ -770,7 +808,7 @@ async fn retract_muc_message_once(
             == 1;
         if !changed {
             transaction.rollback().await?;
-            return Ok(MucRetractionOutcome::Conflict);
+            return Ok((MucRetractionOutcome::Conflict, None));
         }
     }
     sqlx::query(
@@ -787,8 +825,10 @@ async fn retract_muc_message_once(
     .bind(actor_scope)
     .execute(&mut *transaction)
     .await?;
+    let audience =
+        live_audience::capture(&mut transaction, mutation.room_id, &mutation.authority).await?;
     transaction.commit().await?;
-    Ok(MucRetractionOutcome::Applied)
+    Ok((MucRetractionOutcome::Applied, audience))
 }
 
 pub async fn muc_message_by_id(

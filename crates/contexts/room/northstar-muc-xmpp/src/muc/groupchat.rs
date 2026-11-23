@@ -330,6 +330,7 @@ pub async fn muc_message(
     };
     let mut fanout_disposition = MucFanoutDisposition::Accepted;
     let mut discussion_fanout = None;
+    let mut live_audience = None;
     if let Some(target_id) = author_retraction {
         let Some(original) = session
             .host()
@@ -399,10 +400,10 @@ pub async fn muc_message(
             )
             .finish();
         session.enter_frame_stage(MucFrameStage::Admission);
-        match session
+        let commit = session
             .host()
             .muc_service()
-            .execute_muc_retraction(MucRetractionCommand {
+            .execute_muc_live_retraction(MucRetractionCommand {
                 mutation: MucRetractionMutation {
                     action_id: stable_id,
                     room_id: room.id,
@@ -418,10 +419,9 @@ pub async fn muc_message(
                     authority: actor_authority,
                 },
             })
-            .await?
-            .outcome
-        {
-            MucRetractionOutcome::Applied => {}
+            .await?;
+        match commit.outcome {
+            MucRetractionOutcome::Applied => live_audience = commit.audience,
             MucRetractionOutcome::Unauthorized => {
                 return Ok(MucAction::Send(muc_stanza_error(
                     root,
@@ -587,11 +587,13 @@ pub async fn muc_message(
             admission
         } else {
             session.enter_frame_stage(MucFrameStage::Admission);
-            session
+            let commit = session
                 .host()
                 .muc_service()
-                .execute_muc_discussion(prepared.prepared.command())
-                .await?
+                .execute_muc_live_discussion(prepared.prepared.command())
+                .await?;
+            live_audience = commit.audience;
+            commit.outcome
         };
         match admission {
             MucDiscussionAdmission::Stored { .. } if discussion_fanout.is_none() => {
@@ -631,6 +633,7 @@ pub async fn muc_message(
                 room_from: &room_from,
                 sender: from,
                 stanza: &rewritten,
+                audience: live_audience.as_ref(),
             },
             fanout_disposition,
         )

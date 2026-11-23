@@ -564,6 +564,18 @@ impl MucHost for ServerNode {
             .await
     }
 
+    async fn publish_muc_live_audience(
+        &self,
+        room: &str,
+        stanza: &str,
+        real_sender: Option<&str>,
+        audience: &northstar_room_application::muc_service::LiveAudience,
+    ) -> Result<()> {
+        self.cluster
+            .send_to_muc_audience(room, stanza, real_sender, audience)
+            .await
+    }
+
     fn rebind_local_federated_muc_occupant_exact(
         &self,
         old: &MucOccupant,

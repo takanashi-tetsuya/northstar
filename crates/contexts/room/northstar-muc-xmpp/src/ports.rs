@@ -349,6 +349,13 @@ pub trait MucHost: Send + Sync + 'static {
         stanza: &str,
         real_sender: Option<&str>,
     ) -> impl Future<Output = Result<()>> + Send;
+    fn publish_muc_live_audience(
+        &self,
+        room: &str,
+        stanza: &str,
+        real_sender: Option<&str>,
+        audience: &northstar_room_application::muc_service::LiveAudience,
+    ) -> impl Future<Output = Result<()>> + Send;
     fn rebind_local_federated_muc_occupant_exact(
         &self,
         old: &Occupant<Self>,

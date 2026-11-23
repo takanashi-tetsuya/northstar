@@ -269,10 +269,10 @@ pub async fn muc_moderate(
         action_id,
     );
     let actor_scope = canonical_bare_key(full_jid)?;
-    match session
+    let commit = session
         .host()
         .muc_service()
-        .execute_muc_retraction(MucRetractionCommand {
+        .execute_muc_live_retraction(MucRetractionCommand {
             mutation: MucRetractionMutation {
                 action_id,
                 room_id: room.id,
@@ -303,9 +303,8 @@ pub async fn muc_moderate(
                 },
             },
         })
-        .await?
-        .outcome
-    {
+        .await?;
+    match commit.outcome {
         MucRetractionOutcome::Applied => {}
         MucRetractionOutcome::Unauthorized => {
             return Ok(MucAction::Send(iq_error_from(id, &room_jid, "forbidden")));
@@ -314,15 +313,22 @@ pub async fn muc_moderate(
             return Ok(MucAction::Send(iq_error_from(id, &room_jid, "conflict")));
         }
     }
-    run_muc_cluster_fan_out(
+    super::discussion::publish_live_audience(
         session.host(),
         &room_jid,
         &moderation_notice,
         None,
+        commit.audience.as_ref(),
         "cluster moderation fan-out",
     )
     .await;
-    for (_, occupant) in session.host().muc_occupants_for(&room_jid) {
+    let audience = commit.audience.as_ref();
+    for occupant in super::discussion::live_recipients(session.host(), &room_jid, audience) {
+        let Some(occupant) =
+            super::discussion::refresh_live_recipient(session.host(), &occupant, audience)
+        else {
+            continue;
+        };
         let delivery = set_to(&moderation_notice, &occupant.full_jid);
         if !session
             .host()

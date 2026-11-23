@@ -1,6 +1,10 @@
 //! MUC discussion envelopes and the live fan-out adapter.
 
 use super::*;
+use northstar_room_application::muc_service::LiveAudience;
+
+mod live_audience;
+pub(crate) use live_audience::{live_recipients, publish_live_audience, refresh_live_recipient};
 
 /// The protocol's generated live stanza and its archive projection are bound
 /// once, before admission. No later caller supplies replacement fanout bytes.
@@ -124,6 +128,7 @@ pub struct AcceptedMucDiscussion {
 impl AcceptedMucDiscussion {
     pub async fn fanout(self, session: &impl MucSession) -> Result<bool> {
         let Self { live, permit } = self;
+        let audience = permit.audience().cloned();
         Ok(run_muc_discussion_fanout(
             &MucMessageFanout {
                 session,
@@ -131,6 +136,7 @@ impl AcceptedMucDiscussion {
                 room_from: &live.room_from,
                 sender: &live.sender,
                 stanza: &live.stanza,
+                audience: audience.as_ref(),
             },
             permit,
         )
@@ -147,6 +153,7 @@ pub struct MucMessageFanout<'a, S> {
     pub room_from: &'a str,
     pub sender: &'a str,
     pub stanza: &'a str,
+    pub(super) audience: Option<&'a LiveAudience>,
 }
 
 impl<S: MucSession> MucFanoutPort for MucMessageFanout<'_, S> {
@@ -161,23 +168,19 @@ impl<S: MucSession> MucFanoutPort for MucMessageFanout<'_, S> {
     }
 
     async fn publish_cluster(&self) {
-        run_muc_cluster_fan_out(
+        publish_live_audience(
             self.session.host(),
             self.room_jid,
             self.stanza,
             Some(self.sender),
+            self.audience,
             "cluster fan-out",
         )
         .await;
     }
 
     fn recipients(&self) -> Vec<Self::Recipient> {
-        self.session
-            .host()
-            .muc_occupants_for(self.room_jid)
-            .into_iter()
-            .map(|(_, occupant)| occupant)
-            .collect()
+        live_recipients(self.session.host(), self.room_jid, self.audience)
     }
 
     async fn blocked<'a>(&'a self, recipients: &'a [Self::Recipient]) -> Self::Blocked {
@@ -195,11 +198,15 @@ impl<S: MucSession> MucFanoutPort for MucMessageFanout<'_, S> {
     }
 
     async fn deliver(&self, recipient: &Self::Recipient) -> bool {
+        let Some(recipient) = refresh_live_recipient(self.session.host(), recipient, self.audience)
+        else {
+            return false;
+        };
         let delivery = set_to(self.stanza, &recipient.full_jid);
         tracing::debug!(room = self.room_jid, to = %recipient.full_jid, "MUC routing stanza");
         self.session
             .host()
-            .deliver_to_muc_occupant_unchecked(recipient, delivery)
+            .deliver_to_muc_occupant_unchecked(&recipient, delivery)
             .await
     }
 

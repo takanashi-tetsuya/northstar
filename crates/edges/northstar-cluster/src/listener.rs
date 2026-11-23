@@ -276,6 +276,7 @@ pub(super) async fn listen_once<A: ClusterAdapters>(
                 muc::broadcast_muc_stanza::<A>(
                     &muc_endpoints,
                     &muc_delivery,
+                    json,
                     target,
                     stanza,
                     &muc_senders,

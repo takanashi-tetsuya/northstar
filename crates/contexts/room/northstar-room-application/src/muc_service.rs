@@ -32,7 +32,11 @@ use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 
 mod cluster_operations;
+mod live_audience_repository;
 mod room_operations;
+pub use live_audience_repository::{
+    DiscussionCommit, LiveAudience, MucLiveAudienceRepository, RetractionCommit,
+};
 
 pub use northstar_room_core::occupancy::{LocalMucOccupantIdentity, SerializableMucOccupant};
 
@@ -414,7 +418,7 @@ mod cluster_muc_occupancy_departure_tests;
 /// Each mutation retains its account/room/occupant fences and its complete
 /// outbox projection. The port never exposes a connection or an open transaction.
 pub trait MucRepository:
-    MucDiscussionRepository<Error = anyhow::Error> + Clone + Send + Sync
+    MucDiscussionRepository<Error = anyhow::Error> + MucLiveAudienceRepository + Clone + Send + Sync
 {
     fn local_room_snapshot(
         &self,

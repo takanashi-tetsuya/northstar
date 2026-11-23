@@ -388,4 +388,6 @@ mod mix {
 
 pub(super) use mix::UnusedMix;
 
+#[cfg(test)]
+mod lifecycle;
 mod live_audience;

@@ -9,6 +9,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 mod conversions;
+mod lifecycle;
 mod live_audience;
 mod occupancy;
 
@@ -187,7 +188,7 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
     }
 
     async fn delete_expired_locked_room(&self, room_id: Uuid) -> Result<bool> {
-        crate::muc::delete_expired_locked_muc_room(&self.pool, room_id).await
+        Ok(self.expire_locked_room_exact(room_id).await?.is_some())
     }
 
     async fn delete_temporary_room(
@@ -196,7 +197,16 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
         room_epoch: Uuid,
         config_version: i64,
     ) -> Result<bool> {
-        crate::muc::delete_temporary_muc_room(&self.pool, room_id, room_epoch, config_version).await
+        Ok(self
+            .retire_empty_temporary_room(
+                MucRoomIncarnation {
+                    room_id,
+                    room_epoch,
+                },
+                Some(config_version),
+            )
+            .await?
+            .is_some())
     }
 
     async fn local_reserved_nick(&self, room_id: Uuid, user_id: Uuid) -> Result<Option<String>> {
@@ -459,11 +469,14 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
     }
 
     async fn cancel_locked_room(&self, room_id: Uuid, actor_full_jid: &str) -> Result<bool> {
-        crate::muc::cancel_locked_muc_room(&self.pool, room_id, actor_full_jid).await
+        Ok(self
+            .cancel_locked_room_exact(room_id, actor_full_jid)
+            .await?
+            .is_some())
     }
 
     async fn delete_room(&self, room_id: Uuid) -> Result<()> {
-        crate::muc::delete_muc_room(&self.pool, room_id).await
+        self.retire_room(room_id).await.map(|_| ())
     }
 
     async fn set_local_legacy_affiliations_batch(

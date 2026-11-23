@@ -4,6 +4,7 @@
 //! account. Remote occupants therefore live in the room map with a federated
 //! endpoint and use a separate persistent-affiliation table.
 
+use crate::locked_room_expiry::remove_retired_muc_memberships;
 use crate::muc::MalformedMucStanza;
 use crate::ports::*;
 use anyhow::{Context, Result};
@@ -14,8 +15,8 @@ use northstar_room_application::muc_service::{
     ClusterMucTransitionOutcome, DurableMucInviteOutcome, MucActorAuthority, MucActorPrincipal,
     MucAffiliationBatchOutcome, MucAffiliationChange, MucAffiliationTarget, MucConfigUpdate,
     MucConfigurationOutcome, MucDiscussion, MucDiscussionAdmission, MucRegistrationOutcome,
-    MucRetractionKind, MucRetractionMutation, MucRetractionOutcome, MucRoom, MucSubjectMutation,
-    MucSubjectOutcome, OfflineStoreOutcome, SerializableMucOccupant,
+    MucRetractionKind, MucRetractionMutation, MucRetractionOutcome, MucRoom, MucRoomIncarnation,
+    MucSubjectMutation, MucSubjectOutcome, OfflineStoreOutcome, SerializableMucOccupant,
 };
 use northstar_room_core::occupancy::{MucOccupant, MucOccupantEndpoint};
 use northstar_room_core::stanza::*;
@@ -710,7 +711,7 @@ async fn unregister_remote_occupant<H: MucHost>(
         Some(guard)
     };
     departed.role = "none".to_owned();
-    let mut clustered_leave = false;
+    let mut clustered_departure_room = None;
     if state.federated_muc_pg_authority_enabled() {
         state.federated_muc_admit_mutation()?;
         let room = state
@@ -752,7 +753,10 @@ async fn unregister_remote_occupant<H: MucHost>(
             ClusterMucTransitionOutcome::Applied | ClusterMucTransitionOutcome::Replay => {}
             other => anyhow::bail!("federated MUC leave was rejected by PG authority: {other:?}"),
         }
-        clustered_leave = true;
+        clustered_departure_room = Some(MucRoomIncarnation {
+            room_id: target.room_id,
+            room_epoch: target.room_epoch,
+        });
         if let Err(error) = state.wake_committed_muc_operation(operation_id).await {
             tracing::warn!(?error, %operation_id, room=%room_jid,
                 "federated MUC leave committed; signed wake will be recovered by polling");
@@ -773,14 +777,15 @@ async fn unregister_remote_occupant<H: MucHost>(
             // Empty-room deletion is part of the same single-node writer
             // critical section as occupant removal. Otherwise a concurrent
             // join can publish between the empty check and the delete.
-            state
+            let retirement = state
                 .muc_service()
                 .delete_temporary_room(room.id, room.room_epoch, room.config_version)
                 .await?;
+            remove_retired_muc_memberships(state, &room_jid, retirement);
         }
     }
     drop(local_departure_guard);
-    let removed_globally = if clustered_leave {
+    let removed_globally = if clustered_departure_room.is_some() {
         state
             .remove_exact_muc_soft_state(&departed)
             .await
@@ -798,7 +803,7 @@ async fn unregister_remote_occupant<H: MucHost>(
     if locally_empty && globally_empty {
         state.federated_muc_leave_room(&room_jid).await?;
     }
-    if !clustered_leave {
+    if clustered_departure_room.is_none() {
         state
             .federated_muc_publish_removal_presence(
                 &room_jid,
@@ -809,18 +814,17 @@ async fn unregister_remote_occupant<H: MucHost>(
             )
             .await?;
     }
-    if clustered_leave {
-        if let Some(room) = state
+    if let Some(room) = clustered_departure_room {
+        if state
             .muc_service()
-            .federated_room_snapshot(localpart(&room_jid))
+            .cluster_room_is_empty(room.room_id)
             .await?
         {
-            if state.muc_service().cluster_room_is_empty(room.id).await? {
-                state
-                    .muc_service()
-                    .delete_temporary_room(room.id, room.room_epoch, room.config_version)
-                    .await?;
-            }
+            let retirement = state
+                .muc_service()
+                .retire_empty_temporary_room(room)
+                .await?;
+            remove_retired_muc_memberships(state, &room_jid, retirement);
         }
         return Ok(());
     }

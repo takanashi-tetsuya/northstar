@@ -2,14 +2,14 @@
 
 use crate::local_routes::muc::{MucOccupant, MucOccupantEndpoint, SuspendedMucEndpoint};
 use crate::local_routes::muc_table::{
-    muc_occupants_for_room_in, remove_local_muc_occupant_exact_from,
+    muc_occupants_for_room_in, remove_live_muc_membership_in, remove_local_muc_occupant_exact_from,
 };
 use crate::local_routes::session::OnlineSession;
 use crate::local_routes::suspended_muc::{
     begin_suspended_muc_route_transition, canonical_suspended_muc_endpoint, muc_actor_epoch_matches,
 };
 use dashmap::DashMap;
-use northstar_room_application::muc_service::LocalMucOccupantIdentity;
+use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
 use northstar_session_core::JoinedMucMembership;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -75,6 +75,15 @@ impl SessionCleanupLocal {
         identity: LocalMucOccupantIdentity<'_>,
     ) -> Option<MucOccupant> {
         remove_local_muc_occupant_exact_from(&self.occupants, identity)
+    }
+
+    pub(super) fn remove_retired_muc_route(&self, identity: LocalMucOccupantIdentity<'_>) {
+        if let Some(occupant) = self.remove_local_muc_occupant_exact(identity) {
+            remove_live_muc_membership_in(
+                &self.sessions,
+                &SerializableMucOccupant::from(&occupant),
+            );
+        }
     }
 
     pub fn muc_occupants_for(&self, room_jid: &str) -> Vec<(String, MucOccupant)> {

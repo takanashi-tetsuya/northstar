@@ -731,7 +731,12 @@ pub async fn system_tombstone_cluster_muc_room_in_tx(
     operation_kind: &str,
     authorization_snapshot: &Value,
     reason: &str,
-) -> Result<bool> {
+) -> Result<Option<northstar_room_application::muc_service::CommittedRoomRetirement>> {
+    use northstar_room_application::muc_service::{
+        CommittedRoomRetirement, MucRoomIncarnation, RetiredMucOccupant,
+    };
+    use northstar_room_core::occupancy::MucOccupantRoute;
+
     anyhow::ensure!(
         matches!(operation_kind, "destroy" | "locked_expiry"),
         "invalid system MUC tombstone operation kind"
@@ -749,13 +754,13 @@ pub async fn system_tombstone_cluster_muc_room_in_tx(
         .await?
         .is_some()
     {
-        return Ok(false);
+        return Ok(None);
     }
     let Some(room) = lock_room(tx, room_id).await? else {
-        return Ok(false);
+        return Ok(None);
     };
     if room.destroyed {
-        return Ok(false);
+        return Ok(None);
     }
     let audience = active_audience(tx, room_id).await?;
     let (_unused, event_sequence) = allocate_room_epochs(tx, room_id, false).await?;
@@ -783,30 +788,49 @@ pub async fn system_tombstone_cluster_muc_room_in_tx(
         },
     )
     .await?;
-    sqlx::query(
+    let revoked = sqlx::query(
         "UPDATE cluster_muc_occupancies
             SET state='revoked',ended_at=clock_timestamp(),lease_until=clock_timestamp(),
                 updated_at=clock_timestamp()
-          WHERE room_id=$1 AND state IN ('active','suspended')",
+          WHERE room_id=$1 AND state IN ('active','suspended')
+      RETURNING nick,full_jid,connection_uuid,occupant_incarnation",
     )
     .bind(room_id)
-    .execute(&mut **tx)
+    .fetch_all(&mut **tx)
     .await?;
-    let changed = sqlx::query(
+    let localpart = sqlx::query_scalar::<_, String>(
         "UPDATE muc_rooms SET destroyed_at=clock_timestamp(),destroyed_operation_id=$2,
                 destroyed_by='system',destroy_reason=$3
-          WHERE id=$1 AND room_epoch=$4 AND destroyed_at IS NULL",
+          WHERE id=$1 AND room_epoch=$4 AND destroyed_at IS NULL
+      RETURNING localpart",
     )
     .bind(room_id)
     .bind(operation_id)
     .bind(reason)
     .bind(room.room_epoch)
-    .execute(&mut **tx)
+    .fetch_optional(&mut **tx)
     .await?
-    .rows_affected()
-        == 1;
-    anyhow::ensure!(changed, "MUC tombstone fence changed concurrently");
-    Ok(true)
+    .context("MUC tombstone fence changed concurrently")?;
+    Ok(Some(CommittedRoomRetirement {
+        room: MucRoomIncarnation {
+            room_id,
+            room_epoch: room.room_epoch,
+        },
+        localpart,
+        operation_id,
+        occupants: revoked
+            .into_iter()
+            .map(|row| RetiredMucOccupant {
+                route: MucOccupantRoute {
+                    nick: row.get("nick"),
+                    full_jid: row.get("full_jid"),
+                    connection_id: row.get("connection_uuid"),
+                    cluster_epoch: row.get("occupant_incarnation"),
+                },
+                status_codes: &[],
+            })
+            .collect(),
+    }))
 }
 
 /// Fence every live room incarnation owned by an account before its user row

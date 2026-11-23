@@ -83,7 +83,9 @@ impl<R: SmTeardownMucRepository> SmTeardownMucProjection<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use northstar_room_application::muc_service::{CommittedRoomRetirement, MucRoomIncarnation};
     use northstar_room_application::sm_teardown_muc::SmTeardownMucRoom;
+    use northstar_room_core::occupancy::MucOccupantRoute;
     use northstar_stream::local_routes::muc::SuspendedMucEndpoint;
     use std::collections::HashSet;
 
@@ -127,11 +129,26 @@ mod tests {
 
         async fn delete_temporary_room(
             &self,
-            _room_id: Uuid,
-            _room_epoch: Uuid,
-            _config_version: i64,
-        ) -> anyhow::Result<bool> {
+            _room: MucRoomIncarnation,
+        ) -> anyhow::Result<Option<CommittedRoomRetirement>> {
             panic!("unexpected temporary room deletion");
+        }
+
+        async fn departed_room(
+            &self,
+            _localpart: &str,
+            _route: &MucOccupantRoute,
+            _sm_session_id: Uuid,
+        ) -> anyhow::Result<Option<MucRoomIncarnation>> {
+            panic!("unexpected departed room lookup");
+        }
+
+        async fn departure_observers(
+            &self,
+            _room: MucRoomIncarnation,
+            _departed_nick: &str,
+        ) -> anyhow::Result<Vec<MucOccupantRoute>> {
+            panic!("unexpected departure observer lookup");
         }
     }
 

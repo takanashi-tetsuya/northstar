@@ -13,7 +13,11 @@ use super::{
 };
 use crate::local_routes::muc::{MucOccupant, SuspendedMucEndpoint};
 use anyhow::Result;
-use northstar_room_application::muc_service::ClusterMucTransitionOutcome;
+use northstar_room_application::muc_service::{
+    ClusterMucTransitionOutcome, CommittedRoomRetirement, LocalMucOccupantIdentity,
+    MucRoomIncarnation,
+};
+use northstar_room_core::occupancy::MucOccupantRoute;
 use northstar_session_application::SessionCleanupAccount;
 use std::{
     future::Future,
@@ -121,7 +125,15 @@ pub trait SessionCleanupPorts: Send + Sync {
         occupant: &MucOccupant,
         stanza: String,
     ) -> impl Future<Output = bool> + Send;
-    fn delete_temporary_room(&self, room_jid: &str) -> impl Future<Output = Result<()>> + Send;
+    fn departed_room(
+        &self,
+        room_jid: &str,
+        route: &MucOccupantRoute,
+    ) -> impl Future<Output = Result<Option<MucRoomIncarnation>>> + Send;
+    fn delete_temporary_room(
+        &self,
+        room: MucRoomIncarnation,
+    ) -> impl Future<Output = Result<Option<CommittedRoomRetirement>>> + Send;
     fn clear_active_privacy_session(
         &self,
         user_id: Uuid,
@@ -740,15 +752,27 @@ impl<P: SessionCleanupPorts> SessionCleanupService<P> {
             }
 
             if departure.remaining.is_empty() && (!pg_authoritative || departed_in_authority) {
-                let _ = self
+                let route =
+                    MucOccupantRoute::from(LocalMucOccupantIdentity::from(&departure.departed));
+                let retirement = self
                     .step(
                         deadline,
                         "delete-temporary-muc",
                         CleanupRecovery::LeaseOrEpoch,
-                        self.ports.delete_temporary_room(&departure.room_jid),
+                        retire_departed_room(
+                            self.ports.departed_room(&departure.room_jid, &route),
+                            |room| self.ports.delete_temporary_room(room),
+                        ),
                         report,
                     )
-                    .await;
+                    .await
+                    .flatten();
+                if let Some(retirement) = retirement {
+                    for occupant in retirement.occupants {
+                        self.local
+                            .remove_retired_muc_route(occupant.route.identity(&departure.room_jid));
+                    }
+                }
             }
         }
     }
@@ -795,6 +819,19 @@ impl<P: SessionCleanupPorts> SessionCleanupService<P> {
     }
 }
 
+async fn retire_departed_room<F>(
+    resolve: impl Future<Output = Result<Option<MucRoomIncarnation>>>,
+    retire: impl FnOnce(MucRoomIncarnation) -> F,
+) -> Result<Option<CommittedRoomRetirement>>
+where
+    F: Future<Output = Result<Option<CommittedRoomRetirement>>>,
+{
+    let Some(room) = resolve.await? else {
+        return Ok(None);
+    };
+    retire(room).await
+}
+
 impl<P: SessionCleanupPorts> super::SessionCleanup for SessionCleanupService<P> {
     type Quiesced = QuiescedSessionCleanup;
 
@@ -817,3 +854,6 @@ impl<P: SessionCleanupPorts> super::SessionCleanup for SessionCleanupService<P> 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod temporary_room_tests;

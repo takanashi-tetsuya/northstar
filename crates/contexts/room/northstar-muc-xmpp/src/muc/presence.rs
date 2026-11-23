@@ -1,4 +1,6 @@
 use super::*;
+use crate::locked_room_expiry::remove_retired_muc_memberships;
+use northstar_room_application::muc_service::MucRoomIncarnation;
 
 pub async fn handle_muc_unavailable_presence(
     session: &impl MucSession,
@@ -73,7 +75,7 @@ pub async fn handle_muc_unavailable_presence(
     };
     let mut clustered_leave = false;
     let mut clustered_event_id = None;
-    let mut clustered_room_id = None;
+    let mut clustered_departure_room = None;
     if session.host().muc_pg_authority_enabled() {
         if let Some(room) = session
             .host()
@@ -81,7 +83,6 @@ pub async fn handle_muc_unavailable_presence(
             .local_room_snapshot(localpart(&room_jid))
             .await?
         {
-            clustered_room_id = Some(room.id);
             if let Some(target) = session
                 .host()
                 .muc_service()
@@ -92,6 +93,10 @@ pub async fn handle_muc_unavailable_presence(
                 )
                 .await?
             {
+                clustered_departure_room = Some(MucRoomIncarnation {
+                    room_id: target.room_id,
+                    room_epoch: target.room_epoch,
+                });
                 let cluster_operation_id = uuid::Uuid::new_v4();
                 match session
                     .host()
@@ -158,11 +163,12 @@ pub async fn handle_muc_unavailable_presence(
             // Keep the room gate until the conditional temporary-room
             // delete commits. A concurrent join cannot otherwise
             // publish an occupant between the empty check and delete.
-            session
+            let retirement = session
                 .host()
                 .muc_service()
                 .delete_temporary_room(room.id, room.room_epoch, room.config_version)
                 .await?;
+            remove_retired_muc_memberships(session.host(), &room_jid, retirement);
         }
     }
     drop(local_departure_guard);
@@ -213,11 +219,11 @@ pub async fn handle_muc_unavailable_presence(
         root.attribute("id").or(clustered_event_id.as_deref()),
         true,
     );
-    let globally_empty = if let Some(room_id) = clustered_room_id {
+    let globally_empty = if let Some(room) = clustered_departure_room {
         session
             .host()
             .muc_service()
-            .cluster_room_is_empty(room_id)
+            .cluster_room_is_empty(room.room_id)
             .await?
     } else {
         removed_globally
@@ -227,19 +233,14 @@ pub async fn handle_muc_unavailable_presence(
                 .await?
                 .is_empty()
     };
-    if session.host().muc_pg_authority_enabled() && remaining.is_empty() && globally_empty {
-        if let Some(room) = session
+    if let Some(room) = clustered_departure_room.filter(|_| remaining.is_empty() && globally_empty)
+    {
+        let retirement = session
             .host()
             .muc_service()
-            .local_room_snapshot(localpart(&room_jid))
-            .await?
-        {
-            session
-                .host()
-                .muc_service()
-                .delete_temporary_room(room.id, room.room_epoch, room.config_version)
-                .await?;
-        }
+            .retire_empty_temporary_room(room)
+            .await?;
+        remove_retired_muc_memberships(session.host(), &room_jid, retirement);
     }
     Ok(MucAction::Send(self_presence))
 }

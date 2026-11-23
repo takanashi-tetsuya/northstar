@@ -52,6 +52,11 @@ EXPECTED_TESTS = {
         'room::muc_live_audience::groupchat_admission_then_account_deletion_completes_in_one_order',
         'room::muc_live_audience::retraction_and_account_deletion_take_user_before_room',
         'room::muc_live_audience::disabled_account_is_rejected_under_the_user_fence',
+        'room::muc_lifecycle_effects::occupied_locked_room_expiry_revokes_the_creator_and_returns_exact_effects',
+        'room::muc_lifecycle_effects::expiry_effects_do_not_touch_a_replacement_room',
+        'room::muc_lifecycle_effects::owner_cancel_returns_the_cancelled_incarnation_only',
+        'room::muc_lifecycle_effects::temporary_room_cleanup_deletes_only_the_departed_incarnation',
+        'room::muc_lifecycle_effects::idle_locked_room_expiry_is_unchanged',
     ),
     'mix': (
         'room::mix_pam_durability::pam_restart_and_result_claims_preserve_authority_and_token_fencing',

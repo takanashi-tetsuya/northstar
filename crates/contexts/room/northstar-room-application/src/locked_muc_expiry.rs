@@ -1,12 +1,16 @@
 //! Expire abandoned locked rooms through one committed database use case.
 
+use crate::muc_service::CommittedRoomRetirement;
 use anyhow::Result;
 use std::future::Future;
 
 pub trait LockedMucExpiryRepository: Send + Sync {
-    /// Return room localparts only after the tombstones and terminal outbox
+    /// Return exact retirements only after the tombstones and terminal outbox
     /// records have committed together.
-    fn expire_locked_rooms(&self, limit: i64) -> impl Future<Output = Result<Vec<String>>> + Send;
+    fn expire_locked_rooms(
+        &self,
+        limit: i64,
+    ) -> impl Future<Output = Result<Vec<CommittedRoomRetirement>>> + Send;
 }
 
 #[derive(Clone)]
@@ -19,7 +23,7 @@ impl<R: LockedMucExpiryRepository> LockedMucExpiryService<R> {
         Self { repository }
     }
 
-    pub async fn expire_locked_rooms(&self, limit: i64) -> Result<Vec<String>> {
+    pub async fn expire_locked_rooms(&self, limit: i64) -> Result<Vec<CommittedRoomRetirement>> {
         self.repository.expire_locked_rooms(limit).await
     }
 }
@@ -27,15 +31,17 @@ impl<R: LockedMucExpiryRepository> LockedMucExpiryService<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::muc_service::MucRoomIncarnation;
     use std::sync::Mutex;
+    use uuid::Uuid;
 
     struct StubRepository {
-        result: Mutex<Option<Result<Vec<String>>>>,
+        result: Mutex<Option<Result<Vec<CommittedRoomRetirement>>>>,
         limits: Mutex<Vec<i64>>,
     }
 
     impl LockedMucExpiryRepository for &StubRepository {
-        async fn expire_locked_rooms(&self, limit: i64) -> Result<Vec<String>> {
+        async fn expire_locked_rooms(&self, limit: i64) -> Result<Vec<CommittedRoomRetirement>> {
             self.limits.lock().unwrap().push(limit);
             self.result.lock().unwrap().take().unwrap()
         }
@@ -43,14 +49,23 @@ mod tests {
 
     #[tokio::test]
     async fn returns_only_committed_room_localparts_in_repository_order() {
+        let committed = ["first", "second"].map(|localpart| CommittedRoomRetirement {
+            room: MucRoomIncarnation {
+                room_id: Uuid::new_v4(),
+                room_epoch: Uuid::new_v4(),
+            },
+            localpart: localpart.to_owned(),
+            operation_id: Uuid::new_v4(),
+            occupants: Vec::new(),
+        });
         let repository = StubRepository {
-            result: Mutex::new(Some(Ok(vec!["first".into(), "second".into()]))),
+            result: Mutex::new(Some(Ok(committed.to_vec()))),
             limits: Mutex::new(Vec::new()),
         };
         let service = LockedMucExpiryService::new(&repository);
         assert_eq!(
             service.expire_locked_rooms(100).await.unwrap(),
-            vec!["first".to_owned(), "second".to_owned()]
+            committed.to_vec()
         );
         assert_eq!(*repository.limits.lock().unwrap(), vec![100]);
     }

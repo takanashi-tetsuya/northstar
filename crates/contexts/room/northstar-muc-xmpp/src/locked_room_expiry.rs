@@ -7,7 +7,7 @@ use northstar_room_application::locked_muc_expiry::{
     LockedMucExpiryRepository, LockedMucExpiryService,
 };
 use northstar_room_application::muc_delivery::MucDeliveryRepository;
-use northstar_room_application::muc_service::SerializableMucOccupant;
+use northstar_room_application::muc_service::{CommittedRoomRetirement, SerializableMucOccupant};
 use northstar_room_core::ClusterMucOutboxDelivery;
 use northstar_runtime::workers::WorkerHeartbeat;
 use northstar_stream::local_routes::muc::MucOccupant;
@@ -20,6 +20,10 @@ use std::{
     sync::{Arc, Weak},
     time::Duration,
 };
+
+mod retirement;
+
+pub(crate) use retirement::{remove_retired_muc_memberships, take_retired_occupants};
 
 pub struct LockedMucExpiryContext<E, R, C, F> {
     pub service: LockedMucExpiryService<E>,
@@ -42,7 +46,7 @@ where
     F: FederationRoute,
 {
     async fn expire_once(&self, heartbeat: &WorkerHeartbeat) {
-        // The service returns localparts only after the tombstone and terminal
+        // The service returns exact effects only after the tombstone and terminal
         // outbox transaction commits. Never clean local routes on a DB error.
         let expired = match self.service.expire_locked_rooms(100).await {
             Ok(expired) => expired,
@@ -53,11 +57,10 @@ where
             }
         };
         heartbeat.ok();
-        for localpart in expired {
-            let room_jid = format!("{}@conference.{}", localpart, self.domain);
-            for occupant in self.local.occupants_for(&room_jid) {
+        for retirement in expired {
+            let room_jid = format!("{}@conference.{}", retirement.localpart, self.domain);
+            for occupant in self.local.take_retirement(&retirement, &room_jid) {
                 let serializable = SerializableMucOccupant::from(&occupant);
-                self.local.remove_exact(&occupant, &serializable);
                 if !self.cluster_enabled {
                     let unavailable = northstar_room_core::stanza::muc_destroy_presence(
                         &serializable,
@@ -77,6 +80,22 @@ where
 }
 
 impl LockedMucExpiryLocal {
+    fn take_retirement(
+        &self,
+        retirement: &CommittedRoomRetirement,
+        room_jid: &str,
+    ) -> Vec<MucOccupant> {
+        take_retired_occupants(retirement, room_jid, |identity| {
+            let occupant = remove_local_muc_occupant_exact_from(&self.occupants, identity)?;
+            remove_live_muc_membership_in(
+                &self.sessions,
+                &SerializableMucOccupant::from(&occupant),
+            );
+            Some(occupant)
+        })
+    }
+
+    #[cfg(test)]
     fn occupants_for(&self, room_jid: &str) -> Vec<MucOccupant> {
         let Ok(room_jid) = northstar_xmpp_types::jid::canonicalize_bare(room_jid) else {
             return Vec::new();
@@ -88,6 +107,7 @@ impl LockedMucExpiryLocal {
             .collect()
     }
 
+    #[cfg(test)]
     fn remove_exact(&self, occupant: &MucOccupant, serializable: &SerializableMucOccupant) {
         remove_live_muc_membership_in(&self.sessions, serializable);
         remove_local_muc_occupant_exact_from(&self.occupants, occupant.into());
@@ -116,12 +136,16 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use northstar_stream::local_routes::muc::MucOccupantEndpoint;
     use northstar_stream::outbound::OutboundSender;
 
-    fn occupant(full_jid: &str, connection_id: uuid::Uuid, epoch: uuid::Uuid) -> MucOccupant {
+    pub(crate) fn occupant(
+        full_jid: &str,
+        connection_id: uuid::Uuid,
+        epoch: uuid::Uuid,
+    ) -> MucOccupant {
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
         MucOccupant {
             full_jid: full_jid.to_owned(),
@@ -167,3 +191,6 @@ mod tests {
         assert_eq!(occupants.get(&key).unwrap().full_jid, replacement.full_jid);
     }
 }
+
+#[cfg(test)]
+mod committed_retirement_tests;

@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use northstar_room_application::locked_muc_expiry::LockedMucExpiryRepository;
+use northstar_room_application::muc_service::CommittedRoomRetirement;
 use sqlx::PgPool;
 
 #[derive(Clone)]
@@ -16,7 +17,7 @@ impl PostgresLockedMucExpiryRepository {
 }
 
 impl LockedMucExpiryRepository for PostgresLockedMucExpiryRepository {
-    async fn expire_locked_rooms(&self, limit: i64) -> Result<Vec<String>> {
+    async fn expire_locked_rooms(&self, limit: i64) -> Result<Vec<CommittedRoomRetirement>> {
         crate::muc::delete_expired_locked_muc_rooms(&self.pool, limit).await
     }
 }

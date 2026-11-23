@@ -1003,7 +1003,9 @@ mod wake {
 mod sm {
     use super::UnusedPorts;
     use anyhow::Result;
+    use northstar_room_application::muc_service::{CommittedRoomRetirement, MucRoomIncarnation};
     use northstar_room_application::sm_teardown_muc::*;
+    use northstar_room_core::occupancy::MucOccupantRoute;
     use std::collections::HashSet;
     use uuid::Uuid;
 
@@ -1027,11 +1029,26 @@ mod sm {
 
         async fn delete_temporary_room(
             &self,
-            _room_id: Uuid,
-            _room_epoch: Uuid,
-            _config_version: i64,
-        ) -> Result<bool> {
+            _room: MucRoomIncarnation,
+        ) -> Result<Option<CommittedRoomRetirement>> {
             panic!("unused SmTeardownMucRepository::delete_temporary_room port");
+        }
+
+        async fn departed_room(
+            &self,
+            _localpart: &str,
+            _route: &MucOccupantRoute,
+            _sm_session_id: Uuid,
+        ) -> Result<Option<MucRoomIncarnation>> {
+            panic!("unused SmTeardownMucRepository::departed_room port");
+        }
+
+        async fn departure_observers(
+            &self,
+            _room: MucRoomIncarnation,
+            _departed_nick: &str,
+        ) -> Result<Vec<MucOccupantRoute>> {
+            panic!("unused SmTeardownMucRepository::departure_observers port");
         }
     }
 }

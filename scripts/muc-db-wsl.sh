@@ -230,3 +230,18 @@ cargo test --locked --offline -p northstar-db-it \
 cargo test --locked --offline -p northstar-db-it \
   room::muc_live_audience::disabled_account_is_rejected_under_the_user_fence \
   -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_lifecycle_effects::occupied_locked_room_expiry_revokes_the_creator_and_returns_exact_effects \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_lifecycle_effects::expiry_effects_do_not_touch_a_replacement_room \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_lifecycle_effects::owner_cancel_returns_the_cancelled_incarnation_only \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_lifecycle_effects::temporary_room_cleanup_deletes_only_the_departed_incarnation \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_lifecycle_effects::idle_locked_room_expiry_is_unchanged \
+  -- --ignored --exact --nocapture

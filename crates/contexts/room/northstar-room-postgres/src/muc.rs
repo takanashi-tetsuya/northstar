@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use northstar_room_application::muc_service::{CommittedRoomRetirement, MucRoomIncarnation};
 use northstar_time::{DateTime, Utc};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -7,10 +8,12 @@ use uuid::Uuid;
 
 mod admin;
 mod history;
+mod lifecycle_effects;
 mod membership;
 
 pub use self::admin::*;
 pub use self::history::*;
+pub use self::lifecycle_effects::{muc_departed_room, sm_teardown_muc_observers};
 pub use self::membership::*;
 
 const MAX_HISTORY_STANZA_BYTES: usize = 1_048_576;
@@ -660,7 +663,7 @@ pub async fn cancel_locked_muc_room(
     pool: &PgPool,
     room_id: Uuid,
     actor_full_jid: &str,
-) -> Result<bool> {
+) -> Result<Option<CommittedRoomRetirement>> {
     let actor_full_jid = northstar_xmpp_types::jid::canonicalize(actor_full_jid)?;
     let mut tx = pool.begin().await?;
     let matched = sqlx::query(
@@ -676,7 +679,7 @@ pub async fn cancel_locked_muc_room(
     .is_some();
     if !matched {
         tx.rollback().await?;
-        return Ok(false);
+        return Ok(None);
     }
     let changed = super::cluster_muc::system_tombstone_cluster_muc_room_in_tx(
         &mut tx,
@@ -696,7 +699,10 @@ pub async fn cancel_locked_muc_room(
 
 /// Delete an abandoned initial configuration lease.  This is deliberately
 /// conditional so concurrent acceptance wins cleanly over timeout cleanup.
-pub async fn delete_expired_locked_muc_room(pool: &PgPool, room_id: Uuid) -> Result<bool> {
+pub async fn delete_expired_locked_muc_room(
+    pool: &PgPool,
+    room_id: Uuid,
+) -> Result<Option<CommittedRoomRetirement>> {
     let mut tx = pool.begin().await?;
     let matched = sqlx::query(
         "SELECT id FROM muc_rooms
@@ -711,7 +717,7 @@ pub async fn delete_expired_locked_muc_room(pool: &PgPool, room_id: Uuid) -> Res
     .is_some();
     if !matched {
         tx.rollback().await?;
-        return Ok(false);
+        return Ok(None);
     }
     let changed = super::cluster_muc::system_tombstone_cluster_muc_room_in_tx(
         &mut tx,
@@ -729,10 +735,13 @@ pub async fn delete_expired_locked_muc_room(pool: &PgPool, room_id: Uuid) -> Res
 /// Claim and remove a bounded batch of abandoned initial room leases.  Row
 /// locking lets every application node run this worker without duplicate
 /// destruction notifications or unbounded scans.
-pub async fn delete_expired_locked_muc_rooms(pool: &PgPool, limit: i64) -> Result<Vec<String>> {
+pub async fn delete_expired_locked_muc_rooms(
+    pool: &PgPool,
+    limit: i64,
+) -> Result<Vec<CommittedRoomRetirement>> {
     let mut tx = pool.begin().await?;
     let rows = sqlx::query(
-        "SELECT id,localpart FROM muc_rooms
+        "SELECT id FROM muc_rooms
           WHERE destroyed_at IS NULL AND configuration_state='locked'
             AND configuration_expires_at<=clock_timestamp()
           ORDER BY configuration_expires_at,id
@@ -744,8 +753,7 @@ pub async fn delete_expired_locked_muc_rooms(pool: &PgPool, limit: i64) -> Resul
     let mut destroyed = Vec::with_capacity(rows.len());
     for row in rows {
         let room_id: Uuid = row.get("id");
-        let localpart: String = row.get("localpart");
-        if super::cluster_muc::system_tombstone_cluster_muc_room_in_tx(
+        if let Some(retirement) = super::cluster_muc::system_tombstone_cluster_muc_room_in_tx(
             &mut tx,
             Uuid::new_v4(),
             room_id,
@@ -755,21 +763,25 @@ pub async fn delete_expired_locked_muc_rooms(pool: &PgPool, limit: i64) -> Resul
         )
         .await?
         {
-            destroyed.push(localpart);
+            destroyed.push(retirement);
         }
     }
     tx.commit().await?;
     Ok(destroyed)
 }
 
-pub async fn delete_muc_room(pool: &PgPool, room_id: Uuid) -> Result<()> {
+pub async fn delete_muc_room(
+    pool: &PgPool,
+    room_id: Uuid,
+) -> Result<Option<CommittedRoomRetirement>> {
     let mut tx = pool.begin().await?;
-    if sqlx::query("SELECT id FROM muc_rooms WHERE id=$1 AND destroyed_at IS NULL FOR UPDATE")
-        .bind(room_id)
-        .fetch_optional(&mut *tx)
-        .await?
-        .is_some()
-    {
+    let locked =
+        sqlx::query("SELECT id FROM muc_rooms WHERE id=$1 AND destroyed_at IS NULL FOR UPDATE")
+            .bind(room_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .is_some();
+    let retirement = if locked {
         super::cluster_muc::system_tombstone_cluster_muc_room_in_tx(
             &mut tx,
             Uuid::new_v4(),
@@ -778,61 +790,61 @@ pub async fn delete_muc_room(pool: &PgPool, room_id: Uuid) -> Result<()> {
             &serde_json::json!({"lifecycle":"protocol_destroy"}),
             "room destroyed by an authorized protocol operation",
         )
-        .await?;
-    }
+        .await?
+    } else {
+        None
+    };
     tx.commit().await?;
-    Ok(())
+    Ok(retirement)
 }
 
 pub async fn delete_temporary_muc_room(
     pool: &PgPool,
-    room_id: Uuid,
-    expected_room_epoch: Uuid,
-    expected_config_version: i64,
-) -> Result<bool> {
+    room: MucRoomIncarnation,
+    expected_config_version: Option<i64>,
+) -> Result<Option<CommittedRoomRetirement>> {
     let mut tx = pool.begin().await?;
     let locked = sqlx::query(
         "SELECT id FROM muc_rooms
-          WHERE id=$1 AND room_epoch=$2 AND config_version=$3
+          WHERE id=$1 AND room_epoch=$2 AND ($3::bigint IS NULL OR config_version=$3)
             AND NOT persistent AND destroyed_at IS NULL FOR UPDATE",
     )
-    .bind(room_id)
-    .bind(expected_room_epoch)
+    .bind(room.room_id)
+    .bind(room.room_epoch)
     .bind(expected_config_version)
     .fetch_optional(&mut *tx)
     .await?
     .is_some();
     if !locked {
         tx.rollback().await?;
-        return Ok(false);
+        return Ok(None);
     }
-    super::cluster_muc::expire_due_in_room(&mut tx, room_id).await?;
+    lifecycle_effects::lock_temporary_room_occupancies(&mut tx, room).await?;
+    super::cluster_muc::expire_due_in_room(&mut tx, room.room_id).await?;
     let occupied: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM cluster_muc_occupancies
           WHERE room_id=$1 AND room_epoch=$2 AND state IN ('active','suspended')
             AND lease_until>clock_timestamp())",
     )
-    .bind(room_id)
-    .bind(expected_room_epoch)
+    .bind(room.room_id)
+    .bind(room.room_epoch)
     .fetch_one(&mut *tx)
     .await?;
     if occupied {
         tx.rollback().await?;
-        return Ok(false);
+        return Ok(None);
     }
-    {
-        super::cluster_muc::system_tombstone_cluster_muc_room_in_tx(
-            &mut tx,
-            Uuid::new_v4(),
-            room_id,
-            "destroy",
-            &serde_json::json!({"lifecycle":"temporary_room_empty"}),
-            "temporary room became empty",
-        )
-        .await?;
-    }
+    let retirement = super::cluster_muc::system_tombstone_cluster_muc_room_in_tx(
+        &mut tx,
+        Uuid::new_v4(),
+        room.room_id,
+        "destroy",
+        &serde_json::json!({"lifecycle":"temporary_room_empty"}),
+        "temporary room became empty",
+    )
+    .await?;
     tx.commit().await?;
-    Ok(true)
+    Ok(retirement)
 }
 
 fn muc_room_from_row(row: &sqlx::postgres::PgRow) -> MucRoom {
@@ -1097,6 +1109,10 @@ pub const MODULE_SOURCE: &[(&str, &str)] = &[
     ("history", include_str!("muc/history.rs")),
     ("membership", include_str!("muc/membership.rs")),
     ("admin", include_str!("muc/admin.rs")),
+    (
+        "lifecycle_effects",
+        include_str!("muc/lifecycle_effects.rs"),
+    ),
 ];
 
 #[cfg(any(test, feature = "test-support"))]

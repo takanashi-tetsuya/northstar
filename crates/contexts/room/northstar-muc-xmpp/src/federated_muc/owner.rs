@@ -315,16 +315,20 @@ pub async fn federated_muc_owner<H: MucHost>(
     };
     match action {
         FederatedOwnerAction::Cancel => {
-            if room.is_locked() {
+            let retirement = if room.is_locked() {
                 state
                     .muc_service()
                     .cancel_locked_room(room.id, &requester.full_jid)
-                    .await?;
-                for (_, occupant) in state.muc_occupants_for(&requester.room_jid) {
-                    let Some(occupant) = state.remove_local_muc_occupant_exact((&occupant).into())
-                    else {
-                        continue;
-                    };
+                    .await?
+            } else {
+                None
+            };
+            if let Some(retirement) = retirement {
+                for occupant in crate::locked_room_expiry::take_retired_occupants(
+                    &retirement,
+                    &requester.room_jid,
+                    |identity| state.remove_local_muc_occupant_exact(identity),
+                ) {
                     let serializable = SerializableMucOccupant::from(&occupant);
                     state.remove_live_muc_membership(&serializable);
                     if !state.federated_muc_pg_authority_enabled() {

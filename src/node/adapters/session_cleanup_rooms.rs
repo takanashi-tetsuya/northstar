@@ -2,7 +2,10 @@
 
 use crate::node::ServerNode;
 use anyhow::Result;
-use northstar_room_application::muc_service::MucService;
+use northstar_room_application::muc_service::{
+    CommittedRoomRetirement, MucRoomIncarnation, MucService,
+};
+use northstar_room_core::occupancy::MucOccupantRoute;
 use northstar_workflows::room_effects::PostgresMucRepository;
 
 pub(crate) struct SessionCleanupRooms {
@@ -18,7 +21,18 @@ impl ServerNode {
 }
 
 impl SessionCleanupRooms {
-    pub(crate) async fn delete_temporary_room(&self, room_jid: &str) -> Result<()> {
-        self.rooms.delete_temporary_room_by_jid(room_jid).await
+    pub(crate) async fn departed_room(
+        &self,
+        room_jid: &str,
+        route: &MucOccupantRoute,
+    ) -> Result<Option<MucRoomIncarnation>> {
+        self.rooms.departed_room(room_jid, route).await
+    }
+
+    pub(crate) async fn delete_temporary_room(
+        &self,
+        room: MucRoomIncarnation,
+    ) -> Result<Option<CommittedRoomRetirement>> {
+        self.rooms.retire_empty_temporary_room(room).await
     }
 }

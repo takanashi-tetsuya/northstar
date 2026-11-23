@@ -1,6 +1,8 @@
 //! PostgreSQL projections needed after an exact SM-owned MUC route is fenced.
 
+use crate::muc_service::{CommittedRoomRetirement, MucRoomIncarnation};
 use anyhow::Result;
+use northstar_room_core::occupancy::MucOccupantRoute;
 use std::{collections::HashSet, future::Future};
 use uuid::Uuid;
 
@@ -40,10 +42,21 @@ pub trait SmTeardownMucRepository: Send + Sync {
 
     fn delete_temporary_room(
         &self,
-        room_id: Uuid,
-        room_epoch: Uuid,
-        config_version: i64,
-    ) -> impl Future<Output = Result<bool>> + Send;
+        room: MucRoomIncarnation,
+    ) -> impl Future<Output = Result<Option<CommittedRoomRetirement>>> + Send;
+
+    fn departed_room(
+        &self,
+        localpart: &str,
+        route: &MucOccupantRoute,
+        sm_session_id: Uuid,
+    ) -> impl Future<Output = Result<Option<MucRoomIncarnation>>> + Send;
+
+    fn departure_observers(
+        &self,
+        room: MucRoomIncarnation,
+        departed_nick: &str,
+    ) -> impl Future<Output = Result<Vec<MucOccupantRoute>>> + Send;
 }
 
 #[derive(Clone)]
@@ -103,12 +116,31 @@ impl<R: SmTeardownMucRepository> SmTeardownMucService<R> {
             .await
     }
 
-    pub async fn retire_empty_temporary_room(&self, room_localpart: &str) -> Result<bool> {
-        let Some(room) = self.repository.room(room_localpart).await? else {
-            return Ok(false);
-        };
+    pub async fn departed_room(
+        &self,
+        localpart: &str,
+        route: &MucOccupantRoute,
+        sm_session_id: Uuid,
+    ) -> Result<Option<MucRoomIncarnation>> {
         self.repository
-            .delete_temporary_room(room.id, room.room_epoch, room.config_version)
+            .departed_room(localpart, route, sm_session_id)
             .await
+    }
+
+    pub async fn departure_observers(
+        &self,
+        room: MucRoomIncarnation,
+        departed_nick: &str,
+    ) -> Result<Vec<MucOccupantRoute>> {
+        self.repository
+            .departure_observers(room, departed_nick)
+            .await
+    }
+
+    pub async fn retire_empty_temporary_room(
+        &self,
+        room: MucRoomIncarnation,
+    ) -> Result<Option<CommittedRoomRetirement>> {
+        self.repository.delete_temporary_room(room).await
     }
 }

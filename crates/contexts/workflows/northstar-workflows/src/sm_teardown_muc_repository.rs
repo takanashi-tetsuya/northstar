@@ -1,7 +1,9 @@
 //! PostgreSQL adapter for SM-owned MUC teardown projections and exact cleanup.
 
 use anyhow::Result;
+use northstar_room_application::muc_service::{CommittedRoomRetirement, MucRoomIncarnation};
 use northstar_room_application::sm_teardown_muc::*;
+use northstar_room_core::occupancy::MucOccupantRoute;
 use sqlx::PgPool;
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -53,16 +55,32 @@ impl SmTeardownMucRepository for PostgresSmTeardownMucRepository {
 
     async fn delete_temporary_room(
         &self,
-        room_id: Uuid,
-        room_epoch: Uuid,
-        config_version: i64,
-    ) -> Result<bool> {
-        northstar_room_postgres::muc::delete_temporary_muc_room(
+        room: MucRoomIncarnation,
+    ) -> Result<Option<CommittedRoomRetirement>> {
+        northstar_room_postgres::muc::delete_temporary_muc_room(&self.pool, room, None).await
+    }
+
+    async fn departed_room(
+        &self,
+        localpart: &str,
+        route: &MucOccupantRoute,
+        sm_session_id: Uuid,
+    ) -> Result<Option<MucRoomIncarnation>> {
+        northstar_room_postgres::muc::muc_departed_room(
             &self.pool,
-            room_id,
-            room_epoch,
-            config_version,
+            localpart,
+            route,
+            Some(sm_session_id),
         )
         .await
+    }
+
+    async fn departure_observers(
+        &self,
+        room: MucRoomIncarnation,
+        departed_nick: &str,
+    ) -> Result<Vec<MucOccupantRoute>> {
+        northstar_room_postgres::muc::sm_teardown_muc_observers(&self.pool, room, departed_nick)
+            .await
     }
 }

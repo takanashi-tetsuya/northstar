@@ -15,7 +15,10 @@ use crate::node::{
 };
 use anyhow::Result;
 use northstar_cluster::{ClusterMucDeparture, ClusterSessionRouteRelease};
-use northstar_room_application::muc_service::ClusterMucTransitionOutcome;
+use northstar_room_application::muc_service::{
+    ClusterMucTransitionOutcome, CommittedRoomRetirement, MucRoomIncarnation,
+};
+use northstar_room_core::occupancy::MucOccupantRoute;
 use northstar_runtime::workers::WorkerRegistry;
 use northstar_session_application::sm::SmSessionSnapshot;
 use northstar_session_application::sm_capacity::SmCapacityLease;
@@ -245,8 +248,19 @@ impl SessionCleanupPorts for SessionCleanupAdapters {
             .await
     }
 
-    async fn delete_temporary_room(&self, room_jid: &str) -> Result<()> {
-        self.rooms.delete_temporary_room(room_jid).await
+    async fn departed_room(
+        &self,
+        room_jid: &str,
+        route: &MucOccupantRoute,
+    ) -> Result<Option<MucRoomIncarnation>> {
+        self.rooms.departed_room(room_jid, route).await
+    }
+
+    async fn delete_temporary_room(
+        &self,
+        room: MucRoomIncarnation,
+    ) -> Result<Option<CommittedRoomRetirement>> {
+        self.rooms.delete_temporary_room(room).await
     }
 
     async fn clear_active_privacy_session(&self, user_id: Uuid, connection_id: Uuid) -> Result<()> {

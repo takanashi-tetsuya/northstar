@@ -1,6 +1,7 @@
 //! Room queries, membership, invitations, discussion commands, and legacy administrative operations.
 
 use super::*;
+use northstar_room_core::occupancy::MucOccupantRoute;
 
 impl<R: MucRepository> MucService<R> {
     pub async fn execute_muc_discussion(
@@ -214,19 +215,30 @@ impl<R: MucRepository> MucService<R> {
         self.local_history_since(room_id, limit, since).await
     }
 
-    pub async fn delete_expired_locked_room(&self, room_id: Uuid) -> Result<bool> {
-        self.repository.delete_expired_locked_room(room_id).await
+    pub async fn delete_expired_locked_room(
+        &self,
+        room_id: Uuid,
+    ) -> Result<Option<CommittedRoomRetirement>> {
+        self.repository.expire_locked_room_exact(room_id).await
     }
 
-    pub async fn delete_temporary_room_by_jid(&self, room_jid: &str) -> Result<()> {
-        let localpart = northstar_xmpp_types::jid_text::localpart(room_jid);
-        let Some(room) = self.room(localpart).await? else {
-            return Ok(());
-        };
-        let _ = self
-            .delete_temporary_room(room.id, room.room_epoch, room.config_version)
-            .await?;
-        Ok(())
+    pub async fn departed_room(
+        &self,
+        room_jid: &str,
+        route: &MucOccupantRoute,
+    ) -> Result<Option<MucRoomIncarnation>> {
+        self.repository
+            .departed_room(northstar_xmpp_types::jid_text::localpart(room_jid), route)
+            .await
+    }
+
+    pub async fn retire_empty_temporary_room(
+        &self,
+        room: MucRoomIncarnation,
+    ) -> Result<Option<CommittedRoomRetirement>> {
+        self.repository
+            .retire_empty_temporary_room(room, None)
+            .await
     }
 
     pub async fn delete_temporary_room(
@@ -234,9 +246,15 @@ impl<R: MucRepository> MucService<R> {
         room_id: Uuid,
         room_epoch: Uuid,
         config_version: i64,
-    ) -> Result<bool> {
+    ) -> Result<Option<CommittedRoomRetirement>> {
         self.repository
-            .delete_temporary_room(room_id, room_epoch, config_version)
+            .retire_empty_temporary_room(
+                MucRoomIncarnation {
+                    room_id,
+                    room_epoch,
+                },
+                Some(config_version),
+            )
             .await
     }
 
@@ -446,14 +464,18 @@ impl<R: MucRepository> MucService<R> {
             .await
     }
 
-    pub async fn cancel_locked_room(&self, room_id: Uuid, actor_full_jid: &str) -> Result<bool> {
+    pub async fn cancel_locked_room(
+        &self,
+        room_id: Uuid,
+        actor_full_jid: &str,
+    ) -> Result<Option<CommittedRoomRetirement>> {
         self.repository
-            .cancel_locked_room(room_id, actor_full_jid)
+            .cancel_locked_room_exact(room_id, actor_full_jid)
             .await
     }
 
     pub async fn delete_room(&self, room_id: Uuid) -> Result<()> {
-        self.repository.delete_room(room_id).await
+        self.repository.retire_room(room_id).await.map(|_| ())
     }
 
     pub async fn set_local_legacy_affiliations_batch(

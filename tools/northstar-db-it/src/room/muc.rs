@@ -395,12 +395,14 @@ async fn locked_room_configuration_is_atomic_restart_safe_and_bounded() {
     let (cancelled, _) = get_or_create_muc_room(&restarted, "cancelled", alice_id, alice)
         .await
         .unwrap();
-    assert!(!cancel_locked_muc_room(&restarted, cancelled.id, bob)
+    assert!(cancel_locked_muc_room(&restarted, cancelled.id, bob)
         .await
-        .unwrap());
+        .unwrap()
+        .is_none());
     assert!(cancel_locked_muc_room(&restarted, cancelled.id, alice)
         .await
-        .unwrap());
+        .unwrap()
+        .is_some());
     assert!(muc_room(&restarted, "cancelled").await.unwrap().is_none());
 
     let (expired, _) = get_or_create_muc_room(&restarted, "expired", alice_id, alice)
@@ -415,7 +417,8 @@ async fn locked_room_configuration_is_atomic_restart_safe_and_bounded() {
     .unwrap();
     assert!(delete_expired_locked_muc_room(&restarted, expired.id)
         .await
-        .unwrap());
+        .unwrap()
+        .is_some());
     assert!(muc_room(&restarted, "expired").await.unwrap().is_none());
 
     restarted.close().await;

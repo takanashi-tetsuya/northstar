@@ -375,21 +375,22 @@ pub async fn muc_owner_set(
             && node.tag_name().namespace() == Some("jabber:x:data")
     });
     if form.is_some_and(|form| form.attribute("type") == Some("cancel")) {
-        if room.is_locked()
-            && session
+        let retirement = if room.is_locked() {
+            session
                 .host()
                 .muc_service()
                 .cancel_locked_room(room.id, full_jid)
                 .await?
-        {
+        } else {
+            None
+        };
+        if let Some(retirement) = retirement {
             let mut direct_cancel_deliveries = Vec::new();
-            for (_, occupant) in session.host().muc_occupants_for(room_jid) {
-                let Some(occupant) = session
-                    .host()
-                    .remove_local_muc_occupant_exact((&occupant).into())
-                else {
-                    continue;
-                };
+            for occupant in crate::locked_room_expiry::take_retired_occupants(
+                &retirement,
+                room_jid,
+                |identity| session.host().remove_local_muc_occupant_exact(identity),
+            ) {
                 let serializable =
                     northstar_room_application::muc_service::SerializableMucOccupant::from(
                         &occupant,
@@ -880,3 +881,6 @@ pub async fn muc_owner_set(
     }
     Ok(MucAction::Send(iq_result_from(id, room_jid, "")))
 }
+
+#[cfg(test)]
+mod cancel_retirement_tests;

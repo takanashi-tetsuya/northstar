@@ -1,5 +1,9 @@
 //! Occupant records shared by the room service, the MUC protocol adapters and cluster replication.
 
+mod route;
+
+pub use route::{MucOccupantRoute, MUC_EXACT_ROUTE_ENVELOPE_VERSION, MUC_ROUTE_ENVELOPE_LIMIT};
+
 /// The process-local identity needed to remove one occupancy without touching
 /// a connection that later reused its room nickname.
 #[derive(Clone, Copy)]

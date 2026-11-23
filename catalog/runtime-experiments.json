@@ -1201,13 +1201,13 @@
         },
         {
           "id": "worker:mix-iq-relay-expiry",
-          "owner": "crates/contexts/room/northstar-mix-xmpp/src/lib.rs",
+          "owner": "crates/contexts/room/northstar-mix-xmpp/src/workers/iq_relay_expiry.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },
         {
           "id": "worker:mix-presence-recovery",
-          "owner": "crates/contexts/room/northstar-mix-xmpp/src/lib.rs",
+          "owner": "crates/contexts/room/northstar-mix-xmpp/src/workers/presence_recovery.rs",
           "coverage": "static_boundary",
           "interpretation": "Registration and ownership are checked by the architecture gate; family experiments prove only their stated assertions, not every business path."
         },

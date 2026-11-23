@@ -2,14 +2,18 @@
 
 use super::relay::relay_profile_reply;
 use super::*;
-use northstar_federation_core::S2sOutboxCapacityExceeded;
 use northstar_room_application::mix_service::{
-    MixMamAdmissionOutcome, MixReflectionKind, MixRelayProfileDenial, MixRelayProfileQuery,
-    MixRelayProfileRequester, MixRelayProfileResult, ReflectedMixArchiveOutcome,
-    VerifiedMixReflection,
+    MixRelayProfileDenial, MixRelayProfileQuery, MixRelayProfileRequester, MixRelayProfileResult,
 };
 
+mod disco;
+mod iq_dispatch;
+mod pam_completion;
+mod pam_ingress;
 mod reflected_retraction;
+mod relay_result;
+
+pub use self::disco::federated_mix_disco_info;
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct AuthenticatedMixIqActor {
@@ -76,121 +80,6 @@ pub fn authenticated_mix_service(asserted_domain: &str, authenticated_domain: &s
         .is_ok_and(|asserted| same_jid_domain(&asserted, &authenticated_domain))
 }
 
-pub async fn federated_mix_disco_info(
-    state: &Arc<impl MixHost>,
-    request: &MixDiscoInfoRequest,
-    requester: &AuthenticatedMixIqActor,
-) -> Result<String> {
-    if let Some(condition) = request.error {
-        return Ok(iq_error_to(
-            &request.id,
-            &request.to,
-            &requester.reply_to,
-            stanza_error_type(condition),
-            condition,
-        ));
-    }
-    if request.node.is_some() {
-        return Ok(iq_error_to(
-            &request.id,
-            &request.to,
-            &requester.reply_to,
-            "cancel",
-            "item-not-found",
-        ));
-    }
-    let target = match CanonicalJid::parse(&request.to) {
-        Ok(target)
-            if target.resourcepart().is_none()
-                && same_jid_domain(
-                    target.domainpart(),
-                    &local_mix_domain(state.local_domain()),
-                ) =>
-        {
-            target
-        }
-        _ => {
-            return Ok(iq_error_to(
-                &request.id,
-                &request.to,
-                &requester.reply_to,
-                "cancel",
-                "item-not-found",
-            ));
-        }
-    };
-    let muc_domain = local_muc_domain(state.local_domain());
-    let mirror = if let Some(localpart) = target.localpart() {
-        let Some(channel) = state
-            .mix_service()
-            .mix_channel(target.domainpart(), localpart)
-            .await?
-        else {
-            return Ok(iq_error_to(
-                &request.id,
-                &request.to,
-                &requester.reply_to,
-                "cancel",
-                "item-not-found",
-            ));
-        };
-        if !state
-            .mix_service()
-            .mix_channel_discoverable_to(&channel, &requester.bare)
-            .await?
-        {
-            // Hidden channels deliberately use item-not-found so disco does
-            // not become an existence oracle for remote domains.
-            return Ok(iq_error_to(
-                &request.id,
-                &request.to,
-                &requester.reply_to,
-                "cancel",
-                "item-not-found",
-            ));
-        }
-        let linked = state.mix_muc_mirror_enabled()
-            && state
-                .mix_service()
-                .mix_muc_mirror_for_mix(channel.id)
-                .await?
-                .is_some();
-        let mirror = northstar_room_application::mix_muc::conditional_mirror_discovery_form(
-            state.mix_muc_mirror_enabled(),
-            linked,
-            northstar_room_application::mix_muc::MirrorDirection::Muc,
-            &muc_domain,
-        );
-        mix_channel_disco_info_payload(
-            channel.name.as_deref().unwrap_or(&channel.localpart),
-            channel.allow_user_message_retraction
-                || channel.administrator_retraction_rights != "nobody",
-            channel.allow_private_messages,
-            state.xmpp_extension_enabled(northstar_xep_0313::XEP_ID),
-            &mirror,
-        )?
-    } else {
-        let linked = state.mix_muc_mirror_enabled()
-            && state
-                .mix_service()
-                .mix_muc_mirror_service_complete(target.domainpart())
-                .await?;
-        let mirror = northstar_room_application::mix_muc::conditional_mirror_discovery_form(
-            state.mix_muc_mirror_enabled(),
-            linked,
-            northstar_room_application::mix_muc::MirrorDirection::Muc,
-            &muc_domain,
-        );
-        mix_service_disco_info_payload(state.server_name(), &mirror)?
-    };
-    Ok(iq_result_to(
-        &request.id,
-        &target.to_string(),
-        &requester.reply_to,
-        &mirror,
-    ))
-}
-
 pub fn pam_membership_receives(membership: &PamMembership, node: &str) -> bool {
     membership.state == "joined"
         && membership
@@ -218,13 +107,7 @@ pub async fn federated_mix_iq(
         }
     }
     if let Some(request) = parse_mix_disco_info(&raw)? {
-        let requester = authenticated_mix_disco_requester(&request.from, authenticated_domain)?;
-        let response = federated_mix_disco_info(&state, &request, &requester).await?;
-        let _ = state
-            .federation_outbox()
-            .send(authenticated_domain, response, None)
-            .await;
-        return Ok(true);
+        return iq_dispatch::dispatch_disco_info(&state, authenticated_domain, &request).await;
     }
     let Some(request) = parse_iq(&raw)? else {
         return Ok(false);
@@ -236,327 +119,38 @@ pub async fn federated_mix_iq(
     if to_jid.domainpart() == local_mix {
         let actor = authenticated_actor(from, authenticated_domain)?;
         if is_mix_mam_request(&request) {
-            let addressed = to_jid.to_string();
-            let reply = MixMamReply {
-                request: &request,
-                addressed: &addressed,
-                reply_to: &actor.reply_to,
-            };
-            let outbox = state.federation_outbox();
-            let command = match reply.command(
-                state.as_ref(),
-                MixMamReadActor::Federated {
-                    bare_jid: actor.bare,
-                },
-            ) {
-                Ok(command) => command,
-                Err(response) => {
-                    let _ = outbox.send(authenticated_domain, response, None).await;
-                    return Ok(true);
-                }
-            };
-            match state
-                .mix_service()
-                .admit_federated_mix_mam(
-                    command,
-                    authenticated_domain,
-                    outbox.outbox_policy(),
-                    |outcome| reply.render(outcome),
-                )
-                .await?
-            {
-                MixMamAdmissionOutcome::Queued => outbox.wake_outbox(),
-                MixMamAdmissionOutcome::OutboxRejected(error) => {
-                    tracing::warn!(
-                        domain = authenticated_domain,
-                        request_id = %request.id,
-                        ?error,
-                        "federated MIX MAM stream was rejected atomically"
-                    );
-                    if error.downcast_ref::<S2sOutboxCapacityExceeded>().is_none() {
-                        let _ = outbox
-                            .send(
-                                authenticated_domain,
-                                iq_error_to(
-                                    &request.id,
-                                    &addressed,
-                                    &actor.reply_to,
-                                    "wait",
-                                    "remote-server-timeout",
-                                ),
-                                None,
-                            )
-                            .await;
-                    }
-                }
-            }
-            return Ok(true);
+            return iq_dispatch::dispatch_mam(
+                &state,
+                authenticated_domain,
+                &request,
+                &to_jid,
+                actor,
+            )
+            .await;
         }
-        let mutation = federated_mix_iq_is_mutation(&request);
-        let request_digest: [u8; 32] = Sha256::digest(raw.as_bytes()).into();
-        let federated_mutation = mutation.then(|| FederatedMixMutation {
-            authenticated_domain: authenticated_domain.to_owned(),
-            actor_jid: actor.reply_to.clone(),
-            request_id: request.id.clone(),
-            request_digest,
-            addressed: to_jid.to_string(),
-            reply_to: actor.reply_to.clone(),
-            policy: state.federation_outbox().outbox_policy(),
-        });
-        if mutation {
-            match state
-                .mix_service()
-                .federated_mix_iq_replay(
-                    authenticated_domain,
-                    &actor.reply_to,
-                    &request.id,
-                    &request_digest,
-                )
-                .await?
-            {
-                FederatedMixIqReplay::Replay(response) => {
-                    state
-                        .mix_service()
-                        .enqueue_s2s_response_batch(
-                            authenticated_domain,
-                            &[response],
-                            state.federation_outbox().outbox_policy(),
-                        )
-                        .await?;
-                    state.federation_outbox().wake_outbox();
-                    return Ok(true);
-                }
-                FederatedMixIqReplay::Conflict => {
-                    let response = iq_error_to(
-                        &request.id,
-                        &to_jid.to_string(),
-                        &actor.reply_to,
-                        "cancel",
-                        "conflict",
-                    );
-                    state
-                        .mix_service()
-                        .enqueue_s2s_response_batch(
-                            authenticated_domain,
-                            &[response],
-                            state.federation_outbox().outbox_policy(),
-                        )
-                        .await?;
-                    state.federation_outbox().wake_outbox();
-                    return Ok(true);
-                }
-                FederatedMixIqReplay::Miss => {}
-            }
-        }
-        let response = match handle_channel_iq(
+        return iq_dispatch::dispatch_channel_iq(
             &state,
+            authenticated_domain,
+            &raw,
             &request,
-            &actor.bare,
-            &to_jid.to_string(),
-            &actor.reply_to,
-            federated_mutation.as_ref(),
+            &to_jid,
+            actor,
         )
-        .await
-        {
-            Ok(response) => response,
-            Err(error) if mutation => {
-                // A process/task can fail after the mutation transaction has
-                // atomically committed its exact result (for example while
-                // performing a non-authoritative local projection). Recover
-                // that result rather than reporting failure or re-executing.
-                match state
-                    .mix_service()
-                    .federated_mix_iq_replay(
-                        authenticated_domain,
-                        &actor.reply_to,
-                        &request.id,
-                        &request_digest,
-                    )
-                    .await?
-                {
-                    FederatedMixIqReplay::Replay(_) => {
-                        tracing::warn!(
-                            domain = authenticated_domain,
-                            request_id = %request.id,
-                            ?error,
-                            "recovered committed federated MIX mutation result"
-                        );
-                        state.federation_outbox().wake_outbox();
-                        return Ok(true);
-                    }
-                    FederatedMixIqReplay::Conflict => {
-                        let conflict = iq_error_to(
-                            &request.id,
-                            &to_jid.to_string(),
-                            &actor.reply_to,
-                            "cancel",
-                            "conflict",
-                        );
-                        state
-                            .mix_service()
-                            .enqueue_s2s_response_batch(
-                                authenticated_domain,
-                                &[conflict],
-                                state.federation_outbox().outbox_policy(),
-                            )
-                            .await?;
-                        state.federation_outbox().wake_outbox();
-                        return Ok(true);
-                    }
-                    FederatedMixIqReplay::Miss => return Err(error),
-                }
-            }
-            Err(error) => return Err(error),
-        };
-        if mutation {
-            match state
-                .mix_service()
-                .federated_mix_iq_replay(
-                    authenticated_domain,
-                    &actor.reply_to,
-                    &request.id,
-                    &request_digest,
-                )
-                .await?
-            {
-                FederatedMixIqReplay::Replay(journaled) => {
-                    anyhow::ensure!(
-                        journaled == response,
-                        "atomic federated MIX result differs from protocol result"
-                    );
-                    state.federation_outbox().wake_outbox();
-                }
-                FederatedMixIqReplay::Conflict => {
-                    let conflict = iq_error_to(
-                        &request.id,
-                        &to_jid.to_string(),
-                        &actor.reply_to,
-                        "cancel",
-                        "conflict",
-                    );
-                    state
-                        .mix_service()
-                        .enqueue_s2s_response_batch(
-                            authenticated_domain,
-                            &[conflict],
-                            state.federation_outbox().outbox_policy(),
-                        )
-                        .await?;
-                    state.federation_outbox().wake_outbox();
-                }
-                FederatedMixIqReplay::Miss => {
-                    let response_kind = Document::parse(&response).ok().and_then(|document| {
-                        document.root_element().attribute("type").map(str::to_owned)
-                    });
-                    anyhow::ensure!(
-                        response_kind.as_deref() == Some("error"),
-                        "successful federated MIX mutation lacked atomic result admission"
-                    );
-                    match state
-                        .mix_service()
-                        .admit_federated_mix_iq_result(
-                            authenticated_domain,
-                            &actor.reply_to,
-                            &request.id,
-                            &request_digest,
-                            &response,
-                            state.federation_outbox().outbox_policy(),
-                        )
-                        .await?
-                    {
-                        FederatedMixIqReplay::Replay(_) => state.federation_outbox().wake_outbox(),
-                        FederatedMixIqReplay::Conflict => {
-                            anyhow::bail!("federated MIX error result raced a changed request")
-                        }
-                        FederatedMixIqReplay::Miss => {
-                            anyhow::bail!("federated MIX error result admission lost its row")
-                        }
-                    }
-                }
-            }
-        } else {
-            let _ = state
-                .federation_outbox()
-                .send(authenticated_domain, response, None)
-                .await;
-        }
-        return Ok(true);
+        .await;
     }
     if same_jid_domain(to_jid.domainpart(), state.local_domain())
         && matches!(request.kind.as_str(), "result" | "error")
     {
-        let from_jid = CanonicalJid::parse_bare(from)?;
-        anyhow::ensure!(
-            authenticated_mix_service(from_jid.domainpart(), authenticated_domain),
-            "forged federated MIX response"
-        );
-        if to_jid.resourcepart().is_some() || to_jid.localpart().is_none() {
-            return Ok(false);
-        }
-        let response_digest: [u8; 32] = Sha256::digest(raw.as_bytes()).into();
-        let outcome = if request.kind == "result" {
-            let join = parse_remote_pam_success(&raw, from)?;
-            state
-                .mix_service()
-                .complete_remote_pam_success(
-                    authenticated_domain,
-                    from,
-                    to,
-                    &request.id,
-                    &response_digest,
-                    join.as_ref().map(|join| RemotePamJoin {
-                        participant_id: &join.participant_id,
-                        subscriptions: &join.subscriptions,
-                        nick: join.nick.as_deref(),
-                    }),
-                )
-                .await?
-        } else {
-            let remote_error = parse_remote_iq_error(&raw)?;
-            state
-                .mix_service()
-                .complete_remote_pam_error(
-                    authenticated_domain,
-                    from,
-                    to,
-                    &request.id,
-                    &response_digest,
-                    &remote_error.error_type,
-                    &remote_error.condition,
-                )
-                .await?
-        };
-        match outcome {
-            RemotePamCompletionOutcome::Applied(completion) => {
-                debug_assert!(completion.applied);
-                debug_assert!(!completion.response_xml.is_empty());
-                if let (Some(membership), Some(removed)) =
-                    (completion.membership.as_ref(), completion.roster_removed)
-                {
-                    if let Some(user) = state
-                        .mix_service()
-                        .find_enabled_user_by_id(membership.user_id)
-                        .await?
-                    {
-                        if let Err(error) =
-                            push_mix_roster_update(&state, &user, &membership.channel_jid, removed)
-                                .await
-                        {
-                            tracing::warn!(?error, channel=%membership.channel_jid, "post-commit PAM roster push failed");
-                        }
-                    }
-                }
-            }
-            RemotePamCompletionOutcome::Replay(completion) => {
-                debug_assert!(!completion.applied);
-                debug_assert!(!completion.response_xml.is_empty());
-            }
-            RemotePamCompletionOutcome::Missing => {}
-            RemotePamCompletionOutcome::Conflict => {
-                tracing::warn!(request_id=%request.id, from, to, "ignored conflicting remote PAM result replay");
-            }
-        }
-        return Ok(true);
+        return pam_completion::complete_pam_response(
+            &state,
+            authenticated_domain,
+            &raw,
+            &request,
+            from,
+            to,
+            &to_jid,
+        )
+        .await;
     }
     Ok(false)
 }
@@ -570,116 +164,7 @@ pub async fn federated_mix_iq_relay(
         return Ok(false);
     }
     if matches!(request.kind.as_str(), "result" | "error") {
-        let Some(pending) = state.pending_mix_iq().get(&request.id) else {
-            return Ok(false);
-        };
-        if pending.expires_at <= Instant::now() {
-            if let Some(expired) = state.pending_mix_iq().remove(&request.id) {
-                expire_mix_iq_relay(&state.mix_iq_relay_route(), expired).await;
-            }
-            return Ok(true);
-        }
-        match pending.stage {
-            MixIqRelayStage::Participant {
-                requester_full_jid,
-                original_id,
-                expected_from,
-                channel_jid,
-            } => {
-                if request.from != expected_from || request.to != requester_full_jid {
-                    return Ok(true);
-                }
-                let source_domain = CanonicalJid::parse(&request.from)?.domainpart().to_owned();
-                anyhow::ensure!(
-                    authenticated_mix_service(&source_domain, authenticated_domain),
-                    "forged MIX IQ participant response"
-                );
-                let requester =
-                    northstar_xmpp_types::jid::CanonicalJid::parse(&requester_full_jid)?;
-                let Some(username) = requester.localpart() else {
-                    state.pending_mix_iq().remove(&request.id);
-                    return Ok(true);
-                };
-                let Some(user) = state.mix_service().find_enabled_user(username).await? else {
-                    state.pending_mix_iq().remove(&request.id);
-                    return Ok(true);
-                };
-                if !state
-                    .mix_service()
-                    .pam_membership(user.id, &channel_jid)
-                    .await?
-                    .is_some_and(|membership| membership.state == "joined")
-                    || state
-                        .mix_service()
-                        .is_blocked(user.id, &channel_jid)
-                        .await?
-                {
-                    state.pending_mix_iq().remove(&request.id);
-                    return Ok(true);
-                }
-                if state.pending_mix_iq().remove(&request.id).is_none() {
-                    return Ok(true);
-                }
-                let stanza =
-                    relay_iq_xml(&request, &original_id, &expected_from, &requester_full_jid);
-                deliver_mix_relay_stanza(state, &requester_full_jid, stanza).await;
-                return Ok(true);
-            }
-            MixIqRelayStage::Channel {
-                requester_full_jid,
-                requester_encoded_jid,
-                original_id,
-                target_real_jid,
-                target_encoded_jid,
-                channel_jid,
-            } => {
-                if request.from != target_real_jid || request.to != requester_encoded_jid {
-                    return Ok(true);
-                }
-                let source_domain = CanonicalJid::parse(&request.from)?.domainpart().to_owned();
-                anyhow::ensure!(
-                    same_jid_domain(&source_domain, authenticated_domain),
-                    "forged MIX IQ target response"
-                );
-                let local_mix = local_mix_domain(state.local_domain());
-                let channel_address = CanonicalJid::parse_bare(&channel_jid)?;
-                let Some(channel_localpart) = channel_address.localpart() else {
-                    state.pending_mix_iq().remove(&request.id);
-                    return Ok(true);
-                };
-                let Some(channel) = state
-                    .mix_service()
-                    .mix_channel(&local_mix, channel_localpart)
-                    .await?
-                else {
-                    state.pending_mix_iq().remove(&request.id);
-                    return Ok(true);
-                };
-                if state
-                    .mix_service()
-                    .mix_participant(
-                        channel.id,
-                        &CanonicalJid::parse(&requester_full_jid)?.bare(),
-                    )
-                    .await?
-                    .is_none()
-                {
-                    state.pending_mix_iq().remove(&request.id);
-                    return Ok(true);
-                }
-                if state.pending_mix_iq().remove(&request.id).is_none() {
-                    return Ok(true);
-                }
-                let stanza = relay_iq_xml(
-                    &request,
-                    &original_id,
-                    &target_encoded_jid,
-                    &requester_full_jid,
-                );
-                deliver_mix_relay_stanza(state, &requester_full_jid, stanza).await;
-                return Ok(true);
-            }
-        }
+        return relay_result::handle_relay_result(state, authenticated_domain, &request).await;
     }
     if request.kind != "get" {
         return Ok(false);
@@ -833,76 +318,19 @@ pub async fn federated_mix_message(
         return Ok(true);
     }
     if local_recipient {
-        if kind != "groupchat" {
-            return Ok(false);
-        }
-        reflected_identity?;
-        let authoritative_stanza_id = reflected_stanza_id?;
-        let from_jid = northstar_xmpp_types::jid::CanonicalJid::parse(&from)?;
-        let participant_id = from_jid
-            .resourcepart()
-            .context("reflected MIX message requires a stable participant resource")?;
-        anyhow::ensure!(
-            northstar_room_application::mix_service::valid_stable_participant_id(participant_id),
-            "invalid reflected MIX stable participant id"
-        );
-        anyhow::ensure!(
-            from_jid.localpart().is_some(),
-            "reflected MIX message requires a channel localpart"
-        );
-        anyhow::ensure!(
-            authenticated_mix_service(from_jid.domainpart(), authenticated_domain),
-            "forged federated MIX channel message"
-        );
-        let channel = from_jid.bare();
-        let to_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&to)?;
-        let Some(username) = to_jid.localpart() else {
-            return Ok(false);
-        };
-        let Some(user) = state.mix_service().find_enabled_user(username).await? else {
-            return Ok(true);
-        };
-        if !state
-            .mix_service()
-            .pam_membership(user.id, &channel)
-            .await?
-            .is_some_and(|membership| pam_membership_receives(&membership, NODE_MESSAGES))
-        {
-            return Ok(true);
-        }
-        if state.mix_service().is_blocked(user.id, &channel).await? {
-            return Ok(true);
-        }
-        let kind = verified_target.map_or(MixReflectionKind::Original, |target_id| {
-            MixReflectionKind::Retraction {
-                target_id,
-                source_participant: participant_id,
-            }
-        });
-        let admission = state
-            .mix_service()
-            .archive_verified_mix_reflection(VerifiedMixReflection {
-                personal_archive_id: Uuid::new_v4(),
-                owner_id: user.id,
-                channel_jid: &channel,
-                authoritative_stanza_id,
-                stanza: &raw,
-                encrypted,
-                kind,
-            })
-            .await?;
-        if !matches!(
-            admission,
-            ReflectedMixArchiveOutcome::Archived(SourceArchiveAdmission::Stored(_))
-        ) {
-            return Ok(true);
-        }
-        for (jid, session) in state.session_entries_for(&to_jid.to_string()) {
-            if state.session_mix_capability(&jid) == MixSessionCapability::Supported {
-                let _ = session.sender().try_send(raw.clone());
-            }
-        }
-        return Ok(true);
+        return pam_ingress::admit_reflected_message(
+            &state,
+            authenticated_domain,
+            raw,
+            &from,
+            &to,
+            &kind,
+            encrypted,
+            reflected_identity,
+            reflected_stanza_id,
+            verified_target,
+        )
+        .await;
     }
     Ok(false)
 }
@@ -990,47 +418,16 @@ pub async fn federated_mix_presence(
         return Ok(true);
     }
     if same_jid_domain(to_jid.domainpart(), state.local_domain()) {
-        anyhow::ensure!(
-            authenticated_mix_service(from_jid.domainpart(), authenticated_domain),
-            "federated MIX presence domain is not authenticated"
-        );
-        if kind == "error" {
-            for (_, session) in state.session_entries_for(&to) {
-                let _ = session.sender().try_send(raw.clone());
-            }
-            return Ok(true);
-        }
-        let _ = presence_children(&raw)?;
-        if from_jid.resourcepart().is_none() {
-            return Ok(false);
-        }
-        reflected_identity?;
-        let (_participant_id, channel_jid) = decode_participant_jid(&from_jid.bare())?;
-        let to_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&to)?;
-        let Some(username) = to_jid.localpart() else {
-            return Ok(false);
-        };
-        let Some(user) = state.mix_service().find_enabled_user(username).await? else {
-            return Ok(true);
-        };
-        if !state
-            .mix_service()
-            .pam_membership(user.id, &channel_jid)
-            .await?
-            .is_some_and(|membership| pam_membership_receives(&membership, NODE_PRESENCE))
-            || state
-                .mix_service()
-                .is_blocked(user.id, &channel_jid)
-                .await?
-        {
-            return Ok(true);
-        }
-        for (jid, session) in state.session_entries_for(&to_jid.to_string()) {
-            if state.session_mix_capability(&jid) == MixSessionCapability::Supported {
-                let _ = session.sender().try_send(raw.clone());
-            }
-        }
-        return Ok(true);
+        return pam_ingress::handle_reflected_presence(
+            &state,
+            authenticated_domain,
+            raw,
+            &from_jid,
+            &to,
+            &kind,
+            reflected_identity,
+        )
+        .await;
     }
     Ok(false)
 }

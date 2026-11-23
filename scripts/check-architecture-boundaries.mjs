@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readProductionModule, readRoleSplitFile, readModule, readModuleParts, rustItemBody } from './lib/source-module.mjs';
+import { productionModuleFiles, readProductionModule, readRoleSplitFile, readModule, readModuleParts, rustItemBody } from './lib/source-module.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -2315,6 +2315,9 @@ const workerDocumentBehaviorEvidence = {
   'sm-authority-listener': ['5 s liveness tick'],
   'pubsub-subscription-cleanup': ['60 s', '40 s', '1,000', 'delivery'],
 };
+const workerResponsibilityModules = new Set([
+  'crates/contexts/room/northstar-mix-xmpp/src/lib.rs',
+]);
 const productionRustSources = [];
 const pendingResponsibilitySources = [path.join(root, 'src'), path.join(root, 'crates')];
 while (pendingResponsibilitySources.length > 0) {
@@ -2348,21 +2351,26 @@ assertExactUniqueInventory('supervised-worker', composedWorkers, [...supervisedW
 for (const contract of supervisedWorkerContracts) {
   const [expectedSource, documentedOwner, documentedWatchdog] =
     workerResponsibilityEvidence[contract.name] ?? [];
-  const sourceEntry = productionRustSources.find(({ relative }) => relative === expectedSource);
-  if (!sourceEntry) throw new Error(`missing reviewed worker owner source: ${expectedSource}`);
-  const sourceRegistrations = [
-    ...sourceEntry.source.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g),
-  ].filter((match) => match[2] === contract.name);
+  const sourcePaths = workerResponsibilityModules.has(expectedSource)
+    ? productionModuleFiles(expectedSource, { root })
+    : [expectedSource];
+  const sourceEntries = productionRustSources.filter(({ relative }) => sourcePaths.includes(relative));
+  if (sourceEntries.length === 0) throw new Error(`missing reviewed worker owner source: ${expectedSource}`);
+  const sourceRegistrations = sourceEntries.flatMap(({ source }) =>
+    [...source.matchAll(/\.supervise(_draining)?\(\s*"([^"]+)"/g)]
+      .filter((match) => match[2] === contract.name)
+      .map((registration) => ({ source, registration })),
+  );
   if (sourceRegistrations.length !== 1) {
     throw new Error(
       `worker ${contract.name} must have exactly one registration in ${expectedSource}`,
     );
   }
-  const registration = sourceRegistrations[0];
-  const nextRegistration = sourceEntry.source.indexOf('.supervise', registration.index + 1);
+  const { source, registration } = sourceRegistrations[0];
+  const nextRegistration = source.indexOf('.supervise', registration.index + 1);
   const registrationEnd =
     nextRegistration < 0 ? registration.index + 2500 : Math.min(nextRegistration, registration.index + 2500);
-  const tail = sourceEntry.source
+  const tail = source
     .slice(registration.index, registrationEnd)
     .replace(/\s+/g, ' ');
   const expectedCriticality = `WorkerCriticality::${contract.criticality}`;

@@ -24,6 +24,7 @@ mod protocol_session;
 pub mod relay;
 pub mod session;
 pub mod worker;
+mod workers;
 
 use self::channel_delivery::{
     addressed_mix_delivery, deliver_channel_stanza, deliver_claimed_channel_stanza,
@@ -69,6 +70,8 @@ use self::relay::{
     register_mix_iq_relay, relay_error, relay_iq_xml, RelayIq,
 };
 use self::session::push_mix_roster_update;
+pub use self::workers::iq_relay_expiry::start_mix_iq_relay_expiry;
+pub use self::workers::presence_recovery::start_mix_presence_recovery;
 use anyhow::{Context, Result};
 use northstar_federation_core::FederationRoute;
 use northstar_room_application::mix_service::outbox;
@@ -78,12 +81,12 @@ use northstar_room_application::mix_service::{
     FederatedMixIqReplay, FederatedMixMutation, JoinChannelOutcome, JoinMixRequest,
     MixAccessEntryOperation, MixAccessEntryUpdate, MixAccessList, MixBusinessReplay, MixChannel,
     MixConfigUpdate, MixInfoUpdate, MixInvitationProof, MixMamReadActor, MixMutationOutcome,
-    MixParticipant, MixParticipantPreference, MixPresenceProbeTarget, MixReadOutcome,
-    MixReplayIdentity, MixRoleUpdate, PamMembership, PamOperationReplay, PresenceOutcome,
-    RegisterMixNickOutcome, RemotePamCompletionOutcome, RemotePamJoin, RetractMixMessageOutcome,
-    RetractMixMessageRequest, SetNickError, SourceArchiveAdmission, StoreEventOutcome,
-    StoreMixMessageRequest, ALL_NODES, NODE_ALLOWED, NODE_AVATAR_DATA, NODE_AVATAR_METADATA,
-    NODE_BANNED, NODE_CONFIG, NODE_INFO, NODE_JIDMAP, NODE_MESSAGES, NODE_PRESENCE,
+    MixParticipant, MixParticipantPreference, MixReadOutcome, MixReplayIdentity, MixRoleUpdate,
+    PamMembership, PamOperationReplay, PresenceOutcome, RegisterMixNickOutcome,
+    RemotePamCompletionOutcome, RemotePamJoin, RetractMixMessageOutcome, RetractMixMessageRequest,
+    SetNickError, SourceArchiveAdmission, StoreEventOutcome, StoreMixMessageRequest, ALL_NODES,
+    NODE_ALLOWED, NODE_AVATAR_DATA, NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG, NODE_INFO,
+    NODE_JIDMAP, NODE_MESSAGES, NODE_PRESENCE,
 };
 pub use northstar_room_core::mix::{
     MixSessionCapability, ADMIN_NS, ANON_NS, CORE_NS, MISC_NS, PAM_NS, PRESENCE_NS,
@@ -136,105 +139,6 @@ pub fn local_mix_domain(local_domain: &str) -> String {
 fn local_muc_domain(local_domain: &str) -> String {
     prepare_domainpart(&format!("conference.{local_domain}"))
         .expect("configured XMPP domain must form a valid MUC service domain")
-}
-
-pub fn start_mix_iq_relay_expiry(
-    context: Arc<impl MixIqRelayExpiryPort>,
-    registry: Arc<northstar_runtime::workers::WorkerRegistry>,
-    cancel: tokio_util::sync::CancellationToken,
-) {
-    registry.supervise(
-        "mix-iq-relay-expiry",
-        northstar_runtime::workers::WorkerCriticality::Restartable,
-        northstar_runtime::workers::WorkerMode::Continuous,
-        Some(Duration::from_secs(10)),
-        cancel.clone(),
-        move |heartbeat| {
-            let context = Arc::clone(&context);
-            let cancel = cancel.clone();
-            async move {
-                let mut interval = tokio::time::interval(Duration::from_millis(250));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                loop {
-                    tokio::select! {
-                        _ = cancel.cancelled() => return Ok(()),
-                        _ = interval.tick() => {
-                            for pending in context.take_expired(Instant::now()) {
-                                expire_mix_iq_relay(context.route(), pending).await;
-                            }
-                            heartbeat.ok();
-                        }
-                    }
-                }
-            }
-        },
-    );
-}
-
-pub fn start_mix_presence_recovery(
-    context: Arc<impl MixPresenceRecoveryPort>,
-    registry: Arc<northstar_runtime::workers::WorkerRegistry>,
-    cutoff: northstar_time::DateTime<northstar_time::Utc>,
-    // The state layer snapshots these targets straight from its own
-    // repository query; the persistence-type conversion happens on this
-    // boundary so the protocol never names the storage DTO.
-    probes: impl IntoIterator<Item = impl Into<MixPresenceProbeTarget>>,
-    cancel: tokio_util::sync::CancellationToken,
-) {
-    let probes: Vec<MixPresenceProbeTarget> = probes.into_iter().map(Into::into).collect();
-    registry.supervise(
-        "mix-presence-recovery",
-        northstar_runtime::workers::WorkerCriticality::Restartable,
-        northstar_runtime::workers::WorkerMode::OneShot,
-        Some(Duration::from_secs(90)),
-        cancel,
-        move |heartbeat| {
-            let context = Arc::clone(&context);
-            let probes = probes.clone();
-            async move {
-        for probe in probes {
-            let Ok(participant) = CanonicalJid::parse_bare(&probe.participant_jid) else {
-                tracing::warn!(participant = %probe.participant_jid, "ignored malformed persisted MIX participant JID");
-                continue;
-            };
-            let domain = participant.domainpart();
-            if same_jid_domain(domain, context.local_domain()) {
-                for (full_jid, connection_id, caps_generation) in context.routes().local_epochs(&probe.participant_jid) {
-                    publish_verified_mix_presence_with(
-                        context.as_ref(),
-                        &full_jid,
-                        connection_id,
-                        caps_generation,
-                    )
-                    .await?;
-                }
-                continue;
-            }
-            if !context.federation_domain_allowed(domain) { continue; }
-            let stanza = XmlElement::namespaced("presence", "jabber:client")
-                .attr("type", "probe")
-                .attr("from", &probe.channel_jid)
-                .attr("to", &probe.participant_jid)
-                .finish();
-            context.send_federated(domain, stanza, None).await;
-        }
-        // The deadline is intentionally short and bounded: a remote resource
-        // that cannot answer a startup probe is no longer authoritative
-        // current state. A later available presence recreates the item.
-        tokio::time::sleep(MIX_IQ_RELAY_TTL).await;
-        let _expired_count = match context.expire_unrefreshed(cutoff).await {
-            Ok(expired) => expired,
-            Err(error) => {
-                return Err(error).context("failed to expire unrefreshed MIX presence");
-            }
-        };
-        // Expiry and every unavailable projection were committed atomically;
-        // the delivery worker owns transport retries.
-        heartbeat.ok();
-        Ok(())
-            }
-        },
-    );
 }
 
 #[cfg(test)]

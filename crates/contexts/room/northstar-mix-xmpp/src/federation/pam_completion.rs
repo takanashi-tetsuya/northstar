@@ -1,4 +1,8 @@
 use super::*;
+use northstar_room_application::mix_service::{CommittedMixChange, RemotePamResponse};
+use northstar_room_core::mix::{MixChannelAddress, MixRealJid};
+
+mod join_evidence;
 
 #[allow(clippy::needless_return)]
 pub(super) async fn complete_pam_response(
@@ -20,25 +24,25 @@ pub(super) async fn complete_pam_response(
     }
     let response_digest: [u8; 32] = Sha256::digest(raw.as_bytes()).into();
     let outcome = if request.kind == "result" {
-        let join = parse_remote_pam_success(raw, from)?;
+        let channel = MixChannelAddress::parse(from)?;
+        let recipient = MixRealJid::parse(to)?;
+        let join = join_evidence::parse_join_evidence(raw, &channel)?;
         state
             .mix_service()
-            .complete_remote_pam_success(
-                authenticated_domain,
-                from,
-                to,
-                &request.id,
-                &response_digest,
-                join.as_ref().map(|join| RemotePamJoin {
-                    participant_id: &join.participant_id,
-                    subscriptions: &join.subscriptions,
-                    nick: join.nick.as_deref(),
-                }),
+            .complete_remote_pam_success_committed(
+                RemotePamResponse {
+                    authenticated_domain,
+                    channel: &channel,
+                    recipient: &recipient,
+                    request_id: &request.id,
+                    digest: &response_digest,
+                },
+                join.as_ref().map(join_evidence::ParsedJoin::evidence),
             )
             .await?
     } else {
         let remote_error = parse_remote_iq_error(raw)?;
-        state
+        let outcome = state
             .mix_service()
             .complete_remote_pam_error(
                 authenticated_domain,
@@ -49,25 +53,19 @@ pub(super) async fn complete_pam_response(
                 &remote_error.error_type,
                 &remote_error.condition,
             )
-            .await?
+            .await?;
+        CommittedMixChange {
+            outcome,
+            roster: Vec::new(),
+        }
     };
-    match outcome {
+    match outcome.outcome {
         RemotePamCompletionOutcome::Applied(completion) => {
             debug_assert!(completion.applied);
             debug_assert!(!completion.response_xml.is_empty());
-            if let (Some(membership), Some(removed)) =
-                (completion.membership.as_ref(), completion.roster_removed)
-            {
-                if let Some(user) = state
-                    .mix_service()
-                    .find_enabled_user_by_id(membership.user_id)
-                    .await?
-                {
-                    if let Err(error) =
-                        push_mix_roster_update(state, &user, &membership.channel_jid, removed).await
-                    {
-                        tracing::warn!(?error, channel=%membership.channel_jid, "post-commit PAM roster push failed");
-                    }
+            for delta in &outcome.roster {
+                if let Err(error) = push_mix_roster_update(state, delta).await {
+                    tracing::warn!(?error, channel=%delta.change.contact_jid, "post-commit PAM roster push failed");
                 }
             }
         }
@@ -82,3 +80,6 @@ pub(super) async fn complete_pam_response(
     }
     return Ok(true);
 }
+
+#[cfg(test)]
+mod tests;

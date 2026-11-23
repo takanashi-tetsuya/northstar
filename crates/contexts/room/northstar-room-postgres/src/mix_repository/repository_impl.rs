@@ -93,6 +93,7 @@ impl<E: RoomEffects> MixRepository for PostgresMixRepository<E> {
             federated,
         )
         .await
+        .map(|committed| committed.outcome)
     }
     async fn join_mix_channel(
         &self,
@@ -220,6 +221,7 @@ impl<E: RoomEffects> MixRepository for PostgresMixRepository<E> {
             federated,
         )
         .await?
+        .outcome
         .map(|left| LeaveMixOutcome {
             participant: left.participant,
             presence_items: left.presence_items.into_iter().map(presence_item).collect(),
@@ -659,7 +661,7 @@ impl<E: RoomEffects> MixRepository for PostgresMixRepository<E> {
             federated,
         )
         .await?
-        .map(access_change_outcome))
+        .map(|committed| access_change_outcome(committed.outcome)))
     }
     async fn register_mix_nick(
         &self,

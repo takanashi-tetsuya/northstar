@@ -11,8 +11,8 @@ use northstar_delivery_core::{
 };
 use northstar_federation_core::FederationRoute;
 use northstar_room_application::mix_service::{
-    foreground, MixAccount, MixChannel, MixRepository, MixService, PamMembership, PresenceOutcome,
-    RecoveryEpoch, RecoveryPresenceSource, RecoveryProgress,
+    foreground, MixAccount, MixChannel, MixPamProjectionRepository, MixRepository, MixService,
+    PamMembership, PresenceOutcome, RecoveryEpoch, RecoveryPresenceSource, RecoveryProgress,
 };
 use northstar_room_core::mix::{MixChannelAddress, MixChannelId, MixSessionCapability};
 use northstar_room_core::mix_iq_relay::{MixIqRelayIndex, PendingMixIqRelay};
@@ -152,7 +152,7 @@ pub trait MixIqRelayExpiryPort: Send + Sync + 'static {
 
 /// The durable MIX delivery lanes' view of routing.
 pub trait MixOutboxPort: Send + Sync + 'static {
-    type Repository: MixRepository + 'static;
+    type Repository: MixRepository + MixPamProjectionRepository + 'static;
     type Session: MixLocalSession;
     type Federation: FederationRoute;
 
@@ -186,7 +186,7 @@ pub trait MixOutboxPort: Send + Sync + 'static {
 
 /// What MIX presence withdrawal needs when a client resource is fenced.
 pub trait MixPresenceWithdrawalPort: Send + Sync {
-    type Repository: MixRepository + 'static;
+    type Repository: MixRepository + MixPamProjectionRepository + 'static;
     type Federation: FederationRoute;
 
     fn service(&self) -> &MixService<Self::Repository>;
@@ -271,7 +271,7 @@ pub trait MixPresenceRecoveryPort: Send + Sync + 'static {
 
 /// Server-wide capabilities the MIX handlers use.
 pub trait MixHost: Send + Sync + 'static {
-    type Repository: MixRepository + 'static;
+    type Repository: MixRepository + MixPamProjectionRepository + 'static;
     type Session: MixLocalSession;
     type Federation: FederationRoute;
     type IqRelayRoute: MixIqRelayRoutePort;

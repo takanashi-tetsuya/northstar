@@ -14,6 +14,7 @@ mod mix_mam_paging_deletion;
 mod mix_muc;
 mod mix_pam_durability;
 mod mix_pam_ingress;
+mod mix_pam_projection;
 mod mix_presence_recovery;
 mod mix_publisher_visibility;
 mod mix_sequence_retention;

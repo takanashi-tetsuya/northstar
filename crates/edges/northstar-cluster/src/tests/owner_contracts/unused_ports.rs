@@ -1056,5 +1056,6 @@ mod sm {
     }
 }
 
+mod pam_projection_repository;
 #[cfg(test)]
 mod presence_recovery;

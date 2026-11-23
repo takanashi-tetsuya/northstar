@@ -930,5 +930,6 @@ impl MixDeliveryRepository for ControlledRepository {
     }
 }
 
+mod pam_projection_repository;
 #[cfg(test)]
 mod presence_recovery;

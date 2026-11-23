@@ -76,6 +76,8 @@ use anyhow::{Context, Result};
 use northstar_federation_core::FederationRoute;
 use northstar_room_application::mix_service::outbox;
 use northstar_room_application::mix_service::outbox::core as mix_worker;
+#[cfg(test)]
+use northstar_room_application::mix_service::RemotePamJoin;
 use northstar_room_application::mix_service::{
     BeginRemotePamJoin, BeginRemotePamLeave, ClaimedPamResult, CreateChannelOutcome,
     FederatedMixIqReplay, FederatedMixMutation, JoinChannelOutcome, JoinMixRequest,
@@ -83,10 +85,10 @@ use northstar_room_application::mix_service::{
     MixConfigUpdate, MixInfoUpdate, MixInvitationProof, MixMamReadActor, MixMutationOutcome,
     MixParticipant, MixParticipantPreference, MixReadOutcome, MixReplayIdentity, MixRoleUpdate,
     PamMembership, PamOperationReplay, PresenceOutcome, RegisterMixNickOutcome,
-    RemotePamCompletionOutcome, RemotePamJoin, RetractMixMessageOutcome, RetractMixMessageRequest,
-    SetNickError, SourceArchiveAdmission, StoreEventOutcome, StoreMixMessageRequest, ALL_NODES,
-    NODE_ALLOWED, NODE_AVATAR_DATA, NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG, NODE_INFO,
-    NODE_JIDMAP, NODE_MESSAGES, NODE_PRESENCE,
+    RemotePamCompletionOutcome, RetractMixMessageOutcome, RetractMixMessageRequest, SetNickError,
+    SourceArchiveAdmission, StoreEventOutcome, StoreMixMessageRequest, ALL_NODES, NODE_ALLOWED,
+    NODE_AVATAR_DATA, NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG, NODE_INFO, NODE_JIDMAP,
+    NODE_MESSAGES, NODE_PRESENCE,
 };
 pub use northstar_room_core::mix::{
     MixSessionCapability, ADMIN_NS, ANON_NS, CORE_NS, MISC_NS, PAM_NS, PRESENCE_NS,

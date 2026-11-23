@@ -5,6 +5,7 @@ use std::time::Duration;
 
 mod addressed_delivery;
 mod pam_delivery_repository;
+mod pam_projection_repository;
 
 // Unrelated ports fail loudly if a handler unexpectedly reaches them.
 macro_rules! unused_async {

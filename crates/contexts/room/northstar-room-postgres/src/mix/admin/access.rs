@@ -1,4 +1,6 @@
 use super::super::*;
+use northstar_room_application::mix_service::CommittedMixChange;
+use northstar_room_core::mix::{MixChannelAddress, MixChannelId, MixLocalParticipantId};
 
 pub async fn authorized_mix_access_entries(
     pool: &PgPool,
@@ -42,7 +44,7 @@ pub async fn set_mix_access_entry(
     update: MixAccessEntryUpdate<'_>,
     payloads: &dyn MixEventPayloadRenderer,
     federated: Option<&FederatedMixMutation>,
-) -> Result<Option<AccessChangeOutcome>> {
+) -> Result<Option<CommittedMixChange<AccessChangeOutcome>>> {
     let channel_id = update.channel_id;
     let actor = canonical_user_bare(update.actor)?;
     let pattern = canonical_mix_access_pattern(update.pattern)?;
@@ -57,6 +59,12 @@ pub async fn set_mix_access_entry(
     );
     let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
+    let accounts = if banned && present {
+        lock_hosted_pam_accounts_tx(&mut transaction, &MixChannelId::new(channel_id), None, None)
+            .await?
+    } else {
+        BTreeMap::new()
+    };
     // Serialize against owner/administrator replacement before evaluating the
     // role. Checking first allowed a concurrent config transaction to revoke
     // the actor while this transaction waited for the channel lock, then
@@ -82,6 +90,8 @@ pub async fn set_mix_access_entry(
     }
     let mut outcome = AccessChangeOutcome::default();
     let channel = channel_from_row(&channel_row);
+    let address = MixChannelAddress::parse(&channel.jid())?;
+    let mut roster = Vec::new();
     if present {
         let opposite_exists: bool = if banned {
             sqlx::query_scalar(
@@ -194,25 +204,25 @@ pub async fn set_mix_access_entry(
                 .bind(participant_id.to_string())
                 .execute(&mut *transaction)
                 .await?;
-                let local_users: Vec<Uuid> = sqlx::query_scalar(
-                    "SELECT user_id FROM mix_pam_memberships WHERE channel_jid = $1 AND participant_id = $2",
+                let local_users = delete_hosted_pam_tx(
+                    &mut transaction,
+                    &address,
+                    Some(&MixLocalParticipantId::new(participant_id)),
+                    None,
                 )
-                .bind(channel.jid())
-                .bind(participant_id.to_string())
-                .fetch_all(&mut *transaction)
                 .await?;
-                for user_id in local_users {
-                    delete_mix_roster_tx(effects, &mut transaction, user_id, &channel.jid())
-                        .await?;
-                    outcome.removed_local_users.push(user_id);
-                }
-                sqlx::query(
-                    "DELETE FROM mix_pam_memberships WHERE channel_jid = (SELECT localpart || '@' || service_domain FROM mix_channels WHERE id = $1) AND participant_id = $2",
-                )
-                .bind(channel_id)
-                .bind(participant_id.to_string())
-                .execute(&mut *transaction)
-                .await?;
+                outcome.removed_local_users.extend(&local_users);
+                roster.extend(
+                    committed_pam_removals_tx(
+                        effects,
+                        &mut transaction,
+                        &address,
+                        &accounts,
+                        local_users,
+                        false,
+                    )
+                    .await?,
+                );
                 if !presence_items.is_empty() {
                     outcome
                         .removed_presence
@@ -343,5 +353,5 @@ pub async fn set_mix_access_entry(
     transaction.commit().await?;
     outcome.removed_local_users.sort_unstable();
     outcome.removed_local_users.dedup();
-    Ok(Some(outcome))
+    Ok(Some(CommittedMixChange { outcome, roster }))
 }

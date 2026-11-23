@@ -1,4 +1,6 @@
 use super::*;
+use northstar_room_application::mix_service::HostedMixOutcome;
+use northstar_room_core::mix::{MixChannelId, MixRealJid};
 
 pub(super) async fn destroy_channel(
     state: &Arc<impl MixHost>,
@@ -18,19 +20,29 @@ pub(super) async fn destroy_channel(
             "item-not-found",
         ));
     };
-    let local_users = state
+    let committed = match state
         .mix_service()
-        .local_pam_users_for_channel(&channel.jid())
-        .await?;
-    if state
-        .mix_service()
-        .destroy_mix_channel(channel.id, actor_bare, federated)
+        .destroy_mix_channel_committed(
+            &MixChannelId::new(channel.id),
+            &MixRealJid::parse(actor_bare)?,
+            federated,
+        )
         .await?
     {
-        for user_id in local_users {
-            if let Some(user) = state.mix_service().find_enabled_user_by_id(user_id).await? {
-                push_mix_roster_update(state, &user, &channel.jid(), true).await?;
-            }
+        HostedMixOutcome::Present(committed) => committed,
+        HostedMixOutcome::MissingChannel => {
+            return Ok(iq_error_to(
+                &request.id,
+                mix_domain,
+                reply_to,
+                "cancel",
+                "item-not-found",
+            ));
+        }
+    };
+    if committed.outcome {
+        for delta in &committed.roster {
+            push_mix_roster_update(state, delta).await?;
         }
         let payload = XmlElement::namespaced("destroy", CORE_NS)
             .attr("channel", &channel.localpart)

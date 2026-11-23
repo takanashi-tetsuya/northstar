@@ -1,4 +1,5 @@
 use super::*;
+use northstar_room_core::mix::{MixChannelId, MixRealJid};
 
 #[allow(clippy::needless_return)]
 pub(super) async fn get(
@@ -64,24 +65,22 @@ pub(super) async fn publish(
     );
     let pattern =
         northstar_room_application::mix_service::canonical_mix_access_pattern(&item_ids[0])?;
-    let Some(outcome) = state
+    let committed = state
         .mix_service()
-        .set_mix_access_entry(
-            MixAccessEntryUpdate {
-                channel_id: channel.id,
-                actor,
-                pattern: &pattern,
-                list: if node == NODE_BANNED {
-                    MixAccessList::Banned
-                } else {
-                    MixAccessList::Allowed
-                },
-                operation: MixAccessEntryOperation::Publish { reason: None },
+        .set_mix_access_entry_committed(
+            &MixChannelId::new(channel.id),
+            &MixRealJid::parse(actor)?,
+            &pattern,
+            if node == NODE_BANNED {
+                MixAccessList::Banned
+            } else {
+                MixAccessList::Allowed
             },
+            MixAccessEntryOperation::Publish { reason: None },
             federated,
         )
-        .await?
-    else {
+        .await?;
+    if committed.outcome.is_none() {
         return Ok(iq_error_to(
             &request.id,
             &channel.jid(),
@@ -89,12 +88,9 @@ pub(super) async fn publish(
             "auth",
             "forbidden",
         ));
-    };
-    let _ = (&outcome.removed_presence, &outcome.removed_participants);
-    for user_id in outcome.removed_local_users {
-        if let Some(user) = state.mix_service().find_enabled_user_by_id(user_id).await? {
-            push_mix_roster_update(state, &user, &channel.jid(), true).await?;
-        }
+    }
+    for delta in &committed.roster {
+        push_mix_roster_update(state, delta).await?;
     }
     Ok(iq_result_to(
         &request.id,

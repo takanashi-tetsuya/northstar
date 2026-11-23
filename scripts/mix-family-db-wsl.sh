@@ -99,6 +99,27 @@ run_exact_ignored \
 run_exact_ignored \
   room::mix_pam_ingress::reflected_presence_error_reaches_only_eligible_resources
 
+run_exact_ignored \
+  room::mix_pam_projection::local_pam_join_then_core_subscribe_keeps_one_subscription_set
+
+run_exact_ignored \
+  room::mix_pam_projection::direct_core_leave_removes_pam_and_roster_projection
+
+run_exact_ignored \
+  room::mix_pam_projection::repeated_pam_cleanup_is_idempotent
+
+run_exact_ignored \
+  room::mix_pam_projection::destroy_racing_join_returns_a_removal_for_every_committed_member
+
+run_exact_ignored \
+  room::mix_pam_projection::ban_then_rejoin_pairs_each_roster_version_with_its_annotation
+
+run_exact_ignored \
+  room::mix_pam_projection::account_disable_before_roster_write_rejects_the_membership_change
+
+run_exact_ignored \
+  room::mix_pam_projection::channel_destroyed_after_lookup_is_typed_not_found
+
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline -p northstar-db-it \
   room::mix_mam::mix_anon_misc_permissions_are_atomic_and_private \

@@ -1,4 +1,8 @@
 use super::*;
+use northstar_room_application::mix_service::{CommittedMixChange, HostedMixRefusal};
+use northstar_room_core::mix::{
+    MixChannelAddress, MixChannelId, MixLocalParticipantId, MixRealJid,
+};
 
 #[allow(clippy::too_many_arguments)]
 pub async fn update_mix_subscriptions(
@@ -12,6 +16,8 @@ pub async fn update_mix_subscriptions(
     federated: Option<&FederatedMixMutation>,
 ) -> Result<Option<UpdateSubscriptionsOutcome>> {
     let actor = canonical_user_bare(actor)?;
+    let actor_jid = MixRealJid::parse(&actor)?;
+    let channel_id_typed = MixChannelId::new(channel_id);
     let subscribe = valid_join_nodes(subscribe)?;
     let unsubscribe = valid_join_nodes(unsubscribe)?;
     anyhow::ensure!(
@@ -20,6 +26,9 @@ pub async fn update_mix_subscriptions(
     );
     let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
+    let accounts =
+        lock_hosted_pam_accounts_tx(&mut transaction, &channel_id_typed, Some(&actor_jid), None)
+            .await?;
     // Serialize subscription changes with message/retraction admission. Those
     // paths lock the channel before persisting an event and selecting its
     // committed audience. Without the same lock here, an unsubscribe could
@@ -33,7 +42,7 @@ pub async fn update_mix_subscriptions(
         .await?;
     let Some(channel_row) = channel_row else {
         transaction.rollback().await?;
-        return Ok(None);
+        return Err(HostedMixRefusal::MissingChannel.into());
     };
     let channel = channel_from_row(&channel_row);
     let participant_row = sqlx::query(
@@ -49,6 +58,7 @@ pub async fn update_mix_subscriptions(
     };
     let participant = participant_from_row(&participant_row);
     let participant_id = participant.participant_id;
+    let users = hosted_pam_users(&accounts, &actor_jid, None)?;
     let preference_row = sqlx::query(
         "SELECT jid_visibility,private_messages,vcard,share_presence
            FROM mix_participant_preferences
@@ -103,12 +113,17 @@ pub async fn update_mix_subscriptions(
     } else {
         Vec::new()
     };
-    let current: Vec<String> = sqlx::query_scalar(
-        "SELECT node FROM mix_subscriptions WHERE channel_id = $1 AND participant_id = $2 ORDER BY node",
+    let participant_uuid = MixLocalParticipantId::new(participant_id);
+    let current =
+        hosted_subscription_nodes_tx(&mut transaction, &channel_id_typed, &participant_uuid)
+            .await?;
+    mirror_hosted_pam_subscriptions_tx(
+        &mut transaction,
+        &MixChannelAddress::parse(&channel.jid())?,
+        &participant_uuid,
+        &users,
+        &current,
     )
-    .bind(channel_id)
-    .bind(participant_id)
-    .fetch_all(&mut *transaction)
     .await?;
     for item in &removed_presence {
         enqueue_mix_presence_event_tx(
@@ -155,6 +170,7 @@ pub async fn set_mix_nick(
     federated: Option<&FederatedMixMutation>,
 ) -> Result<Result<MixParticipant, SetNickError>> {
     let actor = canonical_user_bare(actor)?;
+    let actor_jid = MixRealJid::parse(&actor)?;
     let nick = prepare_mix_nick(nick)?;
     let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
@@ -162,10 +178,18 @@ pub async fn set_mix_nick(
         .bind(format!("mix-actor:{actor}"))
         .execute(&mut *transaction)
         .await?;
+    let accounts = lock_hosted_pam_accounts_tx(
+        &mut transaction,
+        &MixChannelId::new(channel_id),
+        Some(&actor_jid),
+        None,
+    )
+    .await?;
     let channel_row = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
         .bind(channel_id)
-        .fetch_one(&mut *transaction)
-        .await?;
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(HostedMixRefusal::MissingChannel)?;
     let channel = channel_from_row(&channel_row);
     let collision: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM mix_participants WHERE channel_id = $1 AND nick = $2 AND jid <> $3)",
@@ -191,6 +215,7 @@ pub async fn set_mix_nick(
         transaction.rollback().await?;
         return Ok(Err(SetNickError::NotParticipant));
     };
+    let users = hosted_pam_users(&accounts, &actor_jid, None)?;
     let participant = participant_from_row(&row);
     let preference_row = sqlx::query(
         "SELECT jid_visibility,private_messages,vcard,share_presence
@@ -233,14 +258,17 @@ pub async fn set_mix_nick(
         payloads,
     )
     .await?;
-    sqlx::query(
-        "UPDATE mix_pam_memberships SET nick = $3, updated_at = NOW() WHERE channel_jid = $1 AND participant_id = $2",
-    )
-    .bind(channel.jid())
-    .bind(participant.participant_id.to_string())
-    .bind(&nick)
-    .execute(&mut *transaction)
-    .await?;
+    if !users.is_empty() {
+        sqlx::query(
+            "UPDATE mix_pam_memberships SET nick = $3, updated_at = NOW() WHERE channel_jid = $1 AND participant_id = $2 AND user_id=ANY($4)",
+        )
+        .bind(channel.jid())
+        .bind(participant.participant_id.to_string())
+        .bind(&nick)
+        .bind(&users)
+        .execute(&mut *transaction)
+        .await?;
+    }
     finalize_federated_mix_mutation_tx(
         effects,
         &mut transaction,
@@ -261,35 +289,61 @@ pub async fn leave_mix_channel(
     pam_user_id: Option<Uuid>,
     payloads: &dyn MixEventPayloadRenderer,
     federated: Option<&FederatedMixMutation>,
-) -> Result<Option<LeaveMixOutcome>> {
-    let actor = canonical_user_bare(actor)?;
+) -> Result<CommittedMixChange<Option<LeaveMixOutcome>>> {
+    let actor = MixRealJid::parse(actor)?;
     let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
+    let accounts = lock_hosted_pam_accounts_tx(
+        &mut transaction,
+        &MixChannelId::new(channel_id),
+        Some(&actor),
+        pam_user_id,
+    )
+    .await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(channel_id.to_string())
         .execute(&mut *transaction)
         .await?;
     let channel_row = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
         .bind(channel_id)
-        .fetch_one(&mut *transaction)
-        .await?;
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(HostedMixRefusal::MissingChannel)?;
     let channel = channel_from_row(&channel_row);
-    if let Some(user_id) = pam_user_id {
-        anyhow::ensure!(
-            pam_account_matches_actor_tx(&mut transaction, user_id, &actor).await?,
-            "MIX-PAM account UUID does not belong to authenticated actor"
-        );
-    }
+    let channel_address = MixChannelAddress::parse(&channel.jid())?;
+    let users = hosted_pam_users(&accounts, &actor, pam_user_id)?;
     let participant_row = sqlx::query(
         "SELECT channel_id, participant_id, jid, nick, role, joined_at FROM mix_participants WHERE channel_id = $1 AND jid = $2 FOR UPDATE",
     )
     .bind(channel_id)
-    .bind(actor)
+    .bind(actor.as_str())
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(participant_row) = participant_row else {
+        if let Some(user_id) = pam_user_id {
+            let removed =
+                delete_hosted_pam_tx(&mut transaction, &channel_address, None, Some(&[user_id]))
+                    .await?;
+            let roster = committed_pam_removals_tx(
+                effects,
+                &mut transaction,
+                &channel_address,
+                &accounts,
+                removed,
+                false,
+            )
+            .await?;
+            transaction.commit().await?;
+            return Ok(CommittedMixChange {
+                outcome: None,
+                roster,
+            });
+        }
         transaction.rollback().await?;
-        return Ok(None);
+        return Ok(CommittedMixChange {
+            outcome: None,
+            roster: Vec::new(),
+        });
     };
     let participant = participant_from_row(&participant_row);
     let participant_id = participant.participant_id;
@@ -366,16 +420,23 @@ pub async fn leave_mix_channel(
         payloads,
     )
     .await?;
-    let mut roster_change = None;
-    if let Some(user_id) = pam_user_id {
-        sqlx::query("DELETE FROM mix_pam_memberships WHERE user_id = $1 AND channel_jid = $2")
-            .bind(user_id)
-            .bind(channel.jid())
-            .execute(&mut *transaction)
-            .await?;
-        roster_change =
-            delete_mix_roster_tx(effects, &mut transaction, user_id, &channel.jid()).await?;
-    }
+    let removed = delete_hosted_pam_tx(
+        &mut transaction,
+        &channel_address,
+        Some(&MixLocalParticipantId::new(participant_id)),
+        Some(&users),
+    )
+    .await?;
+    let roster = committed_pam_removals_tx(
+        effects,
+        &mut transaction,
+        &channel_address,
+        &accounts,
+        removed,
+        false,
+    )
+    .await?;
+    let roster_change = roster.first().map(|delta| delta.change.clone());
     finalize_federated_mix_mutation_tx(
         effects,
         &mut transaction,
@@ -385,9 +446,12 @@ pub async fn leave_mix_channel(
     )
     .await?;
     transaction.commit().await?;
-    Ok(Some(LeaveMixOutcome {
-        participant,
-        presence_items,
-        roster_change,
-    }))
+    Ok(CommittedMixChange {
+        outcome: Some(LeaveMixOutcome {
+            participant,
+            presence_items,
+            roster_change,
+        }),
+        roster,
+    })
 }

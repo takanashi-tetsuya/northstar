@@ -1,6 +1,11 @@
 //! Remote MIX-PAM completion, memberships, leave, recovery and result leases.
 
 use super::*;
+use northstar_room_application::mix_service::{
+    CommittedMixChange, CommittedMixRosterDelta, HostedMixRefusal, RemotePamJoinEvidence,
+    RemotePamJoinOptions, RemotePamResponse,
+};
+use northstar_room_core::mix::{MixPamState, MixParticipantId};
 
 mod read;
 pub use self::read::pam_delivery_view;
@@ -10,22 +15,33 @@ pub use self::read::{
     local_pam_users_for_channel, pam_membership, pam_membership_from_row, pam_memberships,
 };
 
-#[allow(clippy::too_many_arguments)]
 pub async fn complete_remote_pam_success(
     effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
-    authenticated_domain: &str,
-    channel_jid: &str,
-    recipient_bare: &str,
-    request_id: &str,
-    response_digest: &[u8; 32],
-    join: Option<RemotePamJoin<'_>>,
+    addressed: RemotePamResponse<'_>,
+    join: Option<RemotePamJoinEvidence<'_>>,
     payloads: &dyn MixEventPayloadRenderer,
-) -> Result<RemotePamCompletionOutcome> {
-    let authenticated_domain = northstar_xmpp_types::jid::prepare_domainpart(authenticated_domain)?;
-    let channel_jid = northstar_xmpp_types::jid::canonicalize_bare(channel_jid)?;
-    let recipient_bare = northstar_xmpp_types::jid::canonicalize_bare(recipient_bare)?;
+) -> Result<CommittedMixChange<RemotePamCompletionOutcome>> {
+    let authenticated_domain =
+        northstar_xmpp_types::jid::prepare_domainpart(addressed.authenticated_domain)?;
+    let channel_jid = addressed.channel.as_str();
+    let request_id = addressed.request_id;
+    let response_digest = addressed.digest;
     let mut transaction = pool.begin().await?;
+    let candidate: Option<Uuid> =
+        sqlx::query_scalar("SELECT user_id FROM mix_pam_operations WHERE remote_request_id=$1")
+            .bind(request_id)
+            .fetch_optional(&mut *transaction)
+            .await?;
+    let empty = |outcome| CommittedMixChange {
+        outcome,
+        roster: Vec::new(),
+    };
+    let Some(candidate) = candidate else {
+        transaction.rollback().await?;
+        return Ok(empty(RemotePamCompletionOutcome::Missing));
+    };
+    let accounts = lock_pam_accounts_tx(&mut transaction, &[candidate]).await?;
     let row = sqlx::query(
         "SELECT operation_id,user_id,channel_jid,remote_domain,operation,
                 request_outbox_id,
@@ -38,19 +54,19 @@ pub async fn complete_remote_pam_success(
     .await?;
     let Some(row) = row else {
         transaction.rollback().await?;
-        return Ok(RemotePamCompletionOutcome::Missing);
+        return Ok(empty(RemotePamCompletionOutcome::Missing));
     };
     if row.get::<String, _>("remote_domain") != authenticated_domain
         || row.get::<String, _>("channel_jid") != channel_jid
     {
         transaction.rollback().await?;
-        return Ok(RemotePamCompletionOutcome::Conflict);
+        return Ok(empty(RemotePamCompletionOutcome::Conflict));
     }
     let operation_state: String = row.get("state");
     if operation_state == "terminal" {
         let outcome = terminal_pam_completion(&row, response_digest);
         transaction.rollback().await?;
-        return Ok(outcome);
+        return Ok(empty(outcome));
     }
     anyhow::ensure!(
         matches!(operation_state.as_str(), "pending" | "reconciliation"),
@@ -63,22 +79,32 @@ pub async fn complete_remote_pam_success(
     let operation: String = row.get("operation");
     let requester: String = row.get("requester_full_jid");
     let actor = northstar_xmpp_types::jid::canonical_bare_key(&requester)?;
-    if actor != recipient_bare {
+    if actor != addressed.recipient.as_str() || user_id != candidate {
         transaction.rollback().await?;
-        return Ok(RemotePamCompletionOutcome::Conflict);
+        return Ok(empty(RemotePamCompletionOutcome::Conflict));
+    }
+    let (account, disabled) = accounts
+        .get(&user_id)
+        .ok_or(HostedMixRefusal::AccountChanged)?;
+    if !pam_account_matches(account, *disabled, addressed.recipient) {
+        return Err(HostedMixRefusal::AccountChanged.into());
     }
     let client_request_id: String = row.get("client_request_id");
     let Some(mut membership) =
-        locked_pam_membership_tx(&mut transaction, user_id, &channel_jid).await?
+        locked_pam_membership_tx(&mut transaction, user_id, channel_jid).await?
     else {
         anyhow::bail!("remote PAM operation lost its membership authority")
     };
-    let response = match (operation.as_str(), join) {
-        ("join", Some(join)) if membership.state == "pending_join" => {
-            anyhow::ensure!(
-                valid_stable_participant_id(join.participant_id),
-                "invalid remote MIX participant id"
-            );
+    let mut roster = Vec::new();
+    let expected_profile = RemotePamJoinOptions::expected_profile(request_id);
+    let response = match (
+        operation.as_str(),
+        join,
+        MixPamState::parse(&membership.state)?,
+    ) {
+        ("join", Some(join), MixPamState::PendingJoin) => {
+            RemotePamJoinOptions::new(join.anonymous_profile, join.preference)?
+                .verify_result(request_id)?;
             let subscriptions = valid_join_nodes(join.subscriptions)?;
             anyhow::ensure!(
                 subscriptions
@@ -87,7 +113,7 @@ pub async fn complete_remote_pam_success(
                     && (membership.subscriptions.is_empty() || !subscriptions.is_empty()),
                 "remote MIX service returned unrequested subscriptions"
             );
-            let nick = join.nick.map(prepare_mix_nick).transpose()?;
+            let nick = join.nick.map(|nick| nick.as_str());
             sqlx::query(
                 "UPDATE mix_pam_memberships
                     SET participant_id=$2,nick=COALESCE($3,nick),state='joined',
@@ -96,8 +122,8 @@ pub async fn complete_remote_pam_success(
                   WHERE id=$1",
             )
             .bind(membership.id)
-            .bind(join.participant_id)
-            .bind(nick.as_deref())
+            .bind(join.participant.as_str())
+            .bind(nick)
             .execute(&mut *transaction)
             .await?;
             sqlx::query("DELETE FROM mix_pam_subscriptions WHERE membership_id=$1")
@@ -111,38 +137,68 @@ pub async fn complete_remote_pam_success(
                     .execute(&mut *transaction)
                     .await?;
             }
-            membership.participant_id = Some(join.participant_id.to_owned());
+            membership.participant_id = Some(join.participant.as_str().to_owned());
             membership.state = "joined".to_owned();
             membership.request_id = None;
             membership.client_request_id = None;
             membership.requester_full_jid = None;
             membership.subscriptions = subscriptions.clone();
-            upsert_mix_roster_tx(effects, &mut transaction, user_id, &channel_jid, None, true)
-                .await?;
+            let share_presence = expected_profile
+                .filter(|profile| *profile != "anon")
+                .and(join.preference)
+                .is_none_or(|preference| preference.share_presence);
+            let change = upsert_mix_roster_tx(
+                effects,
+                &mut transaction,
+                user_id,
+                channel_jid,
+                None,
+                share_presence,
+            )
+            .await?;
+            roster.push(CommittedMixRosterDelta::new(
+                account.clone(),
+                change,
+                Some(MixParticipantId::Remote(join.participant.clone())),
+            ));
             match reconciliation_response.as_ref() {
                 Some(response) => response.clone(),
-                None => payloads.pam_join_result(PamJoinResult {
-                    client_request_id: &client_request_id,
-                    actor_bare: &actor,
-                    requester_full_jid: &requester,
-                    channel_jid: &channel_jid,
-                    participant_id: join.participant_id,
-                    subscriptions: &subscriptions,
-                    nick: nick.as_deref(),
-                })?,
+                None => {
+                    let result = PamJoinResult {
+                        client_request_id: &client_request_id,
+                        actor_bare: &actor,
+                        requester_full_jid: &requester,
+                        channel_jid,
+                        participant_id: join.participant.as_str(),
+                        subscriptions: &subscriptions,
+                        nick,
+                    };
+                    if expected_profile.is_some() {
+                        join.render_anon_result(&addressed, result)?
+                    } else {
+                        payloads.pam_join_result(result)?
+                    }
+                }
             }
         }
-        ("leave", None) if membership.state == "pending_leave" => {
+        ("join", None, MixPamState::PendingJoin) if expected_profile.is_some() => {
+            return Err(HostedMixRefusal::RemoteJoinOptionsNotHonoured.into());
+        }
+        ("leave", None, MixPamState::PendingLeave) => {
             let response = match reconciliation_response.as_ref() {
                 Some(response) => response.clone(),
                 None => payloads.pam_leave_result(
                     &client_request_id,
                     &actor,
                     &requester,
-                    &channel_jid,
+                    channel_jid,
                 )?,
             };
-            delete_mix_roster_tx(effects, &mut transaction, user_id, &channel_jid).await?;
+            if let Some(change) =
+                delete_mix_roster_tx(effects, &mut transaction, user_id, channel_jid).await?
+            {
+                roster.push(CommittedMixRosterDelta::new(account.clone(), change, None));
+            }
             sqlx::query("DELETE FROM mix_pam_memberships WHERE id=$1")
                 .bind(membership.id)
                 .execute(&mut *transaction)
@@ -171,12 +227,15 @@ pub async fn complete_remote_pam_success(
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;
-    Ok(RemotePamCompletionOutcome::Applied(RemotePamCompletion {
-        response_xml: response,
-        membership: Some(membership),
-        applied: true,
-        roster_removed: Some(operation == "leave"),
-    }))
+    Ok(CommittedMixChange {
+        outcome: RemotePamCompletionOutcome::Applied(RemotePamCompletion {
+            response_xml: response,
+            membership: Some(membership),
+            applied: true,
+            roster_removed: Some(operation == "leave"),
+        }),
+        roster,
+    })
 }
 
 pub async fn begin_remote_pam_leave(

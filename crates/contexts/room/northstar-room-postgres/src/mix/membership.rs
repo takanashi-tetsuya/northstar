@@ -1,6 +1,10 @@
 //! MIX channel events, participant rosters and channel join.
 
 use super::*;
+use northstar_room_application::mix_service::HostedMixRefusal;
+use northstar_room_core::mix::{
+    MixChannelAddress, MixChannelId, MixLocalParticipantId, MixRealJid,
+};
 
 pub async fn prune_mix_events_tx(
     transaction: &mut Transaction<'_, Postgres>,
@@ -115,25 +119,19 @@ pub async fn delete_mix_roster_tx(
     user_id: Uuid,
     channel_jid: &str,
 ) -> Result<Option<northstar_roster_core::RosterChange>> {
-    let channel_jid = northstar_xmpp_types::jid::canonicalize_bare(channel_jid)?;
+    let channel = MixChannelAddress::parse(channel_jid)?;
     let deleted = sqlx::query("DELETE FROM roster_items WHERE owner_id = $1 AND contact_jid = $2")
         .bind(user_id)
-        .bind(&channel_jid)
+        .bind(channel.as_str())
         .execute(&mut **transaction)
         .await?
         .rows_affected();
     if deleted == 0 {
         return Ok(None);
     }
-    let version: i64 = sqlx::query_scalar("SELECT northstar_user_bump_roster_version($1)")
-        .bind(user_id)
-        .fetch_one(&mut **transaction)
-        .await?;
-    Ok(Some(
-        effects
-            .record_roster_change(transaction, user_id, version, &channel_jid, true)
-            .await?,
-    ))
+    record_mix_roster_removal_tx(effects, transaction, user_id, &channel)
+        .await
+        .map(Some)
 }
 
 pub async fn join_mix_channel(
@@ -145,6 +143,8 @@ pub async fn join_mix_channel(
     federated: Option<&FederatedMixMutation>,
 ) -> Result<JoinChannelOutcome> {
     let actor_jid = canonical_user_bare(request.actor_jid)?;
+    let actor = MixRealJid::parse(&actor_jid)?;
+    let channel_id_typed = MixChannelId::new(channel_id);
     let nodes = valid_join_nodes(request.nodes)?;
     let nick = request.nick.map(prepare_mix_nick).transpose()?;
     let mut preference = request.preference.cloned().unwrap_or_default();
@@ -155,21 +155,24 @@ pub async fn join_mix_channel(
         .bind(format!("mix-actor:{actor_jid}"))
         .execute(&mut *transaction)
         .await?;
+    let accounts = lock_hosted_pam_accounts_tx(
+        &mut transaction,
+        &channel_id_typed,
+        Some(&actor),
+        request.pam_user_id,
+    )
+    .await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(channel_id.to_string())
         .execute(&mut *transaction)
         .await?;
     let row = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
         .bind(channel_id)
-        .fetch_one(&mut *transaction)
-        .await?;
+        .fetch_optional(&mut *transaction)
+        .await?
+        .ok_or(HostedMixRefusal::MissingChannel)?;
     let channel = channel_from_row(&row);
-    if let Some(user_id) = request.pam_user_id {
-        anyhow::ensure!(
-            pam_account_matches_actor_tx(&mut transaction, user_id, &actor_jid).await?,
-            "MIX-PAM account UUID does not belong to authenticated actor"
-        );
-    }
+    let users = hosted_pam_users(&accounts, &actor, request.pam_user_id)?;
     if (channel.jid_visibility == "visible" && preference.jid_visibility == "never")
         || (channel.jid_visibility == "hidden" && preference.jid_visibility == "always")
     {
@@ -430,6 +433,8 @@ pub async fn join_mix_channel(
         )
         .await?;
     }
+    let channel_address = MixChannelAddress::parse(&channel.jid())?;
+    let participant_uuid = MixLocalParticipantId::new(participant.participant_id);
     let mut roster_change = None;
     if let Some(user_id) = request.pam_user_id {
         let membership_id = Uuid::new_v4();
@@ -443,24 +448,6 @@ pub async fn join_mix_channel(
         .bind(&participant.nick)
         .execute(&mut *transaction)
         .await?;
-        let membership_id: Uuid = sqlx::query_scalar(
-            "SELECT id FROM mix_pam_memberships WHERE user_id = $1 AND channel_jid = $2",
-        )
-        .bind(user_id)
-        .bind(channel.jid())
-        .fetch_one(&mut *transaction)
-        .await?;
-        sqlx::query("DELETE FROM mix_pam_subscriptions WHERE membership_id = $1")
-            .bind(membership_id)
-            .execute(&mut *transaction)
-            .await?;
-        for node in &nodes {
-            sqlx::query("INSERT INTO mix_pam_subscriptions (membership_id, node) VALUES ($1, $2)")
-                .bind(membership_id)
-                .bind(node)
-                .execute(&mut *transaction)
-                .await?;
-        }
         roster_change = Some(Box::new(
             upsert_mix_roster_tx(
                 effects,
@@ -472,6 +459,19 @@ pub async fn join_mix_channel(
             )
             .await?,
         ));
+    }
+    if !users.is_empty() {
+        let committed_nodes =
+            hosted_subscription_nodes_tx(&mut transaction, &channel_id_typed, &participant_uuid)
+                .await?;
+        mirror_hosted_pam_subscriptions_tx(
+            &mut transaction,
+            &channel_address,
+            &participant_uuid,
+            &users,
+            &committed_nodes,
+        )
+        .await?;
     }
     finalize_federated_mix_mutation_tx(
         effects,

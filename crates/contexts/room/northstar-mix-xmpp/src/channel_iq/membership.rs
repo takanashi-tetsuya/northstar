@@ -1,5 +1,7 @@
 use super::*;
 use crate::iq_parse::JoinData;
+use northstar_room_application::mix_service::HostedMixOutcome;
+use northstar_room_core::mix::{MixChannelId, MixRealJid};
 
 pub(super) async fn join_channel(
     state: &Arc<impl MixHost>,
@@ -24,10 +26,10 @@ pub(super) async fn join_channel(
             "not-authorized",
         ));
     }
-    match state
+    let committed = match state
         .mix_service()
-        .join_mix_channel(
-            channel.id,
+        .join_hosted_mix_committed(
+            &MixChannelId::new(channel.id),
             JoinMixRequest {
                 actor_jid: actor_bare.to_owned(),
                 nick: join.nick.clone(),
@@ -41,6 +43,18 @@ pub(super) async fn join_channel(
         )
         .await?
     {
+        HostedMixOutcome::Present(committed) => committed,
+        HostedMixOutcome::MissingChannel => {
+            return Ok(iq_error_to(
+                &request.id,
+                &channel.jid(),
+                reply_to,
+                "cancel",
+                "item-not-found",
+            ));
+        }
+    };
+    match committed.outcome {
         JoinChannelOutcome::Joined {
             participant,
             preference,
@@ -69,20 +83,30 @@ pub(super) async fn leave_channel(
     reply_to: &str,
     federated: Option<&FederatedMixMutation>,
 ) -> Result<String> {
-    let Some(left) = state
+    let left = match state
         .mix_service()
-        .leave_mix_channel(channel.id, actor_bare, None, federated)
+        .leave_mix_channel_committed(
+            &MixChannelId::new(channel.id),
+            &MixRealJid::parse(actor_bare)?,
+            None,
+            federated,
+        )
         .await?
-    else {
-        return Ok(iq_error_to(
-            &request.id,
-            &channel.jid(),
-            reply_to,
-            "cancel",
-            "item-not-found",
-        ));
+    {
+        HostedMixOutcome::Present(left) if left.outcome.is_some() => left,
+        _ => {
+            return Ok(iq_error_to(
+                &request.id,
+                &channel.jid(),
+                reply_to,
+                "cancel",
+                "item-not-found",
+            ));
+        }
     };
-    let _ = left;
+    for delta in &left.roster {
+        push_mix_roster_update(state, delta).await?;
+    }
     let payload = XmlElement::namespaced("leave", CORE_NS).finish();
     Ok(iq_result_to(
         &request.id,
@@ -101,12 +125,13 @@ pub(super) async fn set_nick(
     nick: &str,
     federated: Option<&FederatedMixMutation>,
 ) -> Result<String> {
-    match state
-        .mix_service()
-        .set_mix_nick(channel.id, actor_bare, nick, federated)
-        .await?
-    {
-        Ok(participant) => {
+    match HostedMixOutcome::classify(
+        state
+            .mix_service()
+            .set_mix_nick(channel.id, actor_bare, nick, federated)
+            .await,
+    )? {
+        HostedMixOutcome::Present(Ok(participant)) => {
             let payload = XmlElement::namespaced("setnick", CORE_NS)
                 .child(XmlElement::new("nick").text(participant.nick.clone().unwrap_or_default()))
                 .finish();
@@ -117,19 +142,26 @@ pub(super) async fn set_nick(
                 &payload,
             ))
         }
-        Err(SetNickError::NotParticipant) => Ok(iq_error_to(
+        HostedMixOutcome::Present(Err(SetNickError::NotParticipant)) => Ok(iq_error_to(
             &request.id,
             &channel.jid(),
             reply_to,
             "auth",
             "forbidden",
         )),
-        Err(SetNickError::Conflict) => Ok(iq_error_to(
+        HostedMixOutcome::Present(Err(SetNickError::Conflict)) => Ok(iq_error_to(
             &request.id,
             &channel.jid(),
             reply_to,
             "cancel",
             "conflict",
+        )),
+        HostedMixOutcome::MissingChannel => Ok(iq_error_to(
+            &request.id,
+            &channel.jid(),
+            reply_to,
+            "cancel",
+            "item-not-found",
         )),
     }
 }
@@ -145,18 +177,31 @@ pub(super) async fn update_subscription(
     unsubscribe: &[String],
     federated: Option<&FederatedMixMutation>,
 ) -> Result<String> {
-    let Some(outcome) = state
-        .mix_service()
-        .update_mix_subscriptions(channel.id, actor_bare, subscribe, unsubscribe, federated)
-        .await?
-    else {
-        return Ok(iq_error_to(
-            &request.id,
-            &channel.jid(),
-            reply_to,
-            "auth",
-            "forbidden",
-        ));
+    let outcome = match HostedMixOutcome::classify(
+        state
+            .mix_service()
+            .update_mix_subscriptions(channel.id, actor_bare, subscribe, unsubscribe, federated)
+            .await,
+    )? {
+        HostedMixOutcome::Present(Some(outcome)) => outcome,
+        HostedMixOutcome::Present(None) => {
+            return Ok(iq_error_to(
+                &request.id,
+                &channel.jid(),
+                reply_to,
+                "auth",
+                "forbidden",
+            ))
+        }
+        HostedMixOutcome::MissingChannel => {
+            return Ok(iq_error_to(
+                &request.id,
+                &channel.jid(),
+                reply_to,
+                "cancel",
+                "item-not-found",
+            ));
+        }
     };
     let mut update = XmlElement::namespaced("update-subscription", CORE_NS);
     for node in &outcome.subscriptions {

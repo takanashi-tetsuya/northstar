@@ -700,12 +700,14 @@ const mix = perFile.find(({ name }) => name === 'mix.rs') ?? {
 // coordination altogether.
 const mixProducerMappings = [
   ['destroy_mix_channel', 'destroy_mix_channel'],
+  ['destroy_mix_channel_committed', 'destroy_mix_channel', 'destroy_mix_channel'],
   ['join_mix_channel', 'join_mix_channel'],
   ['expire_unrefreshed_mix_presence', 'expire_presence_page'],
   ['expire_recovery_presence_page', 'expire_presence_page'],
   ['update_mix_subscriptions', 'update_mix_subscriptions'],
   ['set_mix_nick', 'set_mix_nick'],
   ['leave_mix_channel', 'leave_mix_channel'],
+  ['leave_mix_channel_committed', 'leave_mix_channel', 'leave_mix_channel'],
   ['store_mix_presence', 'write_mix_presence'],
   ['ensure_mix_presence', 'write_mix_presence'],
   ['refresh_recovery_presence', 'write_mix_presence'],
@@ -717,6 +719,7 @@ const mixProducerMappings = [
   ['update_mix_info', 'update_mix_info'],
   ['update_mix_config', 'update_mix_config'],
   ['set_mix_access_entry', 'set_mix_access_entry'],
+  ['set_mix_access_entry_committed', 'set_mix_access_entry', 'set_mix_access_entry'],
   ['register_mix_nick', 'register_mix_nick'],
   ['update_mix_participant_preference', 'update_mix_participant_preference'],
   ['retract_mix_message', 'retract_mix_message'],
@@ -931,9 +934,9 @@ for (const lane of ['LiveIngress', 'DurableOutbox']) {
   }
 }
 const mixAdapterSource = readProductionModule('crates/contexts/room/northstar-room-postgres/src/mix_repository.rs', { root });
-for (const [serviceMethod] of mixProducerMappings) {
+for (const [serviceMethod, , adapterEntry = serviceMethod] of mixProducerMappings) {
   const adapter = structBody(mixAdapterSource, `async fn ${serviceMethod}(`);
-  if (!adapter.includes(`crate::mix::${serviceMethod}(`)) {
+  if (!adapter.includes(`crate::mix::${adapterEntry}(`)) {
     throw new Error(`MIX producer adapter ${serviceMethod} lost its reviewed atomic repository operation`);
   }
 }

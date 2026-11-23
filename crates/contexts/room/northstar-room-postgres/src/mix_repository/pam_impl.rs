@@ -90,25 +90,39 @@ impl<E: RoomEffects> MixPamRepository for PostgresMixRepository<E> {
         response_digest: &[u8; 32],
         join: Option<RemotePamJoin<'_>>,
     ) -> Result<RemotePamCompletionOutcome> {
-        let join = join.map(|join| crate::mix::RemotePamJoin {
-            participant_id: join.participant_id,
-            subscriptions: join.subscriptions,
-            nick: join.nick,
-        });
-        Ok(map_pam_completion(
-            crate::mix::complete_remote_pam_success(
-                &self.effects,
-                &self.pool,
+        use northstar_room_core::mix::{
+            MixChannelAddress, MixParticipantNick, MixRealJid, MixStableParticipantId,
+        };
+        let participant = join
+            .as_ref()
+            .map(|join| MixStableParticipantId::parse(join.participant_id))
+            .transpose()?;
+        let nick = join
+            .as_ref()
+            .and_then(|join| join.nick)
+            .map(MixParticipantNick::parse)
+            .transpose()?;
+        let join =
+            join.zip(participant.as_ref())
+                .map(|(join, participant)| RemotePamJoinEvidence {
+                    participant,
+                    subscriptions: join.subscriptions,
+                    nick: nick.as_ref(),
+                    anonymous_profile: false,
+                    preference: None,
+                });
+        self.complete_remote_pam_success_committed(
+            RemotePamResponse {
                 authenticated_domain,
-                channel_jid,
-                recipient_bare,
+                channel: &MixChannelAddress::parse(channel_jid)?,
+                recipient: &MixRealJid::parse(recipient_bare)?,
                 request_id,
-                response_digest,
-                join,
-                &MixPayloads,
-            )
-            .await?,
-        ))
+                digest: response_digest,
+            },
+            join,
+        )
+        .await
+        .map(|committed| committed.outcome)
     }
     #[allow(clippy::too_many_arguments)]
     async fn complete_remote_pam_error(

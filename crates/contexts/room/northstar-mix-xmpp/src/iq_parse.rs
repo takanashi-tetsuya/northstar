@@ -2,6 +2,10 @@
 
 use super::*;
 
+mod remote_pam_join;
+
+pub(crate) use self::remote_pam_join::remote_pam_join_stanza;
+
 #[derive(Clone, Debug)]
 pub struct OwnedIq {
     pub id: String,

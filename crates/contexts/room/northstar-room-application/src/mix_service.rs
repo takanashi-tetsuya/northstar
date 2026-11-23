@@ -20,10 +20,16 @@ mod identity_policy;
 mod mam_read;
 mod operations;
 mod pam_delivery_repository;
+mod pam_projection_repository;
 mod pam_repository;
 mod payloads;
 mod presence_recovery_repository;
 mod wake;
+
+pub use self::pam_projection_repository::{
+    CommittedMixChange, CommittedMixRosterDelta, HostedMixOutcome, HostedMixRefusal,
+    MixPamProjectionRepository, RemotePamJoinEvidence, RemotePamJoinOptions, RemotePamResponse,
+};
 
 pub use self::contracts::{
     AccessChangeOutcome, BeginRemotePamJoin, BeginRemotePamLeave, ClaimedMixDelivery,

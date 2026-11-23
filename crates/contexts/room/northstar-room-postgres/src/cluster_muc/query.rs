@@ -368,8 +368,7 @@ pub async fn cluster_muc_occupancy_target_for_disconnect(
           WHERE r.localpart=$1 AND r.destroyed_at IS NULL
             AND o.full_jid=$2 AND o.nick=$3
             AND o.occupant_incarnation=$4 AND o.connection_uuid=$5
-            AND o.owner_node_id=$6 AND o.state='active'
-            AND o.lease_until>clock_timestamp()",
+            AND o.owner_node_id=$6 AND o.state='active'",
     )
     .bind(room_localpart)
     .bind(full_jid)

@@ -266,3 +266,24 @@ cargo test --locked --offline -p northstar-db-it \
 cargo test --locked --offline -p northstar-db-it \
   room::muc_read_snapshots::self_ping_activity_requires_the_exact_own_occupancy \
   -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_join_continuity::join_commit_returns_the_affiliation_committed_with_the_claim \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_join_continuity::join_projection_reads_subject_and_history_at_the_claim_boundary \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_join_continuity::refused_first_join_keeps_the_locked_reservation \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_join_continuity::suspend_and_resume_reject_a_lease_that_expired_after_lookup \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_join_continuity::elapsed_exact_departure_still_removes_its_row \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_join_continuity::standalone_resume_replaces_the_postgres_connection_and_fences_the_old_one \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_join_continuity::resume_without_suspended_authority_fails_closed \
+  -- --ignored --exact --nocapture

@@ -23,6 +23,10 @@ impl MucResumeHost for ServerNode {
         self.cluster.is_enabled()
     }
 
+    fn muc_pg_authority(&self) -> bool {
+        self.cluster.muc_pg_authority_enabled()
+    }
+
     fn muc_wake(&self) -> &Self::MucWake {
         &self.cluster
     }

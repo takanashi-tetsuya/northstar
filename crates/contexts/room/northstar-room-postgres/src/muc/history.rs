@@ -862,6 +862,15 @@ pub async fn muc_history_since(
     limit: i64,
     since: Option<DateTime<Utc>>,
 ) -> Result<Vec<MucMessage>> {
+    muc_history_since_on(pool, room_id, limit, since).await
+}
+
+pub(crate) async fn muc_history_since_on<'a>(
+    executor: impl sqlx::PgExecutor<'a>,
+    room_id: Uuid,
+    limit: i64,
+    since: Option<DateTime<Utc>>,
+) -> Result<Vec<MucMessage>> {
     let limit = limit.clamp(0, 100);
     if limit == 0 {
         return Ok(Vec::new());
@@ -879,7 +888,7 @@ pub async fn muc_history_since(
     .bind(room_id)
     .bind(limit)
     .bind(since)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
     let mut messages: Vec<MucMessage> = rows
         .iter()

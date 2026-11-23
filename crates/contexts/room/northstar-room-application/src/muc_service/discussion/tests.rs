@@ -292,6 +292,7 @@ async fn discussion_service_preserves_receiving_authority() {
     }
 }
 
+mod join_continuity;
 #[cfg(test)]
 mod lifecycle;
 mod live_audience;

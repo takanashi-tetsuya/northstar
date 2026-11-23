@@ -71,6 +71,7 @@ impl ClusterMucDeparture {
 pub struct ClusterSmSuspension {
     pub(super) publisher: ClusterSignedPublisher,
     pub(super) muc_outbox_notify: Arc<tokio::sync::Notify>,
+    pub(super) pg_authority: bool,
 }
 
 /// Publish only a committed MUC operation wake using the shared signed
@@ -452,6 +453,10 @@ impl northstar_room_application::muc_service::MucWakePort for ClusterSmSuspensio
 impl northstar_stream::session_cleanup::suspension::SmSuspensionCluster for ClusterSmSuspension {
     fn is_enabled(&self) -> bool {
         ClusterSmSuspension::is_enabled(self)
+    }
+
+    fn muc_pg_authority(&self) -> bool {
+        self.pg_authority
     }
 
     fn node_id(&self) -> &str {

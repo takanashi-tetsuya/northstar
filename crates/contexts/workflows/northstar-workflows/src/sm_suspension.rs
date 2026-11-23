@@ -1,5 +1,9 @@
 //! PostgreSQL authority for the SM suspension recovery worker.
-use anyhow::{Context, Result};
+use anyhow::Result;
+use northstar_room_application::muc_service::ClusterMucOccupancy;
+use northstar_room_postgres::cluster_muc::{
+    resolve_cluster_muc_occupancies_batch, suspend_cluster_muc_authority, ClusterMucOccupancyLookup,
+};
 use northstar_session_application::sm_suspension::*;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -57,27 +61,29 @@ impl SmSuspensionRepository for PostgresSmSuspensionRepository {
     async fn suspend_muc_occupant(
         &self,
         request: MucSuspensionRequest<'_>,
-    ) -> Result<northstar_room_application::muc_service::ClusterMucTransitionOutcome> {
-        let room = northstar_room_postgres::muc::muc_room(&self.pool, request.room_localpart)
-            .await?
-            .context("SM suspension references a missing MUC room")?;
-        let target = northstar_room_postgres::cluster_muc::cluster_muc_occupancy_target(
+    ) -> Result<Option<ClusterMucOccupancy>> {
+        let Some(resolved) = resolve_cluster_muc_occupancies_batch(
             &self.pool,
-            room.id,
-            request.occupant_incarnation,
-            request.connection_id,
+            &[ClusterMucOccupancyLookup {
+                room_localpart: request.room_localpart.to_owned(),
+                full_jid: request.occupant.full_jid.clone(),
+                nick: request.occupant.nick.clone(),
+                occupant_incarnation: request.occupant.cluster_epoch,
+                connection_uuid: request.occupant.connection_id,
+            }],
+            request.node_id,
         )
         .await?
-        .context("SM suspension lost its exact MUC occupancy")?;
-        northstar_room_postgres::cluster_muc::transition_cluster_muc_occupancy(
+        .into_iter()
+        .next() else {
+            return Ok(None);
+        };
+        suspend_cluster_muc_authority(
             &self.pool,
             request.operation_id,
-            &target,
-            "suspend",
+            &resolved.target,
             request.node_id,
-            None,
-            None,
-            Some(request.sm_session_id),
+            request.sm_session_id,
             request.lease,
         )
         .await

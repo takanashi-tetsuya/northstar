@@ -1,12 +1,40 @@
 //! Cluster MUC occupancy claim, renewal, transition and rename authority.
 
 use super::*;
+use northstar_room_application::muc_service::{
+    MucJoinProjection, MucJoinProjectionRequest, SmMucResume,
+};
+
+mod join_projection;
+
+pub(crate) enum ClusterJoinCommit {
+    Committed(Box<MucJoinProjection>),
+    Claim(Box<ClusterMucJoinOutcome>),
+    PasswordChanged,
+}
+
+impl From<ClusterMucJoinOutcome> for ClusterJoinCommit {
+    fn from(outcome: ClusterMucJoinOutcome) -> Self {
+        Self::Claim(Box::new(outcome))
+    }
+}
 
 /// Atomically authorizes and claims one nickname/full-JID occupancy.
 pub async fn claim_cluster_muc_occupancy(
     pool: &PgPool,
     request: ClusterMucJoin<'_>,
 ) -> Result<ClusterMucJoinOutcome> {
+    match commit_cluster_muc_join(pool, request, None).await? {
+        ClusterJoinCommit::Claim(outcome) => Ok(*outcome),
+        _ => anyhow::bail!("unexpected projected MUC join"),
+    }
+}
+
+pub(crate) async fn commit_cluster_muc_join(
+    pool: &PgPool,
+    request: ClusterMucJoin<'_>,
+    projection: Option<MucJoinProjectionRequest<'_>>,
+) -> Result<ClusterJoinCommit> {
     request.principal.validate()?;
     validate_node_id(request.owner_node_id)?;
     validate_nick(request.nick)?;
@@ -53,6 +81,10 @@ pub async fn claim_cluster_muc_occupancy(
     if let Some((room_id, _)) =
         existing_operation(&mut tx, request.operation_id, "join", &digest).await?
     {
+        anyhow::ensure!(
+            projection.is_none(),
+            "projected MUC join cannot replay an earlier snapshot"
+        );
         anyhow::ensure!(room_id == request.room_id, "MUC replay changed rooms");
         let row = sqlx::query(
             "SELECT * FROM cluster_muc_occupancies
@@ -64,31 +96,48 @@ pub async fn claim_cluster_muc_occupancy(
         .await?;
         let occupancy = occupancy_from_row(&row);
         tx.commit().await?;
-        return Ok(ClusterMucJoinOutcome::Replay(occupancy));
+        return Ok(ClusterMucJoinOutcome::Replay(occupancy).into());
     }
     let Some(room) = lock_room(&mut tx, request.room_id).await? else {
         tx.rollback().await?;
-        return Ok(ClusterMucJoinOutcome::RoomMissing);
+        return Ok(ClusterMucJoinOutcome::RoomMissing.into());
     };
     if room.destroyed {
         tx.rollback().await?;
-        return Ok(ClusterMucJoinOutcome::RoomDestroyed);
+        return Ok(ClusterMucJoinOutcome::RoomDestroyed.into());
     }
-    if room.room_epoch != request.expected_room_epoch
-        || room.config_version != request.expected_config_version
-    {
+    if room.room_epoch != request.expected_room_epoch {
         tx.rollback().await?;
-        return Ok(ClusterMucJoinOutcome::StaleRoom);
+        return Ok(ClusterMucJoinOutcome::StaleRoom.into());
+    }
+    let password_matches = match &projection {
+        Some(proof) => {
+            join_projection::password_matches(
+                &mut tx,
+                request.room_id,
+                proof.verified_password_hash,
+            )
+            .await?
+        }
+        None => true,
+    };
+    if !password_matches {
+        tx.rollback().await?;
+        return Ok(ClusterJoinCommit::PasswordChanged);
+    }
+    if room.config_version != request.expected_config_version {
+        tx.rollback().await?;
+        return Ok(ClusterMucJoinOutcome::StaleRoom.into());
     }
     expire_due_in_room(&mut tx, request.room_id).await?;
     let affiliation = affiliation_in_tx(&mut tx, request.room_id, &request.principal).await?;
     if affiliation.as_deref() == Some("outcast") {
         tx.rollback().await?;
-        return Ok(ClusterMucJoinOutcome::Outcast);
+        return Ok(ClusterMucJoinOutcome::Outcast.into());
     }
     if room.members_only && affiliation.is_none() {
         tx.rollback().await?;
-        return Ok(ClusterMucJoinOutcome::MembershipRequired);
+        return Ok(ClusterMucJoinOutcome::MembershipRequired.into());
     }
     if room.configuration_state != "active"
         && !(room.configuration_state == "locked"
@@ -97,7 +146,7 @@ pub async fn claim_cluster_muc_occupancy(
             && affiliation.as_deref() == Some("owner"))
     {
         tx.rollback().await?;
-        return Ok(ClusterMucJoinOutcome::RoomLocked);
+        return Ok(ClusterMucJoinOutcome::RoomLocked.into());
     }
     let reserved_for_other: bool = match &request.principal {
         ClusterMucPrincipal::Local { user_id, .. } => {
@@ -133,7 +182,7 @@ pub async fn claim_cluster_muc_occupancy(
     };
     if reserved_for_other {
         tx.rollback().await?;
-        return Ok(ClusterMucJoinOutcome::ReservedNickname);
+        return Ok(ClusterMucJoinOutcome::ReservedNickname.into());
     }
     let nick_exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM cluster_muc_occupancies
@@ -145,7 +194,7 @@ pub async fn claim_cluster_muc_occupancy(
     .await?;
     if nick_exists {
         tx.rollback().await?;
-        return Ok(ClusterMucJoinOutcome::NicknameConflict);
+        return Ok(ClusterMucJoinOutcome::NicknameConflict.into());
     }
     let full_exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM cluster_muc_occupancies
@@ -157,7 +206,7 @@ pub async fn claim_cluster_muc_occupancy(
     .await?;
     if full_exists {
         tx.rollback().await?;
-        return Ok(ClusterMucJoinOutcome::FullJidConflict);
+        return Ok(ClusterMucJoinOutcome::FullJidConflict.into());
     }
     let privileged = matches!(affiliation.as_deref(), Some("owner" | "admin"));
     let capacity = i64::from(room.max_occupants) + if privileged { 10 } else { 0 };
@@ -170,7 +219,7 @@ pub async fn claim_cluster_muc_occupancy(
     .await?;
     if occupants >= capacity {
         tx.rollback().await?;
-        return Ok(ClusterMucJoinOutcome::Full);
+        return Ok(ClusterMucJoinOutcome::Full.into());
     }
 
     let (occupancy_epoch, event_sequence) =
@@ -225,6 +274,13 @@ pub async fn claim_cluster_muc_occupancy(
     let occupancy = occupancy_from_row(&row);
     let target = ClusterMucOccupancyTarget::from(&occupancy);
     let audience = active_audience(&mut tx, request.room_id).await?;
+    let outcome = if let Some(projection) = projection {
+        ClusterJoinCommit::Committed(Box::new(
+            join_projection::read(&mut tx, projection, &room, occupancy, &audience).await?,
+        ))
+    } else {
+        ClusterMucJoinOutcome::Joined(occupancy).into()
+    };
     let authorization = json!({
         "source": if matches!(&request.principal, ClusterMucPrincipal::Local { .. }) {
             "local_database"
@@ -270,7 +326,7 @@ pub async fn claim_cluster_muc_occupancy(
     )
     .await?;
     tx.commit().await?;
-    Ok(ClusterMucJoinOutcome::Joined(occupancy))
+    Ok(outcome)
 }
 
 /// Extend an exact live occupancy lease.  A stale node, reused nickname or
@@ -527,6 +583,53 @@ pub async fn transition_cluster_muc_occupancy(
         None,
     )
     .await
+    .map(|(outcome, _)| outcome)
+}
+
+pub async fn suspend_cluster_muc_authority(
+    pool: &PgPool,
+    operation_id: Uuid,
+    target: &ClusterMucOccupancyTarget,
+    owner_node_id: &str,
+    sm_session_id: Uuid,
+    lease: Duration,
+) -> Result<Option<ClusterMucOccupancy>> {
+    let (_, committed) = transition_cluster_muc_occupancy_with_status(
+        pool,
+        operation_id,
+        target,
+        "suspend",
+        owner_node_id,
+        None,
+        None,
+        Some(sm_session_id),
+        lease,
+        None,
+        None,
+    )
+    .await?;
+    Ok(committed)
+}
+
+pub(crate) async fn resume_cluster_muc_authority(
+    pool: &PgPool,
+    request: SmMucResume<'_>,
+) -> Result<Option<ClusterMucOccupancy>> {
+    let (_, committed) = transition_cluster_muc_occupancy_with_status(
+        pool,
+        request.operation_id,
+        request.target,
+        "resume",
+        request.owner_node_id,
+        Some(request.connection_id),
+        request.target.connection_epoch.checked_add(1),
+        Some(request.sm_session_id),
+        request.lease,
+        None,
+        None,
+    )
+    .await?;
+    Ok(committed)
 }
 
 /// Transfer one active federated actor to a new authenticated S2S connection.
@@ -561,6 +664,7 @@ pub async fn rebind_federated_cluster_muc_occupancy(
         Some(&authenticated_domain),
     )
     .await
+    .map(|(outcome, _)| outcome)
 }
 
 pub async fn disconnect_cluster_muc_occupancy(
@@ -583,6 +687,7 @@ pub async fn disconnect_cluster_muc_occupancy(
         None,
     )
     .await
+    .map(|(outcome, _)| outcome)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -598,7 +703,7 @@ async fn transition_cluster_muc_occupancy_with_status(
     lease: Duration,
     removal_status: Option<u16>,
     rebind_authenticated_domain: Option<&str>,
-) -> Result<ClusterMucTransitionOutcome> {
+) -> Result<(ClusterMucTransitionOutcome, Option<ClusterMucOccupancy>)> {
     anyhow::ensure!(
         matches!(transition, "suspend" | "resume" | "rebind" | "leave"),
         "unsupported MUC self transition"
@@ -619,6 +724,12 @@ async fn transition_cluster_muc_occupancy_with_status(
                 && new_connection_epoch.is_some_and(|value| value > target.connection_epoch)
                 && sm_session_id.is_some(),
             "MUC resume requires a newer exact connection and SM session"
+        );
+    }
+    if transition == "suspend" {
+        anyhow::ensure!(
+            sm_session_id.is_some(),
+            "MUC suspend requires an exact SM session"
         );
     }
     if transition == "rebind" {
@@ -665,19 +776,19 @@ async fn transition_cluster_muc_occupancy_with_status(
         .is_some()
     {
         tx.commit().await?;
-        return Ok(ClusterMucTransitionOutcome::Replay);
+        return Ok((ClusterMucTransitionOutcome::Replay, None));
     }
     let Some(room) = lock_room(&mut tx, target.room_id).await? else {
         tx.rollback().await?;
-        return Ok(ClusterMucTransitionOutcome::Stale);
+        return Ok((ClusterMucTransitionOutcome::Stale, None));
     };
     if room.destroyed {
         tx.rollback().await?;
-        return Ok(ClusterMucTransitionOutcome::Destroyed);
+        return Ok((ClusterMucTransitionOutcome::Destroyed, None));
     }
     if room.room_epoch != target.room_epoch {
         tx.rollback().await?;
-        return Ok(ClusterMucTransitionOutcome::Stale);
+        return Ok((ClusterMucTransitionOutcome::Stale, None));
     }
     let current = sqlx::query(
         "SELECT * FROM cluster_muc_occupancies
@@ -702,7 +813,7 @@ async fn transition_cluster_muc_occupancy_with_status(
     .await?;
     let Some(current) = current else {
         tx.rollback().await?;
-        return Ok(ClusterMucTransitionOutcome::Stale);
+        return Ok((ClusterMucTransitionOutcome::Stale, None));
     };
     let authorization_source = if current.get::<Option<Uuid>, _>("local_user_id").is_some() {
         "local_database"
@@ -710,12 +821,25 @@ async fn transition_cluster_muc_occupancy_with_status(
         "federated_verified"
     };
     let current = occupancy_from_row(&current);
+    if transition == "suspend" && current.state == "suspended" {
+        let lease_is_live =
+            sqlx::query_scalar::<_, bool>("SELECT $1::timestamptz > clock_timestamp()")
+                .bind(current.lease_until)
+                .fetch_one(&mut *tx)
+                .await?;
+        tx.commit().await?;
+        return Ok(if lease_is_live && current.sm_session_id == sm_session_id {
+            (ClusterMucTransitionOutcome::Replay, Some(current))
+        } else {
+            (ClusterMucTransitionOutcome::Stale, None)
+        });
+    }
     if let Some(authenticated_domain) = rebind_authenticated_domain {
         if current.identity_kind != "federated"
             || current.authenticated_domain.as_deref() != Some(authenticated_domain)
         {
             tx.rollback().await?;
-            return Ok(ClusterMucTransitionOutcome::Unauthorized);
+            return Ok((ClusterMucTransitionOutcome::Unauthorized, None));
         }
         let affiliation: Option<String> = sqlx::query_scalar(
             "SELECT affiliation FROM muc_external_affiliations
@@ -728,7 +852,7 @@ async fn transition_cluster_muc_occupancy_with_status(
         if affiliation.as_deref() == Some("outcast") || (room.members_only && affiliation.is_none())
         {
             tx.rollback().await?;
-            return Ok(ClusterMucTransitionOutcome::Unauthorized);
+            return Ok((ClusterMucTransitionOutcome::Unauthorized, None));
         }
     }
     let expected_state = if transition == "resume" {
@@ -738,7 +862,7 @@ async fn transition_cluster_muc_occupancy_with_status(
     };
     if current.state != expected_state {
         tx.rollback().await?;
-        return Ok(ClusterMucTransitionOutcome::Stale);
+        return Ok((ClusterMucTransitionOutcome::Stale, None));
     }
     let (_unused, event_sequence) = allocate_room_epochs(&mut tx, target.room_id, false).await?;
     let new_state = match transition {
@@ -748,7 +872,7 @@ async fn transition_cluster_muc_occupancy_with_status(
         "leave" => "left",
         _ => unreachable!(),
     };
-    sqlx::query(
+    let updated = sqlx::query(
         "UPDATE cluster_muc_occupancies SET
              state=$10,
              owner_node_id=CASE WHEN $15 THEN $9 ELSE owner_node_id END,
@@ -762,7 +886,10 @@ async fn transition_cluster_muc_occupancy_with_status(
           WHERE room_id=$1 AND room_epoch=$2 AND occupant_incarnation=$3
             AND occupancy_epoch=$4 AND full_jid=$5 AND nick=$6
             AND connection_uuid=$7 AND connection_epoch=$8
-            AND (owner_node_id=$9 OR $10='resume')",
+            AND (owner_node_id=$9 OR $15) AND state=$16
+            AND ($10='left' OR lease_until>clock_timestamp())
+            AND (NOT ($15 OR $10='suspended') OR sm_session_id=$13)
+          RETURNING *",
     )
     .bind(target.room_id)
     .bind(target.room_epoch)
@@ -779,8 +906,14 @@ async fn transition_cluster_muc_occupancy_with_status(
     .bind(sm_session_id)
     .bind(lease_seconds as f64)
     .bind(transition == "resume")
-    .execute(&mut *tx)
+    .bind(expected_state)
+    .fetch_optional(&mut *tx)
     .await?;
+    let Some(updated) = updated else {
+        tx.rollback().await?;
+        return Ok((ClusterMucTransitionOutcome::Stale, None));
+    };
+    let committed = occupancy_from_row(&updated);
     if matches!(transition, "resume" | "rebind") {
         sqlx::query("SELECT northstar_transfer_cluster_muc_outbox($1,$2,$3,$4,$5,$6,$7,$8)")
             .bind(target.room_id)
@@ -824,7 +957,7 @@ async fn transition_cluster_muc_occupancy_with_status(
             digest: &digest,
             actor_bare_jid: Some(&actor_bare_jid),
             actor_full_jid: Some(&target.full_jid),
-            actor_affiliation: Some(&current.affiliation),
+            actor_affiliation: Some(&committed.affiliation),
             authorization_source,
             authorization_snapshot: &authorization,
             target: Some(target),
@@ -838,7 +971,7 @@ async fn transition_cluster_muc_occupancy_with_status(
     )
     .await?;
     tx.commit().await?;
-    Ok(ClusterMucTransitionOutcome::Applied)
+    Ok((ClusterMucTransitionOutcome::Applied, Some(committed)))
 }
 
 /// Rename only the exact current incarnation. A delayed mutation that names a

@@ -7,7 +7,6 @@ pub(super) struct PreparedJoin {
     pub(super) room: MucRoom,
     pub(super) affiliation: String,
     pub(super) role: String,
-    pub(super) effective_capacity: usize,
     pub(super) local_join_guard: Option<OwnedMutexGuard<()>>,
 }
 
@@ -227,6 +226,16 @@ pub(super) async fn recheck_join_admission<S: MucSession>(
             "item-not-found",
         ))));
     };
+    if refreshed_room.room_epoch == room.room_epoch
+        && refreshed_room.password_hash != room.password_hash
+    {
+        return Ok(JoinStep::Done(MucAction::Send(muc_stanza_error(
+            root,
+            full_jid,
+            "auth",
+            "not-authorized",
+        ))));
+    }
     match refreshed_room.join_snapshot_consistency(room) {
         Ok(()) => {}
         Err(MucJoinSnapshotError::RoomReplaced) => {
@@ -333,7 +342,6 @@ pub(super) async fn recheck_join_admission<S: MucSession>(
         room,
         affiliation,
         role,
-        effective_capacity,
         local_join_guard,
     }))
 }

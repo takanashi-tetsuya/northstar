@@ -1,6 +1,7 @@
 //! Federated MUC presence handling for remote room actors.
 
 use super::*;
+use northstar_room_application::muc_service::{MucJoinCommitOutcome, MucJoinProjectionRequest};
 
 /// Handle a presence addressed to a local conference room by a remote entity.
 /// `authenticated_domain` and `connection_id` MUST come from the authenticated
@@ -173,6 +174,14 @@ async fn federated_muc_presence_owned(
                 incoming_connection_id=%connection_id, exact_connection,
                 "federated MUC presence rejected an existing occupant endpoint");
             return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
+        }
+        if request.muc_join && occupant.nick == nick && request.history_request.is_err() {
+            return Ok(federated_error(
+                &request.stanza,
+                from,
+                "modify",
+                "bad-request",
+            ));
         }
         if !exact_connection {
             if !is_idempotent_remote_join(&occupant, authenticated_domain, &actor_full_jid, nick) {
@@ -851,7 +860,7 @@ async fn federated_muc_presence_owned(
     } else {
         Some(state.muc_service().lock_local_room_mutation(room.id).await)
     };
-    let (room, affiliation) = if local_join_guard.is_some() {
+    let (mut room, affiliation) = if local_join_guard.is_some() {
         let Some(refreshed_room) = state
             .muc_service()
             .federated_room_snapshot(localpart(&room_jid))
@@ -864,6 +873,16 @@ async fn federated_muc_presence_owned(
                 "item-not-found",
             ));
         };
+        if refreshed_room.room_epoch == room.room_epoch
+            && refreshed_room.password_hash != room.password_hash
+        {
+            return Ok(federated_error(
+                &request.stanza,
+                from,
+                "auth",
+                "not-authorized",
+            ));
+        }
         match refreshed_room.join_snapshot_consistency(&room) {
             Ok(()) => {}
             Err(MucJoinSnapshotError::RoomReplaced) => {
@@ -965,7 +984,7 @@ async fn federated_muc_presence_owned(
         "participant"
     }
     .to_owned();
-    let occupant = MucOccupant {
+    let mut occupant = MucOccupant {
         full_jid: actor_full_jid.clone(),
         room_jid: room_jid.clone(),
         nick: nick.to_owned(),
@@ -982,8 +1001,7 @@ async fn federated_muc_presence_owned(
         sm_session_id: None,
         payload: request.payload.clone(),
     };
-    let serializable = SerializableMucOccupant::from(&occupant);
-    let exact_occupant_json = serde_json::to_string(&serializable)?;
+    let mut projection = None;
     let mut cluster_event_id = None;
     if state.federated_muc_pg_authority_enabled() {
         state.federated_muc_admit_mutation()?;
@@ -992,67 +1010,77 @@ async fn federated_muc_presence_owned(
             authenticated_domain: canonical_authenticated_domain(authenticated_domain),
         };
         let cluster_operation_id = uuid::Uuid::new_v4();
-        match state
+        let committed = match state
             .muc_service()
-            .claim_local_cluster_occupancy(ClusterMucJoin {
-                operation_id: cluster_operation_id,
-                room_id: room.id,
-                expected_room_epoch: room.room_epoch,
-                expected_config_version: room.config_version,
-                principal,
-                full_jid: &actor_full_jid,
-                nick,
-                owner_node_id: state.federated_muc_owner_node_id(),
-                connection_uuid: connection_id,
-                connection_epoch: 1,
-                sm_session_id: None,
-                occupant_incarnation: occupant.cluster_epoch,
-                presence_payload: &occupant.payload,
-                lease: std::time::Duration::from_secs(90),
-            })
+            .commit_muc_join(
+                ClusterMucJoin {
+                    operation_id: cluster_operation_id,
+                    room_id: room.id,
+                    expected_room_epoch: room.room_epoch,
+                    expected_config_version: room.config_version,
+                    principal,
+                    full_jid: &actor_full_jid,
+                    nick,
+                    owner_node_id: state.federated_muc_owner_node_id(),
+                    connection_uuid: connection_id,
+                    connection_epoch: 1,
+                    sm_session_id: None,
+                    occupant_incarnation: occupant.cluster_epoch,
+                    presence_payload: &occupant.payload,
+                    lease: std::time::Duration::from_secs(90),
+                },
+                MucJoinProjectionRequest {
+                    room_jid: &room_jid,
+                    verified_password_hash: room.password_hash.as_deref(),
+                    include_history: history_request.max_stanzas != 0,
+                    history_since: history_request.since,
+                },
+            )
             .await?
         {
-            ClusterMucJoinOutcome::Joined(authority) | ClusterMucJoinOutcome::Replay(authority) => {
-                debug_assert_eq!(authority.occupant_incarnation, occupant.cluster_epoch);
-            }
-            ClusterMucJoinOutcome::Outcast => {
-                return Ok(federated_error(&request.stanza, from, "auth", "forbidden"));
-            }
-            ClusterMucJoinOutcome::MembershipRequired => {
+            MucJoinCommitOutcome::Committed(committed) => committed,
+            MucJoinCommitOutcome::PasswordChanged => {
                 return Ok(federated_error(
                     &request.stanza,
                     from,
                     "auth",
-                    "registration-required",
+                    "not-authorized",
                 ));
             }
-            conflict @ (ClusterMucJoinOutcome::ReservedNickname
-            | ClusterMucJoinOutcome::NicknameConflict
-            | ClusterMucJoinOutcome::FullJidConflict) => {
-                tracing::debug!(room=%room_jid, %nick, ?conflict,
-                    "federated MUC join rejected by PostgreSQL occupancy authority");
-                return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
+            MucJoinCommitOutcome::Claim(outcome) => {
+                let (kind, condition) = match *outcome {
+                    ClusterMucJoinOutcome::Outcast => ("auth", "forbidden"),
+                    ClusterMucJoinOutcome::MembershipRequired => ("auth", "registration-required"),
+                    conflict @ (ClusterMucJoinOutcome::ReservedNickname
+                    | ClusterMucJoinOutcome::NicknameConflict
+                    | ClusterMucJoinOutcome::FullJidConflict) => {
+                        tracing::debug!(room=%room_jid, %nick, ?conflict,
+                            "federated MUC join rejected by PostgreSQL occupancy authority");
+                        ("cancel", "conflict")
+                    }
+                    ClusterMucJoinOutcome::Full => ("wait", "service-unavailable"),
+                    ClusterMucJoinOutcome::RoomMissing
+                    | ClusterMucJoinOutcome::RoomDestroyed
+                    | ClusterMucJoinOutcome::RoomLocked
+                    | ClusterMucJoinOutcome::StaleRoom => ("cancel", "item-not-found"),
+                    ClusterMucJoinOutcome::Joined(_) | ClusterMucJoinOutcome::Replay(_) => {
+                        anyhow::bail!(
+                            "successful federated MUC join lacked its committed projection"
+                        );
+                    }
+                };
+                return Ok(federated_error(&request.stanza, from, kind, condition));
             }
-            ClusterMucJoinOutcome::Full => {
-                return Ok(federated_error(
-                    &request.stanza,
-                    from,
-                    "wait",
-                    "service-unavailable",
-                ));
-            }
-            ClusterMucJoinOutcome::RoomMissing
-            | ClusterMucJoinOutcome::RoomDestroyed
-            | ClusterMucJoinOutcome::RoomLocked
-            | ClusterMucJoinOutcome::StaleRoom => {
-                return Ok(federated_error(
-                    &request.stanza,
-                    from,
-                    "cancel",
-                    "item-not-found",
-                ));
-            }
-        }
+        };
+        anyhow::ensure!(
+            committed.actor.identity_kind == "federated"
+                && committed.actor.local_user_id.is_none()
+                && committed.actor.authenticated_domain.as_deref()
+                    == Some(canonical_authenticated_domain(authenticated_domain).as_str())
+                && committed.actor.owner_node_id == state.federated_muc_owner_node_id(),
+            "committed MUC join changed the federated principal or owner"
+        );
+        crate::muc::join::projection::apply_committed_join(&mut occupant, &mut room, &committed)?;
         cluster_event_id = Some(cluster_operation_id.to_string());
         if let Err(error) = state
             .wake_committed_muc_operation(cluster_operation_id)
@@ -1062,8 +1090,13 @@ async fn federated_muc_presence_owned(
                 "federated MUC join committed; signed wake failed and PostgreSQL polling will catch up");
         }
         if state.federated_muc_redis_transport_enabled() {
+            let effective_capacity = committed.max_occupants as usize
+                + usize::from(matches!(occupant.affiliation.as_str(), "owner" | "admin")) * 10;
             let cache = state
-                .cache_committed_muc_join(&serializable, effective_capacity)
+                .cache_committed_muc_join(
+                    &SerializableMucOccupant::from(&occupant),
+                    effective_capacity,
+                )
                 .await?;
             if let Err(error) = cache.refresh {
                 tracing::warn!(?error, %room_jid,
@@ -1080,10 +1113,15 @@ async fn federated_muc_presence_owned(
                     "PostgreSQL committed federated MUC join; Redis cache update failed"),
             }
         }
+        projection = Some(committed);
     }
-    // Snapshot local occupants for the joiner's roster. The committed
-    // PostgreSQL event handles durable audience delivery.
-    let local_existing = state.muc_occupants_for(&room_jid);
+    let serializable = SerializableMucOccupant::from(&occupant);
+    let exact_occupant_json = serde_json::to_string(&serializable)?;
+    let local_existing = if projection.is_none() {
+        state.muc_occupants_for(&room_jid)
+    } else {
+        Vec::new()
+    };
     let publication = state.publish_local_muc_join_if_vacant(&occupant);
     if publication != northstar_room_core::occupancy::LocalMucJoinPublication::Published {
         if !state.federated_muc_pg_authority_enabled() {
@@ -1134,7 +1172,7 @@ async fn federated_muc_presence_owned(
         }
     }
 
-    let global = if state.federated_muc_redis_transport_enabled() {
+    let global = if projection.is_none() && state.federated_muc_redis_transport_enabled() {
         state
             .federated_muc_global_occupants(&room_jid)
             .await
@@ -1142,23 +1180,31 @@ async fn federated_muc_presence_owned(
     } else {
         std::collections::HashMap::new()
     };
+    let legacy_roster;
+    let roster = if let Some(projection) = &projection {
+        projection.roster.as_slice()
+    } else {
+        legacy_roster = global
+            .values()
+            .filter_map(|json| serde_json::from_str(json).ok())
+            .collect::<Vec<_>>();
+        &legacy_roster
+    };
     let mut roster_nicks = std::collections::HashSet::new();
-    for json in global.values() {
-        if let Ok(present) = serde_json::from_str::<SerializableMucOccupant>(json) {
-            if present.nick != nick && roster_nicks.insert(present.nick.clone()) {
-                let roster_presence = muc_presence_stanza(
-                    &present,
-                    from,
-                    false,
-                    false,
-                    false,
-                    None,
-                    room.non_anonymous || occupant.role == "moderator",
-                );
-                let _ = state
-                    .deliver_to_muc_occupant(&occupant, roster_presence)
-                    .await;
-            }
+    for present in roster {
+        if present.nick != nick && roster_nicks.insert(present.nick.clone()) {
+            let roster_presence = muc_presence_stanza(
+                present,
+                from,
+                false,
+                false,
+                false,
+                None,
+                room.non_anonymous || occupant.role == "moderator",
+            );
+            let _ = state
+                .deliver_to_muc_occupant(&occupant, roster_presence)
+                .await;
         }
     }
     for (_, present) in &local_existing {
@@ -1202,18 +1248,24 @@ async fn federated_muc_presence_owned(
         .deliver_to_muc_occupant(&occupant, self_presence)
         .await;
     let mut history = Vec::new();
-    if history_request.max_stanzas != 0 && room.logging_enabled {
-        for message in state
+    let legacy_history;
+    let history_candidates: &[_] = if let Some(projection) = &projection {
+        projection.history.as_slice()
+    } else if history_request.max_stanzas != 0 && room.logging_enabled {
+        legacy_history = state
             .muc_service()
             .federated_history_since(room.id, 100, history_request.since)
-            .await?
-        {
-            let stanza = federated_history_stanza(&room, &message.stanza, &message.sender_jid);
-            history.push(set_to(
-                &add_delay_from(&stanza, message.created_at, Some(&room_jid)),
-                &actor_full_jid,
-            ));
-        }
+            .await?;
+        &legacy_history
+    } else {
+        &[]
+    };
+    for message in history_candidates {
+        let stanza = federated_history_stanza(&room, &message.stanza, &message.sender_jid);
+        history.push(set_to(
+            &add_delay_from(&stanza, message.created_at, Some(&room_jid)),
+            &actor_full_jid,
+        ));
     }
     for delivery in super::super::muc::apply_muc_history_bounds(history, history_request) {
         let _ = state.deliver_to_muc_occupant(&occupant, delivery).await;

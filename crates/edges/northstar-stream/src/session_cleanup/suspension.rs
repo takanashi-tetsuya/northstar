@@ -8,9 +8,10 @@ use crate::local_routes::suspended_muc::{
     finalize_suspended_muc_route_transition, promote_suspended_muc_buffer,
     seal_suspended_muc_buffer,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use dashmap::DashMap;
 use northstar_room_application::muc_service::{MucWakePort, SerializableMucOccupant};
+use northstar_room_core::occupancy::MucOccupantRoute;
 use northstar_session_application::sm_suspension::{
     MucSuspensionRequest, SmSuspensionLimits, SmSuspensionRepository, SmSuspensionRequest,
 };
@@ -21,6 +22,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 /// committed MUC operation, and the Redis record of a suspended occupant.
 pub trait SmSuspensionCluster: MucWakePort + Send + Sync {
     fn is_enabled(&self) -> bool;
+    fn muc_pg_authority(&self) -> bool;
     fn node_id(&self) -> &str;
     fn register_suspended_muc_occupant(
         &self,
@@ -147,30 +149,38 @@ impl<R: SmSuspensionRepository, C: SmSuspensionCluster> SmSuspensionContext<R, C
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            for occupant in occupants {
-                let encoded = serde_json::to_string(&occupant).unwrap_or_default();
-                if self.cluster.is_enabled() {
+            for mut occupant in occupants {
+                if self.cluster.muc_pg_authority() {
                     let suspend = async {
                         let operation_id = uuid::Uuid::new_v4();
-                        let outcome = self
+                        let route = MucOccupantRoute {
+                            nick: occupant.nick.clone(),
+                            full_jid: occupant.full_jid.clone(),
+                            connection_id: occupant.connection_id,
+                            cluster_epoch: occupant.cluster_epoch,
+                        };
+                        let committed = self
                             .repository
                             .suspend_muc_occupant(MucSuspensionRequest {
                                 operation_id,
                                 room_localpart: localpart(&occupant.room_jid),
-                                occupant_incarnation: occupant.cluster_epoch,
-                                connection_id: occupant.connection_id,
+                                occupant: &route,
                                 sm_session_id: endpoint.sm_session_id,
                                 node_id: self.cluster.node_id(),
                                 lease: Duration::from_secs(90),
                             })
-                            .await?;
+                            .await?
+                            .context("PG MUC suspension rejected stale occupancy")?;
                         anyhow::ensure!(
-                            matches!(
-                                outcome,
-                                northstar_room_application::muc_service::ClusterMucTransitionOutcome::Applied
-                                    | northstar_room_application::muc_service::ClusterMucTransitionOutcome::Replay
-                            ),
-                            "PG MUC suspension rejected stale occupancy: {outcome:?}"
+                            route.is_exact()
+                                && committed.full_jid == route.full_jid
+                                && committed.nick == route.nick
+                                && committed.occupant_incarnation == route.cluster_epoch
+                                && committed.connection_uuid == route.connection_id
+                                && committed.sm_session_id == Some(endpoint.sm_session_id)
+                                && committed.owner_node_id == self.cluster.node_id()
+                                && committed.state == "suspended",
+                            "PG MUC suspension returned a different occupant"
                         );
                         northstar_room_application::muc_service::notify_committed_operation(
                             self.repository.committed_muc_wake(operation_id),
@@ -178,16 +188,27 @@ impl<R: SmSuspensionRepository, C: SmSuspensionCluster> SmSuspensionContext<R, C
                             operation_id,
                         )
                         .await;
-                        Ok::<_, anyhow::Error>(())
+                        Ok::<_, anyhow::Error>(committed)
                     }
                     .await;
-                    if let Err(error) = suspend {
-                        complete = false;
-                        tracing::warn!(?error, room=%occupant.room_jid, nick=%occupant.nick,
-                            "could not commit PG-authoritative MUC suspension");
-                        continue;
+                    match suspend {
+                        Ok(committed) => {
+                            occupant.role = committed.role;
+                            occupant.affiliation = committed.affiliation;
+                            occupant.payload = committed.presence_payload;
+                        }
+                        Err(error) => {
+                            complete = false;
+                            tracing::warn!(?error, room=%occupant.room_jid, nick=%occupant.nick,
+                                "could not commit PG-authoritative MUC suspension");
+                            continue;
+                        }
                     }
                 }
+                if !self.cluster.is_enabled() {
+                    continue;
+                }
+                let encoded = serde_json::to_string(&occupant).unwrap_or_default();
                 if let Err(error) = self
                     .cluster
                     .register_suspended_muc_occupant(
@@ -279,9 +300,7 @@ impl<R: SmSuspensionRepository, C: SmSuspensionCluster> SmSuspensionContext<R, C
 #[cfg(test)]
 mod tests {
     use super::*;
-    use northstar_room_application::muc_service::{
-        ClusterMucTransitionOutcome, ClusterMucWakeDescriptor,
-    };
+    use northstar_room_application::muc_service::{ClusterMucOccupancy, ClusterMucWakeDescriptor};
     use std::{collections::HashMap, sync::Mutex};
     use uuid::Uuid;
 
@@ -298,6 +317,10 @@ mod tests {
 
     impl SmSuspensionCluster for DisabledCluster {
         fn is_enabled(&self) -> bool {
+            false
+        }
+
+        fn muc_pg_authority(&self) -> bool {
             false
         }
 
@@ -366,7 +389,7 @@ mod tests {
         async fn suspend_muc_occupant(
             &self,
             _: MucSuspensionRequest<'_>,
-        ) -> Result<ClusterMucTransitionOutcome> {
+        ) -> Result<Option<ClusterMucOccupancy>> {
             unreachable!()
         }
         async fn committed_muc_wake(&self, _: Uuid) -> Result<Option<ClusterMucWakeDescriptor>> {
@@ -442,3 +465,6 @@ mod tests {
         assert_eq!(repository.stored.lock().unwrap().len(), 3);
     }
 }
+
+#[cfg(test)]
+mod continuity_tests;

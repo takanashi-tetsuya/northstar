@@ -8,6 +8,7 @@ use northstar_room_application::muc_service::{
     MAX_MUC_OCCUPANCY_RENEW_BATCH,
 };
 use northstar_runtime::workers::WorkerHeartbeat;
+use northstar_stream::local_routes::muc::{MucOccupant, MucOccupantEndpoint, SuspendedMucPhase};
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
@@ -75,6 +76,22 @@ fn room_in_configured_domain(room_jid: &str, muc_domain: &str) -> bool {
 
 fn remaining_lease(last_complete: Instant, now: Instant) -> Duration {
     OCCUPANCY_LEASE.saturating_sub(now.saturating_duration_since(last_complete))
+}
+
+fn resume_owns_route(occupant: &MucOccupant) -> bool {
+    let MucOccupantEndpoint::Suspended(endpoint) = &occupant.endpoint else {
+        return false;
+    };
+    endpoint.buffer.try_lock().map_or(true, |buffer| {
+        matches!(
+            buffer.phase,
+            SuspendedMucPhase::Waiting
+                | SuspendedMucPhase::Resuming
+                | SuspendedMucPhase::Reserved
+                | SuspendedMucPhase::Committing
+                | SuspendedMucPhase::CheckpointOwned
+        )
+    })
 }
 
 async fn within_pass_budget<T>(
@@ -215,7 +232,10 @@ async fn renew_once<R: ClusterMucOccupancyMaintenanceRepository>(
             Err(error) => {
                 // Failure to prove an intentional termination cannot keep a
                 // stale C2S route alive.
-                for occupant in stale {
+                for occupant in stale
+                    .into_iter()
+                    .filter(|occupant| !resume_owns_route(occupant))
+                {
                     context.locals.remove_stale_muc_actor(occupant);
                 }
                 return Err(error);
@@ -231,7 +251,7 @@ async fn renew_once<R: ClusterMucOccupancyMaintenanceRepository>(
             );
             if lookup.is_ok_and(|lookup| terminal.contains(&lookup)) {
                 context.locals.remove_committed_terminal_muc_actor(occupant);
-            } else {
+            } else if !resume_owns_route(occupant) {
                 context.locals.remove_stale_muc_actor(occupant);
                 tracing::warn!(room=%occupant.room_jid, nick=%occupant.nick,
                     incarnation=%occupant.cluster_epoch,

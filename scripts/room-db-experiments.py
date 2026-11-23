@@ -64,6 +64,13 @@ EXPECTED_TESTS = {
         'room::muc_read_snapshots::owner_form_rejects_a_requester_who_lost_ownership',
         'room::muc_read_snapshots::occupant_iq_authority_names_the_exact_target',
         'room::muc_read_snapshots::self_ping_activity_requires_the_exact_own_occupancy',
+        'room::muc_join_continuity::join_commit_returns_the_affiliation_committed_with_the_claim',
+        'room::muc_join_continuity::join_projection_reads_subject_and_history_at_the_claim_boundary',
+        'room::muc_join_continuity::refused_first_join_keeps_the_locked_reservation',
+        'room::muc_join_continuity::suspend_and_resume_reject_a_lease_that_expired_after_lookup',
+        'room::muc_join_continuity::elapsed_exact_departure_still_removes_its_row',
+        'room::muc_join_continuity::standalone_resume_replaces_the_postgres_connection_and_fences_the_old_one',
+        'room::muc_join_continuity::resume_without_suspended_authority_fails_closed',
     ),
     'mix': (
         'room::mix_pam_durability::pam_restart_and_result_claims_preserve_authority_and_token_fencing',

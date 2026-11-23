@@ -471,6 +471,7 @@ impl ClusterManager {
         ClusterSmSuspension {
             publisher: self.signed_publisher(),
             muc_outbox_notify: Arc::clone(&self.muc_outbox_notify),
+            pg_authority: self.muc_pg_authority_enabled(),
         }
     }
 

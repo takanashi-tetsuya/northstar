@@ -1,22 +1,25 @@
 //! Occupant construction and the PostgreSQL-authoritative join.
 
 use super::*;
-use northstar_room_application::muc_service::SerializableMucOccupant;
+use northstar_room_application::muc_service::{
+    MucJoinCommitOutcome, MucJoinProjection, MucJoinProjectionRequest, SerializableMucOccupant,
+};
 
 pub(super) struct CommittedJoin<H: MucHost> {
     pub(super) occupant: Occupant<H>,
     pub(super) serializable: SerializableMucOccupant,
     pub(super) cluster_event_id: Option<String>,
+    pub(super) projection: Option<Box<MucJoinProjection>>,
 }
 
 pub(super) async fn commit_join<S: MucSession>(
     session: &S,
     request: &JoinRequest<'_, '_>,
     raw: &str,
-    room: &MucRoom,
+    room: &mut MucRoom,
     affiliation: String,
     role: String,
-    effective_capacity: usize,
+    history_request: MucHistoryRequest,
 ) -> Result<JoinStep<CommittedJoin<S::Host>>> {
     let JoinRequest {
         root,
@@ -27,7 +30,7 @@ pub(super) async fn commit_join<S: MucSession>(
     } = *request;
     let payload = muc_presence_payload(root, raw);
 
-    let occupant = MucOccupant {
+    let mut occupant = MucOccupant {
         full_jid: full_jid.clone(),
         room_jid: room_jid.clone(),
         nick: nick.to_owned(),
@@ -43,8 +46,7 @@ pub(super) async fn commit_join<S: MucSession>(
         sm_session_id: session.sm_db_id(),
         payload,
     };
-    let serializable =
-        northstar_room_application::muc_service::SerializableMucOccupant::from(&occupant);
+    let mut projection = None;
     let mut cluster_event_id = None;
     if session.host().muc_pg_authority_enabled() {
         session.host().admit_muc_pg_mutation()?;
@@ -55,74 +57,75 @@ pub(super) async fn commit_join<S: MucSession>(
             bare_jid: bare_jid(full_jid).to_owned(),
         };
         let cluster_operation_id = uuid::Uuid::new_v4();
-        match session
+        let committed = match session
             .host()
             .muc_service()
-            .claim_local_cluster_occupancy(ClusterMucJoin {
-                operation_id: cluster_operation_id,
-                room_id: room.id,
-                expected_room_epoch: room.room_epoch,
-                expected_config_version: room.config_version,
-                principal,
-                full_jid,
-                nick,
-                owner_node_id: session.host().muc_cluster_node_id(),
-                connection_uuid: session.connection_id(),
-                connection_epoch: 1,
-                sm_session_id: session.sm_db_id(),
-                occupant_incarnation: occupant.cluster_epoch,
-                presence_payload: &occupant.payload,
-                lease: std::time::Duration::from_secs(90),
-            })
+            .commit_muc_join(
+                ClusterMucJoin {
+                    operation_id: cluster_operation_id,
+                    room_id: room.id,
+                    expected_room_epoch: room.room_epoch,
+                    expected_config_version: room.config_version,
+                    principal,
+                    full_jid,
+                    nick,
+                    owner_node_id: session.host().muc_cluster_node_id(),
+                    connection_uuid: session.connection_id(),
+                    connection_epoch: 1,
+                    sm_session_id: session.sm_db_id(),
+                    occupant_incarnation: occupant.cluster_epoch,
+                    presence_payload: &occupant.payload,
+                    lease: std::time::Duration::from_secs(90),
+                },
+                MucJoinProjectionRequest {
+                    room_jid,
+                    verified_password_hash: room.password_hash.as_deref(),
+                    include_history: history_request.max_stanzas != 0,
+                    history_since: history_request.since,
+                },
+            )
             .await?
         {
-            ClusterMucJoinOutcome::Joined(authority) | ClusterMucJoinOutcome::Replay(authority) => {
-                debug_assert_eq!(authority.occupant_incarnation, occupant.cluster_epoch);
-                debug_assert_eq!(authority.connection_uuid, session.connection_id());
-            }
-            ClusterMucJoinOutcome::Outcast => {
+            MucJoinCommitOutcome::Committed(committed) => committed,
+            MucJoinCommitOutcome::PasswordChanged => {
                 return Ok(JoinStep::Done(MucAction::Send(muc_stanza_error(
                     root,
                     full_jid,
                     "auth",
-                    "forbidden",
+                    "not-authorized",
                 ))));
             }
-            ClusterMucJoinOutcome::MembershipRequired => {
+            MucJoinCommitOutcome::Claim(outcome) => {
+                let (kind, condition) = match *outcome {
+                    ClusterMucJoinOutcome::Outcast => ("auth", "forbidden"),
+                    ClusterMucJoinOutcome::MembershipRequired => ("auth", "registration-required"),
+                    ClusterMucJoinOutcome::ReservedNickname
+                    | ClusterMucJoinOutcome::NicknameConflict
+                    | ClusterMucJoinOutcome::FullJidConflict => ("cancel", "conflict"),
+                    ClusterMucJoinOutcome::Full => ("wait", "service-unavailable"),
+                    ClusterMucJoinOutcome::RoomMissing
+                    | ClusterMucJoinOutcome::RoomDestroyed
+                    | ClusterMucJoinOutcome::RoomLocked
+                    | ClusterMucJoinOutcome::StaleRoom => ("cancel", "item-not-found"),
+                    ClusterMucJoinOutcome::Joined(_) | ClusterMucJoinOutcome::Replay(_) => {
+                        anyhow::bail!(
+                            "successful MUC join did not return its committed projection"
+                        );
+                    }
+                };
                 return Ok(JoinStep::Done(MucAction::Send(muc_stanza_error(
-                    root,
-                    full_jid,
-                    "auth",
-                    "registration-required",
+                    root, full_jid, kind, condition,
                 ))));
             }
-            ClusterMucJoinOutcome::ReservedNickname
-            | ClusterMucJoinOutcome::NicknameConflict
-            | ClusterMucJoinOutcome::FullJidConflict => {
-                return Ok(JoinStep::Done(MucAction::Send(muc_stanza_error(
-                    root, full_jid, "cancel", "conflict",
-                ))));
-            }
-            ClusterMucJoinOutcome::Full => {
-                return Ok(JoinStep::Done(MucAction::Send(muc_stanza_error(
-                    root,
-                    full_jid,
-                    "wait",
-                    "service-unavailable",
-                ))));
-            }
-            ClusterMucJoinOutcome::RoomMissing
-            | ClusterMucJoinOutcome::RoomDestroyed
-            | ClusterMucJoinOutcome::RoomLocked
-            | ClusterMucJoinOutcome::StaleRoom => {
-                return Ok(JoinStep::Done(MucAction::Send(muc_stanza_error(
-                    root,
-                    full_jid,
-                    "cancel",
-                    "item-not-found",
-                ))));
-            }
-        }
+        };
+        anyhow::ensure!(
+            committed.actor.identity_kind == "local"
+                && committed.actor.local_user_id == Some(user.id)
+                && committed.actor.authenticated_domain.is_none()
+                && committed.actor.owner_node_id == session.host().muc_cluster_node_id(),
+            "committed MUC join changed the local principal or owner"
+        );
+        super::projection::apply_committed_join(&mut occupant, room, &committed)?;
         cluster_event_id = Some(cluster_operation_id.to_string());
         if let Err(error) = session
             .host()
@@ -133,10 +136,15 @@ pub(super) async fn commit_join<S: MucSession>(
                     "MUC join committed; signed wake failed and PostgreSQL polling will catch up");
         }
         if session.host().muc_redis_transport_enabled() {
+            let effective_capacity = committed.max_occupants as usize
+                + usize::from(matches!(occupant.affiliation.as_str(), "owner" | "admin")) * 10;
             // The cache cannot authorize a join; PostgreSQL already did.
             let cache = session
                 .host()
-                .cache_committed_muc_join(&serializable, effective_capacity)
+                .cache_committed_muc_join(
+                    &SerializableMucOccupant::from(&occupant),
+                    effective_capacity,
+                )
                 .await?;
             if let Err(error) = cache.refresh {
                 tracing::warn!(?error, %room_jid,
@@ -153,10 +161,12 @@ pub(super) async fn commit_join<S: MucSession>(
                         "PostgreSQL committed MUC join; Redis cache update failed"),
             }
         }
+        projection = Some(committed);
     }
     Ok(JoinStep::Next(CommittedJoin {
+        serializable: SerializableMucOccupant::from(&occupant),
         occupant,
-        serializable,
         cluster_event_id,
+        projection,
     }))
 }

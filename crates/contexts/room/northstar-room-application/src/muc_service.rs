@@ -39,12 +39,14 @@ use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 
 mod cluster_operations;
+mod join_continuity_repository;
 mod live_audience_repository;
 mod room_operations;
 pub use live_audience_repository::{
     DiscussionCommit, LiveAudience, MucLiveAudienceRepository, RetractionCommit,
 };
 
+pub use self::join_continuity_repository::*;
 pub use northstar_room_core::occupancy::{LocalMucOccupantIdentity, SerializableMucOccupant};
 
 /// One ordered item in an XEP-0045 administrative IQ. Target names have
@@ -426,6 +428,7 @@ mod cluster_muc_occupancy_departure_tests;
 /// outbox projection. The port never exposes a connection or an open transaction.
 pub trait MucRepository:
     MucDiscussionRepository<Error = anyhow::Error>
+    + MucJoinContinuityRepository
     + MucLiveAudienceRepository
     + MucLifecycleRepository
     + MucReadRepository

@@ -10,9 +10,10 @@ use northstar_room_core::{
 };
 use northstar_room_postgres::{
     cluster_muc::{
-        claim_cluster_muc_occupancy, kick_cluster_muc_occupancy, transition_cluster_muc_occupancy,
-        ClusterMucJoin, ClusterMucJoinOutcome, ClusterMucOccupancy, ClusterMucOccupancyTarget,
-        ClusterMucPrincipal, ClusterMucTransitionOutcome,
+        associate_cluster_muc_sm_session, claim_cluster_muc_occupancy, kick_cluster_muc_occupancy,
+        transition_cluster_muc_occupancy, ClusterMucJoin, ClusterMucJoinOutcome,
+        ClusterMucOccupancy, ClusterMucOccupancyTarget, ClusterMucPrincipal,
+        ClusterMucTransitionOutcome,
     },
     muc::{
         get_or_create_muc_room, muc_room, update_muc_config, MucConfigUpdate,
@@ -391,6 +392,15 @@ async fn audience_at_admission(retract: bool) {
         Some(sleeping_user),
     )
     .await;
+    let sleeping_session = Uuid::new_v4();
+    assert!(associate_cluster_muc_sm_session(
+        &fixture.pool,
+        &ClusterMucOccupancyTarget::from(&sleeping),
+        "node-b",
+        sleeping_session,
+    )
+    .await
+    .unwrap());
     assert_eq!(
         transition_cluster_muc_occupancy(
             &fixture.pool,
@@ -400,7 +410,7 @@ async fn audience_at_admission(retract: bool) {
             "node-b",
             None,
             None,
-            Some(Uuid::new_v4()),
+            Some(sleeping_session),
             LEASE,
         )
         .await

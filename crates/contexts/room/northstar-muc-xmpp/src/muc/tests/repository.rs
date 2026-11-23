@@ -388,6 +388,7 @@ mod mix {
 
 pub(super) use mix::UnusedMix;
 
+mod join_continuity;
 #[cfg(test)]
 mod lifecycle;
 mod live_audience;

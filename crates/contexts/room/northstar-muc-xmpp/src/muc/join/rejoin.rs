@@ -5,7 +5,7 @@ use std::convert::Infallible;
 
 pub(super) enum JoinedPresence<H: MucHost> {
     NewJoin,
-    Refreshed(Occupant<H>),
+    Refreshed(Occupant<H>, Option<MucHistoryRequest>),
     NicknameChange {
         joined_nick: String,
         occupant: Occupant<H>,
@@ -24,6 +24,22 @@ pub(super) async fn prepare_joined_presence<S: MucSession>(
         room_jid,
         nick,
     } = *request;
+    let same_nick = session
+        .joined_rooms()
+        .get(room_jid)
+        .is_some_and(|joined| joined.nick == nick);
+    let history_request = match preflight_rejoin_history(root, same_nick, northstar_time::Utc::now)
+    {
+        Ok(history) => history,
+        Err(MalformedMucStanza) => {
+            return Ok(JoinStep::Done(MucAction::Send(muc_stanza_error(
+                root,
+                full_jid,
+                "modify",
+                "bad-request",
+            ))));
+        }
+    };
     // A moderator can remove an occupant from another protocol session.
     // That operation owns the shared occupant map but cannot mutate the
     // target session's private `joined_rooms` map.  Treat a local join
@@ -222,7 +238,10 @@ pub(super) async fn prepare_joined_presence<S: MucSession>(
                 ))));
             };
             drop(local_refresh_guard);
-            return Ok(JoinStep::Next(JoinedPresence::Refreshed(occupant)));
+            return Ok(JoinStep::Next(JoinedPresence::Refreshed(
+                occupant,
+                history_request,
+            )));
         }
 
         return Ok(JoinStep::Next(JoinedPresence::NicknameChange {
@@ -234,10 +253,23 @@ pub(super) async fn prepare_joined_presence<S: MucSession>(
     Ok(JoinStep::Next(JoinedPresence::NewJoin))
 }
 
+fn preflight_rejoin_history(
+    root: Node<'_, '_>,
+    same_nick: bool,
+    now: impl FnOnce() -> northstar_time::DateTime<northstar_time::Utc>,
+) -> std::result::Result<Option<MucHistoryRequest>, MalformedMucStanza> {
+    if same_nick && has_muc_join_extension(root) {
+        parse_muc_history_request(root, now()).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 pub(super) async fn broadcast_presence_refresh<S: MucSession>(
     session: &S,
     request: &JoinRequest<'_, '_>,
     occupant: &Occupant<S::Host>,
+    history_request: Option<MucHistoryRequest>,
 ) -> Result<JoinStep<Infallible>> {
     let JoinRequest {
         root,
@@ -279,7 +311,7 @@ pub(super) async fn broadcast_presence_refresh<S: MucSession>(
                 .await?;
         }
     }
-    let resync = has_muc_join_extension(root);
+    let resync = history_request.is_some();
     for (_, recipient) in session.host().muc_occupants_for(room_jid) {
         let self_presence = recipient.full_jid == *full_jid;
         if resync && self_presence {
@@ -299,7 +331,7 @@ pub(super) async fn broadcast_presence_refresh<S: MucSession>(
             .deliver_to_muc_occupant(&recipient, update)
             .await;
     }
-    if resync {
+    if let Some(history_request) = history_request {
         let Some(room) = session
             .host()
             .muc_service()
@@ -312,17 +344,6 @@ pub(super) async fn broadcast_presence_refresh<S: MucSession>(
                 "cancel",
                 "item-not-found",
             ))));
-        };
-        let history_request = match parse_muc_history_request(root, northstar_time::Utc::now()) {
-            Ok(request) => request,
-            Err(MalformedMucStanza) => {
-                return Ok(JoinStep::Done(MucAction::Send(muc_stanza_error(
-                    root,
-                    full_jid,
-                    "modify",
-                    "bad-request",
-                ))));
-            }
         };
         let owner_bare = bare_jid(full_jid);
         let blocked_patterns = session.host().muc_service().blocked_jids(user.id).await?;
@@ -432,3 +453,6 @@ pub(super) async fn broadcast_presence_refresh<S: MucSession>(
     }
     Ok(JoinStep::Done(MucAction::None))
 }
+
+#[cfg(test)]
+mod tests;

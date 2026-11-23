@@ -17,6 +17,7 @@ mod mix_publisher_visibility;
 mod mix_sequence_retention;
 mod mix_source_retractions;
 mod muc;
+mod muc_join_continuity;
 mod muc_lifecycle_effects;
 mod muc_live_audience;
 mod muc_logging_admission;

@@ -24,10 +24,13 @@ pub(super) async fn publish_join<S: MucSession>(
         occupant,
         serializable,
         cluster_event_id,
+        projection,
     } = committed;
-    // Snapshot local occupants for the joining client's initial roster.
-    // The committed PostgreSQL event handles durable audience delivery.
-    let local_existing = session.host().muc_occupants_for(room_jid);
+    let local_existing = if projection.is_none() {
+        session.host().muc_occupants_for(room_jid)
+    } else {
+        Vec::new()
+    };
     let publication = session.host().publish_local_muc_join_if_vacant(occupant);
     if publication != northstar_room_core::occupancy::LocalMucJoinPublication::Published {
         if !session.host().muc_pg_authority_enabled() {
@@ -75,7 +78,7 @@ pub(super) async fn publish_join<S: MucSession>(
         }
     }
 
-    let global_map = if session.host().muc_redis_transport_enabled() {
+    let global_map = if projection.is_none() && session.host().muc_redis_transport_enabled() {
         session
             .host()
             .cached_muc_cluster_occupants(room_jid)
@@ -86,34 +89,34 @@ pub(super) async fn publish_join<S: MucSession>(
     };
     let owner_bare = bare_jid(full_jid);
     let blocked_patterns = session.host().muc_service().blocked_jids(user.id).await?;
-    let mut replies = Vec::with_capacity(global_map.len() + 24);
+    let legacy_roster;
+    let roster = if let Some(projection) = projection {
+        projection.roster.as_slice()
+    } else {
+        legacy_roster = global_map
+            .values()
+            .filter_map(|json| serde_json::from_str(json).ok())
+            .collect::<Vec<_>>();
+        &legacy_roster
+    };
+    let mut replies = Vec::with_capacity(roster.len() + 24);
     let mut roster_nicks = std::collections::HashSet::new();
-    for (_, json_str) in global_map {
-        if let Ok(present) = serde_json::from_str::<
-            northstar_room_application::muc_service::SerializableMucOccupant,
-        >(&json_str)
+    for present in roster {
+        let visible_sender = format!("{room_jid}/{}", present.nick);
+        let real_sender = room.non_anonymous.then_some(present.full_jid.as_str());
+        if present.nick != nick
+            && !muc_sender_is_blocked(&blocked_patterns, owner_bare, &visible_sender, real_sender)
+            && roster_nicks.insert(present.nick.clone())
         {
-            let visible_sender = format!("{room_jid}/{}", present.nick);
-            let real_sender = room.non_anonymous.then_some(present.full_jid.as_str());
-            if present.nick != nick
-                && !muc_sender_is_blocked(
-                    &blocked_patterns,
-                    owner_bare,
-                    &visible_sender,
-                    real_sender,
-                )
-                && roster_nicks.insert(present.nick.clone())
-            {
-                replies.push(muc_presence_stanza(
-                    &present,
-                    full_jid,
-                    false,
-                    false,
-                    false,
-                    None,
-                    room.non_anonymous || occupant.role == "moderator",
-                ));
-            }
+            replies.push(muc_presence_stanza(
+                present,
+                full_jid,
+                false,
+                false,
+                false,
+                None,
+                room.non_anonymous || occupant.role == "moderator",
+            ));
         }
     }
     for (_, target) in &local_existing {
@@ -167,14 +170,18 @@ pub(super) async fn publish_join<S: MucSession>(
     // history, and only then the current subject.  Subject-only archive
     // records remain available through MAM but are not join history.
     let mut history_stanzas = Vec::new();
-    let history_candidates = if history_request.max_stanzas == 0 || !room.logging_enabled {
-        Vec::new()
+    let legacy_history;
+    let history_candidates: &[_] = if let Some(projection) = projection {
+        projection.history.as_slice()
+    } else if history_request.max_stanzas == 0 || !room.logging_enabled {
+        &[]
     } else {
-        session
+        legacy_history = session
             .host()
             .muc_service()
             .local_history_since(room.id, 100, history_request.since)
-            .await?
+            .await?;
+        &legacy_history
     };
     for message in history_candidates {
         let visible_sender = roxmltree::Document::parse(&message.stanza)

@@ -9,6 +9,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 mod conversions;
+mod join_continuity;
 mod lifecycle;
 mod live_audience;
 mod occupancy;

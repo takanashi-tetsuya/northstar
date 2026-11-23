@@ -1,7 +1,8 @@
 //! Durable operations needed to recover an exact SM suspension.
 use crate::sm::SmSessionSnapshot;
 use anyhow::Result;
-use northstar_room_core::{ClusterMucTransitionOutcome, ClusterMucWakeDescriptor};
+use northstar_room_core::occupancy::MucOccupantRoute;
+use northstar_room_core::{ClusterMucOccupancy, ClusterMucWakeDescriptor};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -23,8 +24,7 @@ pub struct SmSuspensionRequest<'a> {
 pub struct MucSuspensionRequest<'a> {
     pub operation_id: Uuid,
     pub room_localpart: &'a str,
-    pub occupant_incarnation: Uuid,
-    pub connection_id: Uuid,
+    pub occupant: &'a MucOccupantRoute,
     pub sm_session_id: Uuid,
     pub node_id: &'a str,
     pub lease: Duration,
@@ -47,7 +47,7 @@ pub trait SmSuspensionRepository: Send + Sync {
     fn suspend_muc_occupant(
         &self,
         request: MucSuspensionRequest<'_>,
-    ) -> impl std::future::Future<Output = Result<ClusterMucTransitionOutcome>> + Send;
+    ) -> impl std::future::Future<Output = Result<Option<ClusterMucOccupancy>>> + Send;
     fn committed_muc_wake(
         &self,
         operation_id: Uuid,

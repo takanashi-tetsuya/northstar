@@ -3,6 +3,7 @@
 mod admission;
 mod commit;
 mod nickname;
+pub(crate) mod projection;
 mod publish;
 mod rejoin;
 mod validate;
@@ -105,8 +106,10 @@ pub async fn muc_presence(
     };
     match joined_presence {
         JoinedPresence::NewJoin => {}
-        JoinedPresence::Refreshed(occupant) => {
-            match rejoin::broadcast_presence_refresh(session, &request, &occupant).await? {
+        JoinedPresence::Refreshed(occupant, history_request) => {
+            match rejoin::broadcast_presence_refresh(session, &request, &occupant, history_request)
+                .await?
+            {
                 JoinStep::Done(action) => return Ok(action),
                 JoinStep::Next(never) => match never {},
             }
@@ -144,10 +147,9 @@ pub async fn muc_presence(
             JoinStep::Done(action) => return Ok(action),
         };
     let PreparedJoin {
-        room,
+        mut room,
         affiliation,
         role,
-        effective_capacity,
         local_join_guard,
     } = match admission::recheck_join_admission(session, &request, &room).await? {
         JoinStep::Next(admission) => admission,
@@ -158,10 +160,10 @@ pub async fn muc_presence(
         session,
         &request,
         raw,
-        &room,
+        &mut room,
         affiliation,
         role,
-        effective_capacity,
+        history_request,
     )
     .await?
     {

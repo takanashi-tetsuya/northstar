@@ -5,8 +5,11 @@
 use crate::ports::MucHost;
 use anyhow::{Context, Result};
 use dashmap::DashMap;
-use northstar_room_application::muc_service::{MucWakePort, SerializableMucOccupant};
-use northstar_room_core::{ClusterMucOccupancyTarget, ClusterMucTransitionOutcome};
+use northstar_room_application::muc_service::{MucWakePort, SerializableMucOccupant, SmMucResume};
+use northstar_room_core::occupancy::MucOccupantRoute;
+use northstar_room_core::{
+    ClusterMucOccupancy, ClusterMucOccupancyTarget, ClusterMucTransitionOutcome,
+};
 use northstar_session_core::{JoinedMucMembership, SmMucMembership};
 use northstar_stream::local_routes::muc::{
     CommittedLocalMucResume, MucOccupant, MucOccupantEndpoint, RestoreLocalMucOccupantsRequest,
@@ -42,6 +45,7 @@ pub trait MucResumeHost:
     fn suspended_muc_sessions(&self) -> &DashMap<Uuid, Arc<SuspendedMucEndpoint>>;
     fn local_session_table(&self) -> &LocalSessionTable;
     fn muc_cluster_enabled(&self) -> bool;
+    fn muc_pg_authority(&self) -> bool;
     fn muc_wake(&self) -> &Self::MucWake;
     fn resume_cluster_muc_occupant(
         &self,
@@ -166,8 +170,7 @@ pub async fn associate_local_muc_sm_session<H: MucResumeHost>(
             occupant.sm_session_id = Some(sm_session_id);
             SerializableMucOccupant::from(&*occupant)
         };
-        let encoded = serde_json::to_string(&serializable).unwrap_or_default();
-        if host.muc_cluster_enabled() {
+        if host.muc_pg_authority() {
             let association = async {
                 let room = host
                     .muc_service()
@@ -199,18 +202,22 @@ pub async fn associate_local_muc_sm_session<H: MucResumeHost>(
             if let Err(error) = association {
                 tracing::warn!(?error, room=%serializable.room_jid, nick=%serializable.nick,
                     "failed to associate PG-authoritative MUC occupancy with SM epoch");
+                continue;
             }
         }
-        if let Err(error) = host
-            .register_suspended_cluster_muc_occupant(
-                &serializable.room_jid,
-                &serializable.nick,
-                sm_session_id,
-                &encoded,
-            )
-            .await
-        {
-            tracing::warn!(?error, room = %serializable.room_jid, nick = %serializable.nick, "failed to associate clustered MUC occupant with SM epoch");
+        if host.muc_cluster_enabled() {
+            let encoded = serde_json::to_string(&serializable).unwrap_or_default();
+            if let Err(error) = host
+                .register_suspended_cluster_muc_occupant(
+                    &serializable.room_jid,
+                    &serializable.nick,
+                    sm_session_id,
+                    &encoded,
+                )
+                .await
+            {
+                tracing::warn!(?error, room = %serializable.room_jid, nick = %serializable.nick, "failed to associate clustered MUC occupant with SM epoch");
+            }
         }
     }
 }
@@ -255,6 +262,10 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
         MucHost::local_domain(host)
     ))
     .expect("configured XMPP domain must form a valid MUC domain");
+    let mode = MucResumeMode {
+        postgres_authority: host.muc_pg_authority(),
+        redis_transport: host.muc_cluster_enabled(),
+    };
     let mut failures = Vec::new();
     let mut actors = Vec::new();
     let mut resume_gate = host
@@ -287,7 +298,7 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
         // and bypass the new-admission capacity check; a post-restart
         // recreation must compete under the same gate as a fresh join so
         // delayed resumes cannot overfill the room.
-        let _local_resume_guard = if host.muc_cluster_enabled() {
+        let _local_resume_guard = if mode.redis_transport {
             None
         } else {
             Some(host.muc_service().lock_local_join(initial_room.id).await)
@@ -384,7 +395,7 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
             }
             resume_gate = Some(Arc::clone(&endpoint));
 
-            let resumed_cluster_target = if host.muc_cluster_enabled() {
+            let committed_authority = if mode.postgres_authority {
                 let resume = async {
                     let target = host
                         .muc_service()
@@ -395,51 +406,30 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
                         )
                         .await?
                         .context("SM resume lost its exact suspended MUC occupancy")?;
-                    let next_epoch = target
-                        .connection_epoch
-                        .checked_add(1)
-                        .context("MUC connection epoch overflow")?;
-                    let operation_id = Uuid::new_v4();
-                    let outcome = host
-                        .muc_service()
-                        .transition_local_cluster_occupancy(
-                            operation_id,
-                            &target,
-                            "resume",
-                            host.muc_cluster_node_id(),
-                            Some(connection_id),
-                            Some(next_epoch),
-                            Some(sm_session_id),
-                            Duration::from_secs(90),
-                        )
-                        .await?;
                     anyhow::ensure!(
-                        matches!(
-                            outcome,
-                            ClusterMucTransitionOutcome::Applied
-                                | ClusterMucTransitionOutcome::Replay
-                        ),
-                        "PG MUC resume rejected stale occupancy: {outcome:?}"
+                        target.room_epoch == room.room_epoch
+                            && target.nick == nick
+                            && target.full_jid == full_jid,
+                        "SM resume resolved a different MUC occupancy"
                     );
-                    if let Err(error) = host
-                        .muc_service()
-                        .wake_committed_operation(host.muc_wake(), operation_id)
-                        .await
-                    {
-                        tracing::warn!(?error, %operation_id, room=%room_jid,
-                            "MUC resume wake failed; PG outbox polling will catch up");
-                    }
-                    let mut resumed = target;
-                    resumed.connection_uuid = connection_id;
-                    resumed.connection_epoch = next_epoch;
-                    Ok::<_, anyhow::Error>(resumed)
+                    commit_resume_authority(host, &target, connection_id, sm_session_id).await
                 }
                 .await;
                 match resume {
-                    Ok(target) => Some(target),
+                    Ok(authority) => Some(authority),
                     Err(error) => {
                         tracing::warn!(?error, room=%room_jid, nick=%nick,
                             "could not commit PG-authoritative MUC resume");
+                        host.muc_occupant_table().remove_if(&key, |_, current| {
+                            suspended_muc_resume_actor_matches(
+                                current,
+                                &endpoint,
+                                &full_jid,
+                                previous.connection_id,
+                                previous.cluster_epoch,
+                                sm_session_id,
+                            )
+                        });
                         failures.push(membership.clone());
                         continue;
                     }
@@ -447,6 +437,7 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
             } else {
                 None
             };
+            let resumed_cluster_target = committed_authority.as_ref().map(Into::into);
             let Some(mut occupant) = host.muc_occupant_table().get_mut(&key) else {
                 if let Some(target) = &resumed_cluster_target {
                     compensate_resumed_muc_target(host, target, sm_session_id).await;
@@ -476,34 +467,20 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
             occupant.affiliation = affiliation;
             occupant.role = role;
             occupant.room_non_anonymous = room.non_anonymous;
+            if let Some(authority) = committed_authority.as_ref() {
+                apply_resume_policy(&mut occupant, authority);
+            }
             let serializable = SerializableMucOccupant::from(&*occupant);
             drop(occupant);
-            match host
-                .resume_cluster_muc_occupant(&previous, &serializable)
-                .await
+            if mode.redis_transport
+                && !matches!(
+                    host.resume_cluster_muc_occupant(&previous, &serializable)
+                        .await,
+                    Ok(true)
+                )
             {
-                Ok(true) => {}
-                Ok(false) | Err(_) if !host.muc_cluster_enabled() => {
-                    host.muc_occupant_table().remove_if(&key, |_, current| {
-                        current.full_jid == full_jid
-                            && current.cluster_epoch == serializable.cluster_epoch
-                            && current.connection_id == connection_id
-                            && matches!(
-                                &current.endpoint,
-                                MucOccupantEndpoint::Suspended(current)
-                                    if Arc::ptr_eq(current, &endpoint)
-                            )
-                    });
-                    if let Some(target) = &resumed_cluster_target {
-                        compensate_resumed_muc_target(host, target, sm_session_id).await;
-                    }
-                    failures.push(membership.clone());
-                    continue;
-                }
-                Ok(false) | Err(_) => {
-                    tracing::warn!(room=%room_jid, nick=%nick,
-                        "PG MUC resume committed but Redis soft-state refresh failed");
-                }
+                tracing::warn!(room=%room_jid, nick=%nick,
+                    "MUC resume Redis soft-state refresh failed");
             }
             actors.push(RestoredMucActor {
                 key,
@@ -518,7 +495,7 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
             continue;
         }
 
-        if !host.muc_cluster_enabled() {
+        if !mode.postgres_authority {
             let privileged = matches!(affiliation.as_str(), "owner" | "admin");
             let effective_capacity = room.max_occupants as usize + usize::from(privileged) * 10;
             if host.muc_occupants_for(&room_jid).len() >= effective_capacity {
@@ -527,27 +504,27 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
             }
         }
 
-        let cluster_authority = if host.muc_cluster_enabled() {
-            let authority = match host
-                .muc_service()
-                .suspended_local_cluster_occupancy(
-                    room.id,
-                    room.room_epoch,
-                    sm_session_id,
-                    &full_jid,
-                    &nick,
-                )
-                .await
-            {
-                Ok(Some(authority)) => authority,
-                Ok(None) | Err(_) => {
-                    failures.push(membership.clone());
-                    continue;
-                }
-            };
-            Some(authority)
-        } else {
-            None
+        let cluster_authority = match mode
+            .suspended_authority(async {
+                host.muc_service()
+                    .suspended_local_cluster_occupancy(
+                        room.id,
+                        room.room_epoch,
+                        sm_session_id,
+                        &full_jid,
+                        &nick,
+                    )
+                    .await
+            })
+            .await
+        {
+            Ok(authority) => authority,
+            Err(error) => {
+                tracing::warn!(?error, room=%room_jid, nick=%nick,
+                    "could not prove suspended PG MUC authority for restart resume");
+                failures.push(membership.clone());
+                continue;
+            }
         };
 
         let proposed_endpoint = resume_gate.clone().unwrap_or_else(|| {
@@ -594,7 +571,6 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
                 .map(|authority| authority.presence_payload.clone())
                 .unwrap_or_default(),
         };
-        let serializable = SerializableMucOccupant::from(&occupant);
         // A concurrent join or a winning resume may have created the same
         // (room, nick) occupancy while the restore awaited PostgreSQL.
         if !insert_restored_muc_occupant(host.muc_occupant_table(), key.clone(), occupant) {
@@ -602,58 +578,10 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
             continue;
         }
 
-        let resumed_cluster_target = if let Some(authority) = cluster_authority.as_ref() {
+        let committed_authority = if let Some(authority) = cluster_authority.as_ref() {
             let target = ClusterMucOccupancyTarget::from(authority);
-            let Some(next_epoch) = target.connection_epoch.checked_add(1) else {
-                host.muc_occupant_table().remove_if(&key, |_, occupant| {
-                    suspended_occupant_is_created(occupant, &created_endpoint)
-                        && occupant.full_jid == full_jid
-                        && occupant.connection_id == connection_id
-                });
-                failures.push(membership.clone());
-                continue;
-            };
-            let operation_id = Uuid::new_v4();
-            match host
-                .muc_service()
-                .transition_local_cluster_occupancy(
-                    operation_id,
-                    &target,
-                    "resume",
-                    host.muc_cluster_node_id(),
-                    Some(connection_id),
-                    Some(next_epoch),
-                    Some(sm_session_id),
-                    Duration::from_secs(90),
-                )
-                .await
-            {
-                Ok(ClusterMucTransitionOutcome::Applied)
-                | Ok(ClusterMucTransitionOutcome::Replay) => {
-                    if let Err(error) = host
-                        .muc_service()
-                        .wake_committed_operation(host.muc_wake(), operation_id)
-                        .await
-                    {
-                        tracing::warn!(?error, %operation_id, room=%room_jid,
-                            "MUC resume wake failed; PG outbox polling will catch up");
-                    }
-                    let mut resumed = target;
-                    resumed.connection_uuid = connection_id;
-                    resumed.connection_epoch = next_epoch;
-                    Some(resumed)
-                }
-                Ok(outcome) => {
-                    tracing::warn!(?outcome, room=%room_jid, nick=%nick,
-                        "PG MUC restart resume rejected the reserved local actor");
-                    host.muc_occupant_table().remove_if(&key, |_, occupant| {
-                        suspended_occupant_is_created(occupant, &created_endpoint)
-                            && occupant.full_jid == full_jid
-                            && occupant.connection_id == connection_id
-                    });
-                    failures.push(membership.clone());
-                    continue;
-                }
+            match commit_resume_authority(host, &target, connection_id, sm_session_id).await {
+                Ok(committed) => Some(committed),
                 Err(error) => {
                     tracing::warn!(?error, room=%room_jid, nick=%nick,
                         "PG MUC restart resume failed after local reservation");
@@ -661,6 +589,7 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
                         suspended_occupant_is_created(occupant, &created_endpoint)
                             && occupant.full_jid == full_jid
                             && occupant.connection_id == connection_id
+                            && occupant.cluster_epoch == authority.occupant_incarnation
                     });
                     failures.push(membership.clone());
                     continue;
@@ -669,30 +598,57 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
         } else {
             None
         };
-
-        let refresh = if let Some(authority) = cluster_authority.as_ref() {
-            let previous = SerializableMucOccupant {
-                full_jid: authority.full_jid.clone(),
-                room_jid: room_jid.clone(),
-                nick: authority.nick.clone(),
-                affiliation: authority.affiliation.clone(),
-                role: authority.role.clone(),
-                room_non_anonymous: room.non_anonymous,
-                occupant_id: northstar_room_core::stanza::muc_occupant_id(
-                    &room.occupant_id_secret,
-                    bare_jid(&authority.full_jid),
-                ),
-                cluster_epoch: authority.occupant_incarnation,
-                connection_id: authority.connection_uuid,
-                federated_domain: None,
-                sm_session_id: authority.sm_session_id,
-                payload: authority.presence_payload.clone(),
-            };
-            host.resume_cluster_muc_occupant(&previous, &serializable)
-                .await
-        } else {
-            Ok(true)
+        let resumed_cluster_target = committed_authority.as_ref().map(Into::into);
+        let serializable = host
+            .muc_occupant_table()
+            .get_mut(&key)
+            .and_then(|mut occupant| {
+                if !suspended_occupant_is_created(&occupant, &created_endpoint)
+                    || occupant.full_jid != full_jid
+                    || occupant.connection_id != connection_id
+                    || cluster_authority
+                        .as_ref()
+                        .is_some_and(|row| row.occupant_incarnation != occupant.cluster_epoch)
+                {
+                    return None;
+                }
+                if let Some(authority) = committed_authority.as_ref() {
+                    apply_resume_policy(&mut occupant, authority);
+                }
+                Some(SerializableMucOccupant::from(&*occupant))
+            });
+        let Some(serializable) = serializable else {
+            if let Some(target) = &resumed_cluster_target {
+                compensate_resumed_muc_target(host, target, sm_session_id).await;
+            }
+            failures.push(membership.clone());
+            continue;
         };
+
+        let refresh =
+            if let Some(authority) = cluster_authority.as_ref().filter(|_| mode.redis_transport) {
+                let previous = SerializableMucOccupant {
+                    full_jid: authority.full_jid.clone(),
+                    room_jid: room_jid.clone(),
+                    nick: authority.nick.clone(),
+                    affiliation: authority.affiliation.clone(),
+                    role: authority.role.clone(),
+                    room_non_anonymous: room.non_anonymous,
+                    occupant_id: northstar_room_core::stanza::muc_occupant_id(
+                        &room.occupant_id_secret,
+                        bare_jid(&authority.full_jid),
+                    ),
+                    cluster_epoch: authority.occupant_incarnation,
+                    connection_id: authority.connection_uuid,
+                    federated_domain: None,
+                    sm_session_id: authority.sm_session_id,
+                    payload: authority.presence_payload.clone(),
+                };
+                host.resume_cluster_muc_occupant(&previous, &serializable)
+                    .await
+            } else {
+                Ok(true)
+            };
         if !matches!(refresh, Ok(true)) {
             tracing::warn!(room=%room_jid, nick=%nick,
                 "PG MUC restart resume committed but Redis soft-state refresh failed");
@@ -746,12 +702,91 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
     }
 }
 
+async fn commit_resume_authority<H: MucResumeHost>(
+    host: &H,
+    target: &ClusterMucOccupancyTarget,
+    connection_id: Uuid,
+    sm_session_id: Uuid,
+) -> Result<ClusterMucOccupancy> {
+    let operation_id = Uuid::new_v4();
+    let committed = host
+        .muc_service()
+        .resume_muc_authority(SmMucResume {
+            operation_id,
+            target,
+            owner_node_id: host.muc_cluster_node_id(),
+            connection_id,
+            sm_session_id,
+            lease: Duration::from_secs(90),
+        })
+        .await?;
+    let committed = require_resume_authority(committed)?;
+    let route = MucOccupantRoute {
+        nick: committed.nick.clone(),
+        full_jid: committed.full_jid.clone(),
+        connection_id: committed.connection_uuid,
+        cluster_epoch: committed.occupant_incarnation,
+    };
+    anyhow::ensure!(
+        route.is_exact()
+            && route.nick == target.nick
+            && route.full_jid == target.full_jid
+            && route.cluster_epoch == target.occupant_incarnation
+            && route.connection_id == connection_id
+            && committed.room_id == target.room_id
+            && committed.room_epoch == target.room_epoch
+            && committed.occupancy_epoch == target.occupancy_epoch
+            && Some(committed.connection_epoch) == target.connection_epoch.checked_add(1)
+            && committed.sm_session_id == Some(sm_session_id)
+            && committed.owner_node_id == host.muc_cluster_node_id()
+            && committed.state == "active",
+        "PG MUC resume returned a different occupancy"
+    );
+    if let Err(error) = host
+        .muc_service()
+        .wake_committed_operation(host.muc_wake(), operation_id)
+        .await
+    {
+        tracing::warn!(?error, %operation_id, room_id=%target.room_id,
+            "MUC resume wake failed; PG outbox polling will catch up");
+    }
+    Ok(committed)
+}
+
+fn require_resume_authority(authority: Option<ClusterMucOccupancy>) -> Result<ClusterMucOccupancy> {
+    authority.context("PG MUC resume rejected missing or stale suspended authority")
+}
+
+struct MucResumeMode {
+    postgres_authority: bool,
+    redis_transport: bool,
+}
+
+impl MucResumeMode {
+    async fn suspended_authority(
+        &self,
+        lookup: impl Future<Output = Result<Option<ClusterMucOccupancy>>>,
+    ) -> Result<Option<ClusterMucOccupancy>> {
+        if self.postgres_authority {
+            require_resume_authority(lookup.await?).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+fn apply_resume_policy(occupant: &mut MucOccupant, authority: &ClusterMucOccupancy) {
+    occupant.role.clone_from(&authority.role);
+    occupant.affiliation.clone_from(&authority.affiliation);
+    occupant.payload.clone_from(&authority.presence_payload);
+}
+
 pub(crate) async fn compensate_resumed_muc_target<H: MucResumeHost>(
     host: &H,
     target: &ClusterMucOccupancyTarget,
     sm_session_id: Uuid,
 ) {
-    if !host.muc_cluster_enabled() {
+    if !host.muc_pg_authority() {
         return;
     }
     let operation_id = Uuid::new_v4();
@@ -942,6 +977,9 @@ pub async fn commit_local_muc_resume<H: MucResumeHost>(
         }
     }
     for (_, expected) in stale_suspended {
+        if !host.muc_cluster_enabled() {
+            break;
+        }
         if let Err(error) = host
             .unregister_cluster_muc_occupant_epoch(
                 &expected.room_jid,
@@ -1021,7 +1059,7 @@ pub async fn abort_local_muc_resume<H: MucResumeHost>(
                 )
                 .then(|| SerializableMucOccupant::from(&*current))
             });
-        if let Some(suspended) = suspended {
+        if let Some(suspended) = suspended.filter(|_| host.muc_cluster_enabled()) {
             let encoded = serde_json::to_string(&suspended).unwrap_or_default();
             if let Err(error) = host
                 .register_suspended_cluster_muc_occupant(
@@ -1038,3 +1076,6 @@ pub async fn abort_local_muc_resume<H: MucResumeHost>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

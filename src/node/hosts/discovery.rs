@@ -4,7 +4,7 @@ use crate::node::ServerNode;
 use anyhow::Result;
 use northstar_pubsub_application::PubSubService;
 use northstar_pubsub_core::{PubSubNode, PubSubNodeMetadata};
-use northstar_room_application::muc_service::{MucService, SerializableMucOccupant};
+use northstar_room_application::muc_service::{MucRoomView, MucService};
 use northstar_stream::protocol::discovery::{DiscoveryHost, PubSubDiscoItemsReply};
 use northstar_stream::protocol::ProtocolSession;
 use roxmltree::Node;
@@ -51,9 +51,10 @@ impl DiscoveryHost for ServerNode {
 
     async fn discovery_room_occupants(
         &self,
-        room_jid: &str,
-    ) -> Result<Vec<SerializableMucOccupant>> {
-        ServerNode::discovery_room_occupants(self, room_jid).await
+        localpart: &str,
+        viewer_full_jid: Option<&str>,
+    ) -> Result<MucRoomView> {
+        ServerNode::discovery_room_occupants(self, localpart, viewer_full_jid).await
     }
 
     fn mix_service_disco_info_payload(server_name: &str, mirror: &str) -> Result<String> {

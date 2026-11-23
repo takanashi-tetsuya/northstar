@@ -1021,3 +1021,5 @@ fn message_stages_preserve_authority_through_fanout() {
         "cancelled fanout releases authority without later local effects"
     );
 }
+
+mod read_snapshots;

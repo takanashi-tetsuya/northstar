@@ -3,7 +3,9 @@
 pub mod discussion;
 pub mod fanout;
 mod lifecycle_repository;
+mod read_repository;
 
+pub use self::read_repository::*;
 pub use lifecycle_repository::{
     CommittedRoomRetirement, MucLifecycleRepository, MucRoomIncarnation, RetiredMucOccupant,
 };
@@ -426,6 +428,7 @@ pub trait MucRepository:
     MucDiscussionRepository<Error = anyhow::Error>
     + MucLiveAudienceRepository
     + MucLifecycleRepository
+    + MucReadRepository
     + Clone
     + Send
     + Sync

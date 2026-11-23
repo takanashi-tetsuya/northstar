@@ -2,6 +2,7 @@
 
 use super::admin::{publish_occupant_change, OccupantChange};
 use super::*;
+use northstar_room_application::muc_service::{MucAdminSnapshot, MucManagementViewer};
 
 #[derive(Debug)]
 pub struct FederatedRoomConfig {
@@ -223,16 +224,50 @@ pub fn parse_federated_owner_action(
     }))
 }
 
+pub(super) async fn federated_muc_owner_get(
+    state: &impl MucHost,
+    stanza: &FederatedStanza,
+    room_jid: &str,
+    viewer: MucManagementViewer<'_>,
+) -> Result<Option<String>> {
+    Ok(
+        match state
+            .muc_service()
+            .owner_form(localpart(room_jid), viewer)
+            .await?
+        {
+            MucAdminSnapshot::Authorized(view) => Some(federated_iq_result(
+                stanza,
+                room_jid,
+                viewer.full_jid,
+                &federated_owner_form(&view.room),
+            )),
+            MucAdminSnapshot::Stale => {
+                federated_error(stanza, &stanza.from, "cancel", "item-not-found")
+            }
+            MucAdminSnapshot::Unauthorized => federated_error(
+                stanza,
+                &stanza.from,
+                "auth",
+                if viewer.occupancy.is_some() {
+                    "forbidden"
+                } else {
+                    "not-authorized"
+                },
+            ),
+        },
+    )
+}
+
 pub async fn federated_muc_owner<H: MucHost>(
     state: &H,
     stanza: &FederatedStanza,
     room: &MucRoom,
     requester: &Occupant<H>,
-    set: bool,
 ) -> Result<Option<String>> {
     let mut guarded_room = None;
     let mut guarded_requester = None;
-    let _local_room_guard = if set && !state.federated_muc_pg_authority_enabled() {
+    let _local_room_guard = if !state.federated_muc_pg_authority_enabled() {
         let guard = state.muc_service().lock_local_room_mutation(room.id).await;
         let Some(refreshed_room) = state
             .muc_service()
@@ -298,14 +333,6 @@ pub async fn federated_muc_owner<H: MucHost>(
         && !room.can_configure_locked_room(&requester.full_jid, northstar_time::Utc::now())
     {
         return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"));
-    }
-    if !set {
-        return Ok(Some(federated_iq_result(
-            stanza,
-            &requester.room_jid,
-            &requester.full_jid,
-            &federated_owner_form(room),
-        )));
     }
     let action = match parse_federated_owner_action(&stanza.raw, room) {
         Ok(action) => action,

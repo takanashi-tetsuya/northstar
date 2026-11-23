@@ -4,7 +4,9 @@ use crate::local_routes::muc::{
     MucOccupant, MucOccupantEndpoint, SuspendedMucEndpoint, SuspendedMucPhase, SuspendedMucRoute,
     SuspendedMucStanza,
 };
-use crate::local_routes::muc_table::validated_local_muc_occupant_in;
+use crate::local_routes::muc_table::{
+    validated_local_muc_occupant_in, with_local_muc_occupant_exact,
+};
 use crate::local_routes::session::OnlineSession;
 use crate::local_routes::session_table::session_entries_for_in;
 use dashmap::DashMap;
@@ -314,6 +316,38 @@ where
                 }
             }
         }
+        let stanza = if receipt.is_none()
+            && write_receipt.is_none()
+            && privacy_peer_kind
+                .as_ref()
+                .is_some_and(|(_, kind)| *kind == northstar_xep_0016::PrivacyStanzaKind::Iq)
+        {
+            let mut pending = Some(stanza);
+            let exact = with_local_muc_occupant_exact(
+                &self.muc_occupants,
+                occupant.into(),
+                |current| match (&current.endpoint, session_gate.is_some()) {
+                    (MucOccupantEndpoint::Local(sender), false) => Some(try_send_muc(
+                        sender,
+                        pending.take().expect("IQ not yet queued"),
+                    )),
+                    _ => None,
+                },
+            );
+            match exact {
+                None => return Ok(false),
+                Some(Some(sent)) => return sent,
+                Some(None)
+                    if session_gate.is_none()
+                        && matches!(&occupant.endpoint, MucOccupantEndpoint::Local(_)) =>
+                {
+                    return Ok(false);
+                }
+                Some(None) => pending.expect("IQ not yet queued"),
+            }
+        } else {
+            stanza
+        };
         if write_receipt.is_some() {
             let membership = JoinedMucMembership {
                 nick: occupant.nick.clone(),
@@ -355,13 +389,7 @@ where
                         anyhow::bail!("local MUC recipient queue is full")
                     }
                 },
-                None => match sender.try_send(stanza) {
-                    Ok(()) => Ok(true),
-                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Ok(false),
-                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                        anyhow::bail!("local MUC recipient queue is full")
-                    }
-                },
+                None => try_send_muc(sender, stanza),
             },
             MucOccupantEndpoint::Suspended(suspended) => {
                 self.deliver_to_suspended_muc_endpoint(suspended, stanza, receipt, None)
@@ -533,6 +561,16 @@ where
                     notified.await;
                 }
             }
+        }
+    }
+}
+
+fn try_send_muc(sender: &crate::outbound::OutboundSender, stanza: String) -> anyhow::Result<bool> {
+    match sender.try_send(stanza) {
+        Ok(()) => Ok(true),
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => Ok(false),
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            anyhow::bail!("local MUC recipient queue is full")
         }
     }
 }

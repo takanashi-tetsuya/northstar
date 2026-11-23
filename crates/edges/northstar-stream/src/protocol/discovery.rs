@@ -8,11 +8,15 @@ use northstar_room_application::mix_service::{
     CORE_NODES, NODE_ALLOWED, NODE_AVATAR_DATA, NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG,
     NODE_JIDMAP,
 };
+use northstar_room_application::muc_service::{
+    MucReadPrincipal, MucRoomView, MucRoomViewKind, MucRoomViewer,
+};
 use northstar_xml_builder::disco::{disco_rsm_result_element, parse_disco_items_query};
 use northstar_xml_builder::stanza::{iq_error, iq_error_from, iq_result_from};
 use northstar_xml_builder::XmlElement;
 
 mod host;
+mod room_items;
 
 pub use self::host::{DiscoveryHost, PubSubDiscoItemsReply};
 
@@ -365,37 +369,54 @@ impl<H: DiscoveryHost> ProtocolSession<H> {
             if requested_node.is_some_and(|node| node != "x-roomuser-item") {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
-            let Some(room) = self
+            let bare = self
+                .full_jid
+                .as_deref()
+                .map(northstar_xmpp_types::jid_text::bare_jid);
+            let viewer = MucRoomViewer {
+                full_jid: self.full_jid.as_deref(),
+                principal: self
+                    .authenticated
+                    .as_ref()
+                    .map(|user| MucReadPrincipal::Local {
+                        user_id: user.id,
+                        bare_jid: bare.unwrap_or_default(),
+                    }),
+                federated: false,
+                occupancy: None,
+            };
+            let kind = if requested_node.is_some() {
+                MucRoomViewKind::ReservedNick
+            } else {
+                MucRoomViewKind::Info {
+                    include_mirror: mirror_enabled,
+                }
+            };
+            let MucRoomView::Found {
+                room,
+                reserved_nick,
+                mirror_linked,
+                ..
+            } = self
                 .host()
                 .muc_service()
-                .room(target.localpart().expect("MUC room localpart checked"))
+                .room_view(
+                    target.localpart().expect("MUC room localpart checked"),
+                    viewer,
+                    kind,
+                )
                 .await?
             else {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             };
-            // A newly-created room is deliberately undiscoverable until its
-            // exact creating session accepts the defaults or submits a
-            // configuration form.  Revealing it here would undermine the
-            // XEP-0045 locked-room `item-not-found` boundary used for joins.
-            if room.is_locked()
-                && self.full_jid.as_deref() != room.configuration_owner_jid.as_deref()
-            {
-                return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
-            }
             if requested_node == Some("x-roomuser-item") {
                 let mut query = disco_info_query(Some("x-roomuser-item"));
-                if let Some(user) = self.authenticated.as_ref() {
-                    if let Some(nick) = self
-                        .host()
-                        .muc_service()
-                        .local_reserved_nick(room.id, user.id)
-                        .await?
-                    {
-                        query.push_child(disco_identity("conference", "text", Some(&nick)));
-                    }
+                if let Some(nick) = reserved_nick {
+                    query.push_child(disco_identity("conference", "text", Some(&nick)));
                 }
                 return Ok(Action::Send(iq_result_from(id, from, &query.finish())));
             }
+            let room = room.room;
             let mut query = disco_info_query(None);
             query.push_child(disco_identity(
                 "conference",
@@ -470,13 +491,7 @@ impl<H: DiscoveryHost> ProtocolSession<H> {
                     northstar_xep_0313::DISCO_FEATURE_MAM_EXTENDED,
                 ));
             }
-            let linked = mirror_enabled
-                && self
-                    .host()
-                    .mix_service()
-                    .mix_muc_mirror_for_muc(room.id)
-                    .await?
-                    .is_some();
+            let linked = mirror_enabled && mirror_linked;
             query.push_validated_fragment(
                 &northstar_room_application::mix_muc::conditional_mirror_discovery_form(
                     mirror_enabled,
@@ -818,69 +833,22 @@ impl<H: DiscoveryHost> ProtocolSession<H> {
             if requested_node.is_some() {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
-            let Some(room) = self
+            let MucRoomView::Found {
+                nicks: occupants, ..
+            } = self
                 .host()
-                .muc_service()
-                .room(target.localpart().expect("MUC room localpart checked"))
+                .discovery_room_occupants(
+                    target.localpart().expect("MUC room localpart checked"),
+                    self.full_jid.as_deref(),
+                )
                 .await?
             else {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             };
-            if room.is_locked()
-                && self.full_jid.as_deref() != room.configuration_owner_jid.as_deref()
-            {
-                return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
-            }
             let room_jid = target.bare();
-            let occupants = self.host().discovery_room_occupants(&room_jid).await?;
-            let cursor = disco_request.after.as_deref().or_else(|| {
-                disco_request
-                    .before
-                    .as_ref()
-                    .and_then(|value| value.as_deref())
-            });
-            if cursor.is_some_and(|cursor| !occupants.iter().any(|item| item.nick == cursor)) {
+            if !room_items::append_room_items(&mut query, &room_jid, &occupants, &disco_request) {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
-            let total = occupants.len() as i64;
-            let mut page = occupants
-                .iter()
-                .filter(|occupant| {
-                    disco_request
-                        .after
-                        .as_deref()
-                        .is_none_or(|after| occupant.nick.as_str() > after)
-                        && disco_request
-                            .before
-                            .as_ref()
-                            .and_then(|value| value.as_deref())
-                            .is_none_or(|before| occupant.nick.as_str() < before)
-                })
-                .collect::<Vec<_>>();
-            if disco_request.before.is_some() {
-                page.reverse();
-            }
-            page.truncate(disco_request.max.clamp(0, 100) as usize);
-            if disco_request.before.is_some() {
-                page.reverse();
-            }
-            let first_index = page
-                .first()
-                .and_then(|first| occupants.iter().position(|item| item.nick == first.nick))
-                .map_or(0, |index| index as i64);
-            for occupant in &page {
-                query.push_child(disco_item(
-                    &format!("{room_jid}/{}", occupant.nick),
-                    None,
-                    None,
-                ));
-            }
-            query.push_child(disco_rsm_result_element(
-                page.first().map(|occupant| occupant.nick.as_str()),
-                page.last().map(|occupant| occupant.nick.as_str()),
-                first_index,
-                total,
-            ));
         } else if self.host().http_upload_enabled()
             && target.localpart().is_none()
             && target.domainpart() == upload_domain

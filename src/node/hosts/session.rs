@@ -643,11 +643,20 @@ impl SessionMucHost for ServerNode {
         ServerNode::seal_suspended_muc_endpoints(self, endpoints).await
     }
 
-    async fn authorized_muc_occupant(
+    async fn refresh_muc_occupant_activity(
         session: &ClientSession,
         room_jid: &str,
-    ) -> Result<Option<MucOccupant>> {
-        session.authorized_muc_occupant(room_jid).await
+        nick: &str,
+    ) -> Result<bool> {
+        northstar_muc_xmpp::muc::refresh_muc_occupant_activity(session, room_jid, nick).await
+    }
+
+    async fn occupant_iq_view(
+        session: &ClientSession,
+        room_jid: &str,
+        target_nick: &str,
+    ) -> Result<northstar_room_application::muc_service::MucOccupantIqView> {
+        northstar_muc_xmpp::muc::occupant_iq_view(session, room_jid, target_nick).await
     }
 
     async fn blocked_muc_recipient_accounts(
@@ -666,10 +675,11 @@ impl SessionMucHost for ServerNode {
             .await
     }
 
-    fn local_muc_occupant_by_nick(&self, room_jid: &str, nick: &str) -> Option<MucOccupant> {
-        self.room
-            .muc_occupants
-            .local_muc_occupant_by_nick(room_jid, nick)
+    fn local_muc_occupant_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+    ) -> Option<MucOccupant> {
+        self.room.muc_occupants.local_muc_occupant_exact(identity)
     }
 }
 

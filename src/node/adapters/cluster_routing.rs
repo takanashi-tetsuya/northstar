@@ -1,30 +1,27 @@
-//! Room occupants for discovery: the cluster cache merged with this node's occupants.
+//! Authoritative room occupants for client discovery.
 
 use crate::node::ServerNode;
 use anyhow::Result;
+use northstar_room_application::muc_service::{MucRoomView, MucRoomViewKind, MucRoomViewer};
 
 impl ServerNode {
     pub(crate) async fn discovery_room_occupants(
         &self,
-        room_jid: &str,
-    ) -> Result<Vec<crate::node::SerializableMucOccupant>> {
-        northstar_muc_xmpp::discovery::discovery_room_occupants(
-            async {
-                Ok(self
-                    .cluster
-                    .get_muc_occupants(room_jid)
-                    .await?
-                    .into_values())
-            },
-            || {
-                self.room
-                    .muc_occupants
-                    .muc_occupants_for(room_jid)
-                    .into_iter()
-                    .map(|(_, occupant)| crate::node::SerializableMucOccupant::from(&occupant))
-                    .collect()
-            },
-        )
-        .await
+        localpart: &str,
+        viewer_full_jid: Option<&str>,
+    ) -> Result<MucRoomView> {
+        self.room
+            .muc_service()
+            .room_view(
+                localpart,
+                MucRoomViewer {
+                    full_jid: viewer_full_jid,
+                    principal: None,
+                    federated: false,
+                    occupancy: None,
+                },
+                MucRoomViewKind::Items,
+            )
+            .await
     }
 }

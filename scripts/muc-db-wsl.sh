@@ -245,3 +245,24 @@ cargo test --locked --offline -p northstar-db-it \
 cargo test --locked --offline -p northstar-db-it \
   room::muc_lifecycle_effects::idle_locked_room_expiry_is_unchanged \
   -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_read_snapshots::room_reads_do_not_write \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_read_snapshots::room_items_snapshot_binds_one_room_incarnation \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_read_snapshots::registration_view_serializes_against_unregister \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_read_snapshots::federated_admin_list_uses_committed_requester_authority \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_read_snapshots::owner_form_rejects_a_requester_who_lost_ownership \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_read_snapshots::occupant_iq_authority_names_the_exact_target \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_read_snapshots::self_ping_activity_requires_the_exact_own_occupancy \
+  -- --ignored --exact --nocapture

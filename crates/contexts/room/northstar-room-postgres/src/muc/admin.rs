@@ -1,6 +1,9 @@
 //! Apply atomic affiliation batches and read authorized room administration snapshots.
 
 use super::*;
+use crate::room::read_snapshot::{
+    affiliation_entries, affiliation_list_allowed, begin_read, enabled_local_viewer, role_entries,
+};
 
 /// Apply every affiliation item from one MUC admin IQ in one transaction.
 ///
@@ -188,7 +191,7 @@ pub async fn set_muc_affiliations_batch(
     Ok(MucAffiliationBatchOutcome::Applied)
 }
 
-pub enum LocalAdminPrincipalCheck {
+enum LocalAdminPrincipalCheck {
     Authorized {
         members_only: bool,
         non_anonymous: bool,
@@ -197,7 +200,7 @@ pub enum LocalAdminPrincipalCheck {
     Stale,
 }
 
-pub async fn lock_local_admin_principal(
+async fn read_local_admin_principal(
     transaction: &mut Transaction<'_, Postgres>,
     room_id: Uuid,
     expected_room_epoch: Uuid,
@@ -205,13 +208,9 @@ pub async fn lock_local_admin_principal(
     actor_scope: &str,
     local_domain: &str,
 ) -> Result<LocalAdminPrincipalCheck> {
-    let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
-    // Namespace 29 precedes every room/affiliation row lock.  See
-    // `lock_muc_actor_authority` for the global writer lock order.
-    lock_muc_affiliation_namespace(transaction, room_id).await?;
     let room = sqlx::query(
         "SELECT room_epoch,members_only,non_anonymous,destroyed_at,configuration_state
-           FROM muc_rooms WHERE id=$1 FOR UPDATE",
+           FROM muc_rooms WHERE id=$1",
     )
     .bind(room_id)
     .fetch_optional(&mut **transaction)
@@ -227,17 +226,7 @@ pub async fn lock_local_admin_principal(
     {
         return Ok(LocalAdminPrincipalCheck::Stale);
     }
-    let actor = northstar_xmpp_types::jid::CanonicalJid::parse_bare(actor_scope)?;
-    let name_matches: bool = sqlx::query_scalar("SELECT northstar_lock_enabled_user_name($1,$2)")
-        .bind(user_id)
-        .bind(actor.localpart().unwrap_or_default())
-        .fetch_one(&mut **transaction)
-        .await?;
-    if !name_matches
-        || actor.domainpart() != local_domain
-        || actor.resourcepart().is_some()
-        || actor.to_string() != actor_scope
-    {
+    if !enabled_local_viewer(transaction, user_id, actor_scope, local_domain).await? {
         return Ok(LocalAdminPrincipalCheck::Unauthorized);
     }
     Ok(LocalAdminPrincipalCheck::Authorized {
@@ -246,14 +235,14 @@ pub async fn lock_local_admin_principal(
     })
 }
 
-pub async fn lock_local_admin_affiliation(
+async fn read_local_admin_affiliation(
     transaction: &mut Transaction<'_, Postgres>,
     room_id: Uuid,
     user_id: Uuid,
 ) -> Result<String> {
     let affiliation: Option<String> = sqlx::query_scalar(
         "SELECT affiliation FROM muc_affiliations
-          WHERE room_id=$1 AND user_id=$2 FOR UPDATE",
+          WHERE room_id=$1 AND user_id=$2",
     )
     .bind(room_id)
     .bind(user_id)
@@ -287,10 +276,10 @@ pub async fn authorized_muc_admin_role_list(
         "invalid asserted MUC requester role"
     );
     let actor_scope = canonical_history_actor(actor_scope)?;
-    let mut transaction = pool.begin().await?;
+    let mut transaction = begin_read(pool).await?;
     #[cfg(any(test, feature = "test-support"))]
     maybe_pause_muc_authorization_for_test("admin_role").await;
-    let non_anonymous = match lock_local_admin_principal(
+    let non_anonymous = match read_local_admin_principal(
         &mut transaction,
         room_id,
         expected_room_epoch,
@@ -324,7 +313,7 @@ pub async fn authorized_muc_admin_role_list(
                     AND connection_uuid=$7 AND connection_epoch=$8
                     AND identity_kind='local' AND local_user_id=$9
                     AND bare_jid=$10 AND state='active'
-                    AND lease_until>clock_timestamp() FOR UPDATE",
+                    AND lease_until>transaction_timestamp()",
             )
             .bind(target.room_id)
             .bind(target.room_epoch)
@@ -350,7 +339,7 @@ pub async fn authorized_muc_admin_role_list(
     } else {
         None
     };
-    let affiliation = lock_local_admin_affiliation(&mut transaction, room_id, user_id).await?;
+    let affiliation = read_local_admin_affiliation(&mut transaction, room_id, user_id).await?;
     let requester_role = if clustered {
         match clustered_actor {
             Some((role, occupancy_affiliation)) => {
@@ -382,25 +371,13 @@ pub async fn authorized_muc_admin_role_list(
     }
 
     let entries = if clustered {
-        sqlx::query(
-            "SELECT nick,role,bare_jid FROM cluster_muc_occupancies
-              WHERE room_id=$1 AND room_epoch=$2 AND role=$3
-                AND state IN ('active','suspended')
-                AND lease_until>clock_timestamp()
-              ORDER BY nick,occupancy_epoch FOR SHARE",
+        role_entries(
+            &mut transaction,
+            room_id,
+            expected_room_epoch,
+            requested_role,
         )
-        .bind(room_id)
-        .bind(expected_room_epoch)
-        .bind(requested_role)
-        .fetch_all(&mut *transaction)
         .await?
-        .into_iter()
-        .map(|row| MucAdminRoleEntry {
-            nick: row.get("nick"),
-            role: row.get("role"),
-            bare_jid: row.get("bare_jid"),
-        })
-        .collect()
     } else {
         Vec::new()
     };
@@ -430,10 +407,10 @@ pub async fn authorized_muc_admin_affiliation_list(
     );
     let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
     let actor_scope = canonical_history_actor(actor_scope)?;
-    let mut transaction = pool.begin().await?;
+    let mut transaction = begin_read(pool).await?;
     #[cfg(any(test, feature = "test-support"))]
     maybe_pause_muc_authorization_for_test("admin_affiliation").await;
-    let (members_only, non_anonymous) = match lock_local_admin_principal(
+    let (members_only, non_anonymous) = match read_local_admin_principal(
         &mut transaction,
         room_id,
         expected_room_epoch,
@@ -457,47 +434,24 @@ pub async fn authorized_muc_admin_affiliation_list(
         }
     };
     let requester_affiliation =
-        lock_local_admin_affiliation(&mut transaction, room_id, user_id).await?;
-    let authorized = matches!(requester_affiliation.as_str(), "owner" | "admin")
-        || (requester_affiliation == "member"
-            && members_only
-            && non_anonymous
-            && matches!(requested_affiliation, "owner" | "admin" | "member"));
+        read_local_admin_affiliation(&mut transaction, room_id, user_id).await?;
+    let authorized = affiliation_list_allowed(
+        &requester_affiliation,
+        requested_affiliation,
+        members_only,
+        non_anonymous,
+    );
     if !authorized {
         transaction.rollback().await?;
         return Ok(MucAdminSnapshot::Unauthorized);
     }
-    let mut entries = sqlx::query(
-        "SELECT users.username FROM muc_affiliations affiliation
-          JOIN users ON users.id=affiliation.user_id
-         WHERE affiliation.room_id=$1 AND affiliation.affiliation=$2
-         ORDER BY users.username FOR SHARE OF affiliation",
+    let entries = affiliation_entries(
+        &mut transaction,
+        room_id,
+        requested_affiliation,
+        &local_domain,
     )
-    .bind(room_id)
-    .bind(requested_affiliation)
-    .fetch_all(&mut *transaction)
-    .await?
-    .into_iter()
-    .map(|row| MucAdminAffiliationEntry {
-        bare_jid: format!("{}@{}", row.get::<String, _>("username"), local_domain),
-        affiliation: requested_affiliation.to_owned(),
-    })
-    .collect::<Vec<_>>();
-    entries.extend(
-        sqlx::query(
-            "SELECT jid FROM muc_external_affiliations
-              WHERE room_id=$1 AND affiliation=$2 ORDER BY jid FOR SHARE",
-        )
-        .bind(room_id)
-        .bind(requested_affiliation)
-        .fetch_all(&mut *transaction)
-        .await?
-        .into_iter()
-        .map(|row| MucAdminAffiliationEntry {
-            bare_jid: row.get("jid"),
-            affiliation: requested_affiliation.to_owned(),
-        }),
-    );
+    .await?;
     transaction.commit().await?;
     Ok(MucAdminSnapshot::Authorized(entries))
 }

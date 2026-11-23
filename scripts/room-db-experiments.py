@@ -57,6 +57,13 @@ EXPECTED_TESTS = {
         'room::muc_lifecycle_effects::owner_cancel_returns_the_cancelled_incarnation_only',
         'room::muc_lifecycle_effects::temporary_room_cleanup_deletes_only_the_departed_incarnation',
         'room::muc_lifecycle_effects::idle_locked_room_expiry_is_unchanged',
+        'room::muc_read_snapshots::room_reads_do_not_write',
+        'room::muc_read_snapshots::room_items_snapshot_binds_one_room_incarnation',
+        'room::muc_read_snapshots::registration_view_serializes_against_unregister',
+        'room::muc_read_snapshots::federated_admin_list_uses_committed_requester_authority',
+        'room::muc_read_snapshots::owner_form_rejects_a_requester_who_lost_ownership',
+        'room::muc_read_snapshots::occupant_iq_authority_names_the_exact_target',
+        'room::muc_read_snapshots::self_ping_activity_requires_the_exact_own_occupancy',
     ),
     'mix': (
         'room::mix_pam_durability::pam_restart_and_result_claims_preserve_authority_and_token_fencing',

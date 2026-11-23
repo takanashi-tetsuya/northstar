@@ -12,6 +12,7 @@ mod conversions;
 mod lifecycle;
 mod live_audience;
 mod occupancy;
+pub(crate) mod read_snapshot;
 
 use self::conversions::{
     actor_authority_to_db, cluster_join_into_db, config_update_into_db, map_admin_snapshot,

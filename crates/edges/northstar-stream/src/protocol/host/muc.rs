@@ -96,11 +96,20 @@ pub trait SessionMucHost: Send + Sync + 'static {
         &self,
         endpoints: &[Arc<SuspendedMucEndpoint>],
     ) -> impl std::future::Future<Output = ()> + Send;
-    /// The session's own occupant of the local MUC room `room_jid`, while its membership is authorized.
-    fn authorized_muc_occupant(
+    fn refresh_muc_occupant_activity(
         session: &ProtocolSession<Self>,
         room_jid: &str,
-    ) -> impl std::future::Future<Output = Result<Option<MucOccupant>>> + Send
+        nick: &str,
+    ) -> impl std::future::Future<Output = Result<bool>> + Send
+    where
+        Self: SessionHost;
+    fn occupant_iq_view(
+        session: &ProtocolSession<Self>,
+        room_jid: &str,
+        target_nick: &str,
+    ) -> impl std::future::Future<
+        Output = Result<northstar_room_application::muc_service::MucOccupantIqView>,
+    > + Send
     where
         Self: SessionHost;
     /// See `MucDeliveryContext::blocked_muc_recipient_accounts`.
@@ -115,6 +124,8 @@ pub trait SessionMucHost: Send + Sync + 'static {
         occupant: &MucOccupant,
         stanza: String,
     ) -> impl std::future::Future<Output = bool> + Send;
-    /// See `LocalMucOccupantTable::local_muc_occupant_by_nick`.
-    fn local_muc_occupant_by_nick(&self, room_jid: &str, nick: &str) -> Option<MucOccupant>;
+    fn local_muc_occupant_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+    ) -> Option<MucOccupant>;
 }

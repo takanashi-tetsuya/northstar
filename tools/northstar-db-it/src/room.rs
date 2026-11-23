@@ -20,6 +20,7 @@ mod muc;
 mod muc_lifecycle_effects;
 mod muc_live_audience;
 mod muc_logging_admission;
+mod muc_read_snapshots;
 mod muc_service;
 mod pam_conformance;
 mod producer_conformance;

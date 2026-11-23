@@ -1,6 +1,7 @@
 //! XEP-0045 owner IQ handlers and the room configuration form.
 
 use super::*;
+use northstar_room_application::muc_service::{MucManagementViewer, MucReadPrincipal};
 
 pub fn muc_xdata_option(value: &'static str, label: Option<&'static str>) -> XmlElement {
     XmlElement::new("option")
@@ -123,46 +124,35 @@ pub async fn muc_owner_get(
         return Ok(MucAction::Send(iq_error(id, "jid-malformed")));
     };
     let room_jid = room_jid_owned.as_str();
-    let Some(room) = session
+    let bare_jid = canonical_bare_key(full_jid)?;
+    let room = match session
         .host()
         .muc_service()
-        .local_room_snapshot(&room_localpart)
+        .owner_form(
+            &room_localpart,
+            MucManagementViewer {
+                principal: MucReadPrincipal::Local {
+                    user_id: user.id,
+                    bare_jid: &bare_jid,
+                },
+                full_jid,
+                occupancy: None,
+            },
+        )
         .await?
-    else {
-        return Ok(MucAction::Send(iq_error_from(
-            id,
-            room_jid,
-            "item-not-found",
-        )));
-    };
-    if room.configuration_is_expired(northstar_time::Utc::now()) {
-        // The lifecycle helper commits the tombstone and immutable
-        // audience outbox atomically.  Cluster workers poll that outbox;
-        // never publish the old executable Redis destroy command here.
-        let _ = session
-            .host()
-            .muc_service()
-            .delete_expired_locked_room(room.id)
-            .await?;
-        return Ok(MucAction::Send(iq_error_from(
-            id,
-            room_jid,
-            "item-not-found",
-        )));
-    }
-    if room.is_locked() && !room.can_configure_locked_room(full_jid, northstar_time::Utc::now()) {
-        return Ok(MucAction::Send(iq_error_from(id, room_jid, "forbidden")));
-    }
-    if session
-        .host()
-        .muc_service()
-        .local_affiliation(room.id, user.id)
-        .await?
-        .as_deref()
-        != Some("owner")
     {
-        return Ok(MucAction::Send(iq_error_from(id, room_jid, "forbidden")));
-    }
+        MucAdminSnapshot::Authorized(view) => view.room,
+        MucAdminSnapshot::Unauthorized => {
+            return Ok(MucAction::Send(iq_error_from(id, room_jid, "forbidden")))
+        }
+        MucAdminSnapshot::Stale => {
+            return Ok(MucAction::Send(iq_error_from(
+                id,
+                room_jid,
+                "item-not-found",
+            )))
+        }
+    };
     let whois = if room.non_anonymous {
         "anyone"
     } else {

@@ -2,111 +2,86 @@
 
 use super::*;
 
+use northstar_room_application::muc_service::{
+    MucAdminList, MucAdminListKind, MucAdminSnapshot, MucManagementViewer,
+};
+
 pub async fn federated_muc_admin_get<H: MucHost>(
     state: &H,
     stanza: &FederatedStanza,
-    room: &MucRoom,
-    requester: &Occupant<H>,
-    requested_affiliation: Option<String>,
-    requested_role: Option<String>,
+    room_jid: &str,
+    viewer: MucManagementViewer<'_>,
+    requested_affiliation: Option<&str>,
+    requested_role: Option<&str>,
 ) -> Result<Option<String>> {
-    if requested_affiliation.is_some() == requested_role.is_some() {
-        return Ok(federated_error(
-            stanza,
-            &stanza.from,
-            "modify",
-            "bad-request",
-        ));
-    }
-    if let Some(requested) = requested_role {
-        if !matches!(requested.as_str(), "moderator" | "participant" | "visitor") {
+    let kind = match (requested_affiliation, requested_role) {
+        (None, Some(role @ ("moderator" | "participant" | "visitor"))) => {
+            MucAdminListKind::Role(role)
+        }
+        (Some(affiliation), None) => MucAdminListKind::Affiliation(affiliation),
+        _ => MucAdminListKind::Invalid,
+    };
+    let list = match state
+        .muc_service()
+        .admin_list(localpart(room_jid), viewer, kind)
+        .await?
+    {
+        MucAdminSnapshot::Authorized(list) => list,
+        MucAdminSnapshot::Stale => {
+            return Ok(federated_error(
+                stanza,
+                &stanza.from,
+                "cancel",
+                "item-not-found",
+            ))
+        }
+        MucAdminSnapshot::Unauthorized => {
+            let condition = if viewer.occupancy.is_some() {
+                "forbidden"
+            } else {
+                "not-authorized"
+            };
+            return Ok(federated_error(stanza, &stanza.from, "auth", condition));
+        }
+    };
+    let mut payload = XmlElement::namespaced("query", "http://jabber.org/protocol/muc#admin");
+    match list {
+        MucAdminList::Roles(mut list) => {
+            let reveal = list.non_anonymous || list.requester_role == "moderator";
+            list.entries
+                .sort_by(|left, right| left.nick.cmp(&right.nick));
+            for entry in list.entries {
+                payload.push_child(
+                    XmlElement::new("item")
+                        .attr("nick", &entry.nick)
+                        .attr("role", &entry.role)
+                        .optional_attr("jid", reveal.then_some(entry.bare_jid.as_str())),
+                );
+            }
+        }
+        MucAdminList::Affiliations(entries) => {
+            for entry in entries {
+                payload.push_child(
+                    XmlElement::new("item")
+                        .attr("affiliation", entry.affiliation)
+                        .attr("jid", entry.bare_jid),
+                );
+            }
+        }
+        MucAdminList::Invalid => {
             return Ok(federated_error(
                 stanza,
                 &stanza.from,
                 "modify",
                 "bad-request",
-            ));
+            ))
         }
-        if requester.role != "moderator"
-            && !matches!(requester.affiliation.as_str(), "owner" | "admin")
-        {
-            return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"));
-        }
-        let mut occupant_map = state
-            .federated_muc_global_occupants(&requester.room_jid)
-            .await?
-            .into_values()
-            .filter_map(|json| serde_json::from_str::<SerializableMucOccupant>(&json).ok())
-            .map(|occupant| (occupant.nick.clone(), occupant))
-            .collect::<std::collections::HashMap<_, _>>();
-        for (_, occupant) in state.muc_occupants_for(&requester.room_jid) {
-            let occupant = SerializableMucOccupant::from(&occupant);
-            occupant_map.insert(occupant.nick.clone(), occupant);
-        }
-        let mut occupants = occupant_map
-            .into_values()
-            .filter(|occupant| occupant.role == requested)
-            .collect::<Vec<_>>();
-        occupants.sort_by(|left, right| left.nick.cmp(&right.nick));
-        let mut payload = XmlElement::namespaced("query", "http://jabber.org/protocol/muc#admin");
-        for occupant in occupants {
-            payload.push_child(
-                XmlElement::new("item")
-                    .attr("nick", &occupant.nick)
-                    .attr("role", &requested)
-                    .optional_attr(
-                        "jid",
-                        (room.non_anonymous || requester.role == "moderator")
-                            .then(|| bare_jid(&occupant.full_jid)),
-                    ),
-            );
-        }
-        let payload = payload.finish();
-        return Ok(Some(federated_iq_result(
-            stanza,
-            &requester.room_jid,
-            &requester.full_jid,
-            &payload,
-        )));
     }
-    let requested = requested_affiliation.expect("exclusive affiliation/role check");
-    if !can_retrieve_affiliations(
-        &requester.affiliation,
-        &requested,
-        room.members_only,
-        room.non_anonymous,
-    ) {
-        return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"));
-    }
-    let mut payload = XmlElement::namespaced("query", "http://jabber.org/protocol/muc#admin");
-    for username in state
-        .muc_service()
-        .local_affiliations(room.id, &requested)
-        .await?
-    {
-        payload.push_child(
-            XmlElement::new("item")
-                .attr("affiliation", &requested)
-                .attr("jid", format!("{}@{}", username, state.local_domain())),
-        );
-    }
-    for jid in state
-        .muc_service()
-        .federated_affiliations(room.id, &requested)
-        .await?
-    {
-        payload.push_child(
-            XmlElement::new("item")
-                .attr("affiliation", &requested)
-                .attr("jid", &jid),
-        );
-    }
-    let payload = payload.finish();
     Ok(Some(federated_iq_result(
         stanza,
-        &requester.room_jid,
-        &requester.full_jid,
-        &payload,
+        room_jid,
+        viewer.full_jid,
+        &payload.finish(),
     )))
 }
 

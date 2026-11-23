@@ -6,7 +6,7 @@ use northstar_pubsub_application::{
     PepNodeQueryRepository, PepSnapshotRepository, PubSubDiscoverySnapshotRepository, PubSubService,
 };
 use northstar_pubsub_core::{PubSubNode, PubSubNodeMetadata};
-use northstar_room_application::muc_service::{MucRepository, MucService, SerializableMucOccupant};
+use northstar_room_application::muc_service::{MucRepository, MucRoomView, MucService};
 use roxmltree::Node;
 use std::future::Future;
 
@@ -35,8 +35,9 @@ pub trait DiscoveryHost: SessionHost {
     fn configured_component_domains(&self) -> Vec<String>;
     fn discovery_room_occupants(
         &self,
-        room_jid: &str,
-    ) -> impl Future<Output = Result<Vec<SerializableMucOccupant>>> + Send;
+        localpart: &str,
+        viewer_full_jid: Option<&str>,
+    ) -> impl Future<Output = Result<MucRoomView>> + Send;
 
     fn mix_service_disco_info_payload(server_name: &str, mirror: &str) -> Result<String>;
     fn mix_channel_disco_info_payload(

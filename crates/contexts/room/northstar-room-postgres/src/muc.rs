@@ -225,7 +225,7 @@ pub fn install_muc_authorization_test_pause(
 }
 
 #[cfg(any(test, feature = "test-support"))]
-async fn maybe_pause_muc_authorization_for_test(operation: &'static str) {
+pub(crate) async fn maybe_pause_muc_authorization_for_test(operation: &'static str) {
     let hook = {
         let mut hook = MUC_AUTHORIZATION_TEST_PAUSE
             .get_or_init(|| std::sync::Mutex::new(None))
@@ -374,12 +374,38 @@ pub async fn get_or_create_federated_muc_room(
     Ok((muc_room_from_row(&row), inserted))
 }
 
+pub(crate) const LIVE_MUC_ROOM: &str = "SELECT *, coalesce(configuration_expires_at <= transaction_timestamp(), false) AS configuration_expired
+    FROM muc_rooms WHERE localpart = $1 AND destroyed_at IS NULL";
+
+pub(crate) async fn read_muc_room<'connection>(
+    executor: impl sqlx::PgExecutor<'connection>,
+    localpart: &str,
+) -> Result<Option<northstar_room_application::muc_service::MucRoomRead>> {
+    use northstar_room_application::muc_service::{MucOccupantIdSecretState, MucRoomRead};
+
+    let row = sqlx::query(LIVE_MUC_ROOM)
+        .bind(localpart)
+        .fetch_optional(executor)
+        .await?;
+    Ok(row.as_ref().map(|row| MucRoomRead {
+        room: muc_room_from_row(row).into(),
+        occupant_id_secret_state: if row
+            .get::<Option<Vec<u8>>, _>("occupant_id_secret")
+            .is_some()
+        {
+            MucOccupantIdSecretState::Present
+        } else {
+            MucOccupantIdSecretState::AbsentLegacy
+        },
+        configuration_expired: row.get("configuration_expired"),
+    }))
+}
+
 pub async fn muc_room(pool: &PgPool, localpart: &str) -> Result<Option<MucRoom>> {
-    let mut row =
-        sqlx::query("SELECT * FROM muc_rooms WHERE localpart = $1 AND destroyed_at IS NULL")
-            .bind(localpart)
-            .fetch_optional(pool)
-            .await?;
+    let mut row = sqlx::query(LIVE_MUC_ROOM)
+        .bind(localpart)
+        .fetch_optional(pool)
+        .await?;
     if let Some(existing) = row.as_ref() {
         if existing
             .get::<Option<Vec<u8>>, _>("occupant_id_secret")
@@ -392,12 +418,10 @@ pub async fn muc_room(pool: &PgPool, localpart: &str) -> Result<Option<MucRoom>>
                 .bind(room_secret)
                 .execute(pool)
                 .await?;
-            row = sqlx::query(
-                "SELECT * FROM muc_rooms WHERE localpart = $1 AND destroyed_at IS NULL",
-            )
-            .bind(localpart)
-            .fetch_optional(pool)
-            .await?;
+            row = sqlx::query(LIVE_MUC_ROOM)
+                .bind(localpart)
+                .fetch_optional(pool)
+                .await?;
         }
     }
     Ok(row.as_ref().map(muc_room_from_row))

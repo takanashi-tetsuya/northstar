@@ -1,6 +1,9 @@
 //! XEP-0045 room registration IQ handlers.
 
 use super::*;
+use northstar_room_application::muc_service::{
+    MucReadPrincipal, MucRoomView, MucRoomViewKind, MucRoomViewer,
+};
 
 pub async fn muc_register_get(
     session: &impl MucSession,
@@ -16,10 +19,27 @@ pub async fn muc_register_get(
     else {
         return Ok(MucAction::Send(iq_error(id, "jid-malformed")));
     };
-    let Some(room) = session
+    let bare_jid = format!("{}@{}", user.username, session.host().local_domain());
+    let MucRoomView::Found {
+        room,
+        reserved_nick,
+        ..
+    } = session
         .host()
         .muc_service()
-        .local_room_snapshot(&room_localpart)
+        .room_view(
+            &room_localpart,
+            MucRoomViewer {
+                full_jid: session.full_jid(),
+                principal: Some(MucReadPrincipal::Local {
+                    user_id: user.id,
+                    bare_jid: &bare_jid,
+                }),
+                federated: false,
+                occupancy: None,
+            },
+            MucRoomViewKind::Registration,
+        )
         .await?
     else {
         return Ok(MucAction::Send(iq_error_from(
@@ -28,15 +48,11 @@ pub async fn muc_register_get(
             "item-not-found",
         )));
     };
+    let room = room.room;
     if !room.allow_registration {
         return Ok(MucAction::Send(iq_error_from(id, &room_jid, "not-allowed")));
     }
-    let payload = if let Some(nick) = session
-        .host()
-        .muc_service()
-        .local_reserved_nick(room.id, user.id)
-        .await?
-    {
+    let payload = if let Some(nick) = reserved_nick {
         XmlElement::namespaced("query", "jabber:iq:register")
             .child(XmlElement::new("registered"))
             .child(XmlElement::new("username").text(nick))

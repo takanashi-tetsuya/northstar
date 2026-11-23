@@ -656,16 +656,7 @@ mod host_ports {
         ) -> () {
             panic!("unexpected host call: seal_suspended_muc_endpoints")
         }
-        #[allow(clippy::too_many_arguments)]
-        async fn authorized_muc_occupant(
-            _session: &ProtocolSession<Self>,
-            _room_jid: &str,
-        ) -> Result<Option<MucOccupant>>
-        where
-            Self: SessionHost,
-        {
-            panic!("unexpected host call: authorized_muc_occupant")
-        }
+        super::occupant_iq::ports!();
         #[allow(clippy::too_many_arguments)]
         async fn blocked_muc_recipient_accounts(
             &self,
@@ -677,10 +668,6 @@ mod host_ports {
         #[allow(clippy::too_many_arguments)]
         async fn deliver_to_muc_occupant(&self, _occupant: &MucOccupant, _stanza: String) -> bool {
             panic!("unexpected host call: deliver_to_muc_occupant")
-        }
-        #[allow(clippy::too_many_arguments)]
-        fn local_muc_occupant_by_nick(&self, _room_jid: &str, _nick: &str) -> Option<MucOccupant> {
-            panic!("unexpected host call: local_muc_occupant_by_nick")
         }
     }
 
@@ -1152,3 +1139,5 @@ impl crate::session_cleanup::SessionCleanup for TestCleanup {
         panic!("ordinary finalization must not clear transferred privacy")
     }
 }
+
+mod occupant_iq;

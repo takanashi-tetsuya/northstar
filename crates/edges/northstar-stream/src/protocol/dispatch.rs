@@ -603,14 +603,22 @@ impl<H: SessionHost> ProtocolSession<H> {
                         false
                     };
                     if is_ping
-                        && H::authorized_muc_occupant(self, &room_jid)
-                            .await?
-                            .is_some_and(|occupant| occupant.nick == target_nick)
+                        && H::refresh_muc_occupant_activity(self, &room_jid, target_nick).await?
                     {
                         let full_jid = self.full_jid.as_deref().unwrap_or_default();
                         return Ok(Action::Send(set_to(&iq_result_from(id, to, ""), full_jid)));
                     }
-                    let Some(target) = self.host.local_muc_occupant_by_nick(&room_jid, target_nick)
+                    let view = H::occupant_iq_view(self, &room_jid, target_nick).await?;
+                    let Some(route) = view.target else {
+                        return Ok(if kind == "get" || kind == "set" {
+                            Action::Send(iq_error(id, "item-not-found"))
+                        } else {
+                            Action::None
+                        });
+                    };
+                    let Some(target) = self
+                        .host
+                        .local_muc_occupant_exact(route.identity(&room_jid))
                     else {
                         if kind == "get" || kind == "set" {
                             return Ok(Action::Send(iq_error(id, "item-not-found")));
@@ -618,7 +626,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                             return Ok(Action::None);
                         }
                     };
-                    let Some(own) = H::authorized_muc_occupant(self, &room_jid).await? else {
+                    let Some(own) = view.sender else {
                         if kind == "get" || kind == "set" {
                             return Ok(Action::Send(iq_error(id, "not-acceptable")));
                         } else {
@@ -658,7 +666,12 @@ impl<H: SessionHost> ProtocolSession<H> {
                         &target.full_jid,
                     );
                     tracing::debug!(room=%room_jid, from=%own_nick, to=%target.full_jid, "MUC routing IQ");
-                    let _ = self.host.deliver_to_muc_occupant(&target, rewritten).await;
+                    if let Some(exact) = self
+                        .host
+                        .local_muc_occupant_exact(route.identity(&room_jid))
+                    {
+                        let _ = self.host.deliver_to_muc_occupant(&exact, rewritten).await;
+                    }
                     return Ok(Action::None);
                 }
             }

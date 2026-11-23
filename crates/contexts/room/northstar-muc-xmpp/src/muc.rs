@@ -5,6 +5,7 @@ pub mod groupchat;
 pub mod join;
 pub mod message;
 pub mod moderate;
+mod occupant_iq;
 pub mod owner;
 pub mod presence;
 pub mod register;
@@ -20,6 +21,8 @@ use self::message::{
     handle_muc_invitation, handle_muc_invitation_decline, handle_muc_private_message,
     handle_muc_voice_form,
 };
+pub(crate) use self::occupant_iq::occupant_route;
+pub use self::occupant_iq::{occupant_iq_view, refresh_muc_occupant_activity};
 pub use self::owner::muc_room_configuration_form;
 use self::presence::handle_muc_unavailable_presence;
 

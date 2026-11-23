@@ -1,6 +1,9 @@
 //! XEP-0045 admin IQ handlers.
 
 use super::*;
+use northstar_room_application::muc_service::{
+    MucAdminList, MucAdminListKind, MucManagementViewer, MucOccupancyProof, MucReadPrincipal,
+};
 
 pub async fn muc_admin_get(
     session: &impl MucSession,
@@ -21,196 +24,84 @@ pub async fn muc_admin_get(
         return Ok(MucAction::Send(iq_error(id, "jid-malformed")));
     };
     let room_jid = room_jid_owned.as_str();
-    let Some(initial_room) = session
-        .host()
-        .muc_service()
-        .local_room_snapshot(&room_localpart)
-        .await?
-    else {
-        return Ok(MucAction::Send(iq_error_from(
-            id,
-            room_jid,
-            "item-not-found",
-        )));
-    };
-    let _local_authority_guard = if session.host().muc_pg_authority_enabled() {
-        None
-    } else {
-        Some(
-            session
-                .host()
-                .muc_service()
-                .lock_local_room_mutation(initial_room.id)
-                .await,
-        )
-    };
-    let Some(room) = session
-        .host()
-        .muc_service()
-        .local_room_snapshot(&room_localpart)
-        .await?
-    else {
-        return Ok(MucAction::Send(iq_error_from(
-            id,
-            room_jid,
-            "item-not-found",
-        )));
-    };
-    if room.id != initial_room.id || room.room_epoch != initial_room.room_epoch {
-        return Ok(MucAction::Send(iq_error_from(
-            id,
-            room_jid,
-            "item-not-found",
-        )));
-    }
-    let Some(item) = query
+    let fields = query
         .children()
-        .find(|n| n.is_element() && n.tag_name().name() == "item")
-    else {
-        return Ok(MucAction::Send(iq_error_from(id, room_jid, "bad-request")));
+        .find(|node| node.is_element() && node.tag_name().name() == "item")
+        .map(|item| (item.attribute("affiliation"), item.attribute("role")));
+    let kind = match fields {
+        Some((None, Some(role @ ("moderator" | "participant" | "visitor")))) => {
+            MucAdminListKind::Role(role)
+        }
+        Some((Some(affiliation @ ("owner" | "admin" | "member" | "outcast")), None)) => {
+            MucAdminListKind::Affiliation(affiliation)
+        }
+        _ => MucAdminListKind::Invalid,
     };
-
-    let requested_affiliation = item.attribute("affiliation");
-    let requested_role = item.attribute("role");
-    if requested_affiliation.is_some() == requested_role.is_some() {
-        return Ok(MucAction::Send(iq_error_from(id, room_jid, "bad-request")));
-    }
-    if let Some(requested_role) = requested_role {
-        if !matches!(requested_role, "moderator" | "participant" | "visitor") {
-            return Ok(MucAction::Send(iq_error_from(id, room_jid, "bad-request")));
-        }
-        let actor = validated_muc_occupant(session, room_jid);
-        let asserted_local_role = actor
+    let actor = if matches!(kind, MucAdminListKind::Role(_)) {
+        validated_muc_occupant(session, room_jid)
             .as_ref()
-            .map(|occupant| occupant.role.as_str())
-            .unwrap_or("none");
-        let actor_target = if session.host().muc_pg_authority_enabled() {
-            if let Some(actor) = actor.as_ref() {
-                session
-                    .host()
-                    .muc_service()
-                    .local_cluster_occupancy_target(
-                        room.id,
-                        actor.cluster_epoch,
-                        actor.connection_id,
-                    )
-                    .await?
-                    .filter(|target| {
-                        target.room_epoch == room.room_epoch
-                            && target.full_jid == actor.full_jid
-                            && target.nick == actor.nick
-                            && target.connection_uuid == actor.connection_id
-                    })
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        let actor_scope = canonical_bare_key(full_jid)?;
-        let role_list = match session
-            .host()
-            .muc_service()
-            .authorized_admin_role_list(
-                room.id,
-                room.room_epoch,
-                user.id,
-                &actor_scope,
-                asserted_local_role,
-                actor_target.as_ref(),
-                session.host().muc_pg_authority_enabled(),
-                requested_role,
-            )
-            .await?
-        {
-            MucAdminSnapshot::Authorized(list) => list,
-            MucAdminSnapshot::Unauthorized => {
-                return Ok(MucAction::Send(iq_error_from(id, room_jid, "forbidden")));
-            }
-            MucAdminSnapshot::Stale => {
-                return Ok(MucAction::Send(iq_error_from(
-                    id,
-                    room_jid,
-                    "item-not-found",
-                )));
-            }
-        };
-        let reveal_real_jids = role_list.non_anonymous || role_list.requester_role == "moderator";
-        let mut occupants = if session.host().muc_pg_authority_enabled() {
-            role_list
-                .entries
-                .into_iter()
-                .map(|entry| (entry.nick, entry.bare_jid))
-                .collect::<Vec<_>>()
-        } else {
-            session
-                .host()
-                .muc_occupants_for(room_jid)
-                .into_iter()
-                .filter(|(_, occupant)| occupant.role == requested_role)
-                .filter_map(|(_, occupant)| {
-                    canonical_bare_key(&occupant.full_jid)
-                        .ok()
-                        .map(|bare| (occupant.nick, bare))
-                })
-                .collect::<Vec<_>>()
-        };
-        occupants.sort_by(|left, right| left.0.cmp(&right.0));
-        let mut result = XmlElement::namespaced("query", "http://jabber.org/protocol/muc#admin");
-        for (nick, bare) in occupants {
-            result.push_child(
-                XmlElement::new("item")
-                    .attr("nick", &nick)
-                    .attr("role", requested_role)
-                    .optional_attr("jid", reveal_real_jids.then_some(bare.as_str())),
-            );
-        }
-        return Ok(MucAction::Send(iq_result_from(
-            id,
-            room_jid,
-            &result.finish(),
-        )));
-    }
-    let requested_affiliation = requested_affiliation.expect("exclusive role/affiliation check");
-    if !matches!(
-        requested_affiliation,
-        "owner" | "admin" | "member" | "outcast"
-    ) {
-        return Ok(MucAction::Send(iq_error_from(id, room_jid, "bad-request")));
-    }
-
-    let actor_scope = canonical_bare_key(full_jid)?;
-    let entries = match session
-        .host()
+            .map(occupant_route)
+    } else {
+        None
+    };
+    let host = session.host();
+    let bare_jid = canonical_bare_key(full_jid)?;
+    let viewer = MucManagementViewer {
+        principal: MucReadPrincipal::Local {
+            user_id: user.id,
+            bare_jid: &bare_jid,
+        },
+        full_jid,
+        occupancy: actor.as_ref().map(|route| MucOccupancyProof {
+            route,
+            authenticated_domain: None,
+            node_id: host.muc_cluster_node_id(),
+        }),
+    };
+    let list = match host
         .muc_service()
-        .authorized_admin_affiliation_list(
-            room.id,
-            room.room_epoch,
-            user.id,
-            &actor_scope,
-            requested_affiliation,
-        )
+        .admin_list(&room_localpart, viewer, kind)
         .await?
     {
-        MucAdminSnapshot::Authorized(entries) => entries,
+        MucAdminSnapshot::Authorized(list) => list,
         MucAdminSnapshot::Unauthorized => {
-            return Ok(MucAction::Send(iq_error_from(id, room_jid, "forbidden")));
+            return Ok(MucAction::Send(iq_error_from(id, room_jid, "forbidden")))
         }
         MucAdminSnapshot::Stale => {
             return Ok(MucAction::Send(iq_error_from(
                 id,
                 room_jid,
                 "item-not-found",
-            )));
+            )))
         }
     };
     let mut result = XmlElement::namespaced("query", "http://jabber.org/protocol/muc#admin");
-    for entry in entries {
-        result.push_child(
-            XmlElement::new("item")
-                .attr("affiliation", &entry.affiliation)
-                .attr("jid", &entry.bare_jid),
-        );
+    match list {
+        MucAdminList::Roles(mut list) => {
+            let reveal = list.non_anonymous || list.requester_role == "moderator";
+            list.entries
+                .sort_by(|left, right| left.nick.cmp(&right.nick));
+            for entry in list.entries {
+                result.push_child(
+                    XmlElement::new("item")
+                        .attr("nick", &entry.nick)
+                        .attr("role", &entry.role)
+                        .optional_attr("jid", reveal.then_some(entry.bare_jid.as_str())),
+                );
+            }
+        }
+        MucAdminList::Affiliations(entries) => {
+            for entry in entries {
+                result.push_child(
+                    XmlElement::new("item")
+                        .attr("affiliation", &entry.affiliation)
+                        .attr("jid", &entry.bare_jid),
+                );
+            }
+        }
+        MucAdminList::Invalid => {
+            return Ok(MucAction::Send(iq_error_from(id, room_jid, "bad-request")))
+        }
     }
     Ok(MucAction::Send(iq_result_from(
         id,

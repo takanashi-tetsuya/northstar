@@ -7,10 +7,21 @@ use super::admin::{
 use super::mam::render_federated_mam_stream;
 use super::moderate::federated_muc_moderate;
 use super::owner::{
-    federated_muc_owner, parse_federated_registration_action, FederatedRegistrationAction,
+    federated_muc_owner, federated_muc_owner_get, parse_federated_registration_action,
+    FederatedRegistrationAction,
 };
 use super::*;
 use northstar_archive_core::{MamOccupancyProof, MamRoomAccessOutcome, MamRoomReadAuthority};
+use northstar_room_application::muc_service::{
+    MucManagementViewer, MucOccupancyProof, MucReadPrincipal, MucRoomView, MucRoomViewKind,
+    MucRoomViewer,
+};
+
+mod authorized;
+use self::authorized::{
+    committed_registration_reply, deliver_occupant_iq, federated_liveness_reply,
+    federated_read_route, FederatedReadActor,
+};
 
 /// Handle room/service IQs from an authenticated remote room actor. XML is
 /// converted to owned data before this future is created, so S2S connection
@@ -86,7 +97,13 @@ async fn federated_muc_iq_owned(
 
     if service_request {
         let payload = match request.payload {
-            FederatedIqPayload::Ping => String::new(),
+            FederatedIqPayload::Ping => {
+                return Ok(Some(federated_liveness_reply(
+                    &request.stanza,
+                    &conference_domain,
+                    &actor_full_jid,
+                )))
+            }
             FederatedIqPayload::DiscoInfo { node: None } => {
                 let mut query =
                     XmlElement::namespaced("query", "http://jabber.org/protocol/disco#info").child(
@@ -229,31 +246,159 @@ async fn federated_muc_iq_owned(
         .await;
     }
 
-    let Some(room) = state
-        .muc_service()
-        .federated_room_snapshot(localpart(&room_jid))
-        .await?
-    else {
-        return Ok(federated_error(
-            &request.stanza,
-            from,
-            "cancel",
-            "item-not-found",
-        ));
+    let domain = canonical_authenticated_domain(authenticated_domain);
+    let room_localpart = localpart(&room_jid);
+    let target_nick = to_jid.resourcepart();
+    let view_kind = match &request.payload {
+        FederatedIqPayload::DiscoInfo { node: Some(_) } => MucRoomViewKind::ReservedNick,
+        FederatedIqPayload::RegisterGet => MucRoomViewKind::Registration,
+        FederatedIqPayload::DiscoItems(disco) if target_nick.is_none() && disco.node.is_none() => {
+            MucRoomViewKind::Items
+        }
+        FederatedIqPayload::DiscoItemsError(_) if target_nick.is_none() => MucRoomViewKind::Items,
+        _ => MucRoomViewKind::Info {
+            include_mirror: false,
+        },
     };
-    // Keep an unconfigured room invisible to every remote session except the
-    // exact full JID that created it.  This matches the locked-room join and
-    // owner-query boundary instead of leaking a reserved room via disco.
-    if room.is_locked()
-        && !room.can_configure_locked_room(&actor_full_jid, northstar_time::Utc::now())
-    {
-        return Ok(federated_error(
-            &request.stanza,
-            from,
-            "cancel",
-            "item-not-found",
-        ));
+    let needs_route = view_kind == MucRoomViewKind::Items
+        || matches!(
+            &request.payload,
+            FederatedIqPayload::OwnerGet | FederatedIqPayload::AdminGet { .. }
+        )
+        || (target_nick.is_some()
+            && !matches!(
+                &request.payload,
+                FederatedIqPayload::DiscoInfo { .. }
+                    | FederatedIqPayload::DiscoInfoError
+                    | FederatedIqPayload::RegisterGet
+                    | FederatedIqPayload::RegisterSet
+            ));
+    let actor = FederatedReadActor {
+        full_jid: &actor_full_jid,
+        bare_jid: &actor_bare_jid,
+        domain: &domain,
+        node_id: state.muc_cluster_node_id(),
+        route: if needs_route {
+            federated_read_route(state, &room_jid, &actor_full_jid, &domain)
+        } else {
+            None
+        },
+    };
+    if let Some(nick) = target_nick.filter(|_| needs_route) {
+        return deliver_occupant_iq(state, &request, &room_jid, nick, &actor).await;
     }
+    if matches!(&request.payload, FederatedIqPayload::Ping) {
+        let room = state.muc_service().read_room(room_localpart).await?;
+        return Ok(
+            if room.is_some_and(|view| {
+                !view.room.is_locked()
+                    || (!view.configuration_expired
+                        && view.room.configuration_owner_jid.as_deref()
+                            == Some(actor_full_jid.as_str()))
+            }) {
+                Some(federated_liveness_reply(
+                    &request.stanza,
+                    &room_jid,
+                    &actor_full_jid,
+                ))
+            } else {
+                federated_error(&request.stanza, from, "cancel", "item-not-found")
+            },
+        );
+    }
+    match &request.payload {
+        FederatedIqPayload::AdminGet { affiliation, role } => {
+            return federated_muc_admin_get(
+                state,
+                &request.stanza,
+                &room_jid,
+                actor.management_viewer(),
+                affiliation.as_deref(),
+                role.as_deref(),
+            )
+            .await;
+        }
+        FederatedIqPayload::OwnerGet => {
+            return federated_muc_owner_get(
+                state,
+                &request.stanza,
+                &room_jid,
+                actor.management_viewer(),
+            )
+            .await;
+        }
+        _ => {}
+    }
+    let command = matches!(
+        &request.payload,
+        FederatedIqPayload::RegisterSet
+            | FederatedIqPayload::AdminSet { .. }
+            | FederatedIqPayload::OwnerSet
+            | FederatedIqPayload::Moderate { .. }
+    );
+    let (room, reserved_nick, nicks) = if command {
+        let Some(room) = state
+            .muc_service()
+            .federated_room_snapshot(room_localpart)
+            .await?
+        else {
+            return Ok(federated_error(
+                &request.stanza,
+                from,
+                "cancel",
+                "item-not-found",
+            ));
+        };
+        if room.is_locked()
+            && !room.can_configure_locked_room(&actor_full_jid, northstar_time::Utc::now())
+        {
+            return Ok(federated_error(
+                &request.stanza,
+                from,
+                "cancel",
+                "item-not-found",
+            ));
+        }
+        (room, None, Vec::new())
+    } else {
+        match state
+            .muc_service()
+            .room_view(
+                room_localpart,
+                MucRoomViewer {
+                    full_jid: Some(&actor_full_jid),
+                    principal: Some(actor.principal()),
+                    federated: true,
+                    occupancy: actor.proof(),
+                },
+                view_kind,
+            )
+            .await?
+        {
+            MucRoomView::Found {
+                room,
+                reserved_nick,
+                nicks,
+                ..
+            } => (room.room, reserved_nick, nicks),
+            MucRoomView::Missing => {
+                return Ok(federated_error(
+                    &request.stanza,
+                    from,
+                    "cancel",
+                    "item-not-found",
+                ))
+            }
+            MucRoomView::Unauthorized => {
+                return Ok(federated_error(
+                    &request.stanza,
+                    from,
+                    "auth",
+                    "not-authorized",
+                ))
+            }
+        }
+    };
     if matches!(&request.payload, FederatedIqPayload::DiscoInfoError) {
         return Ok(federated_error(
             &request.stanza,
@@ -273,11 +418,7 @@ async fn federated_muc_iq_owned(
         }
         let mut payload = XmlElement::namespaced("query", "http://jabber.org/protocol/disco#info")
             .attr("node", "x-roomuser-item");
-        if let Some(nick) = state
-            .muc_service()
-            .federated_reserved_nick(room.id, &actor_bare_jid)
-            .await?
-        {
+        if let Some(nick) = reserved_nick {
             payload.push_child(
                 XmlElement::new("identity")
                     .attr("category", "conference")
@@ -374,20 +515,12 @@ async fn federated_muc_iq_owned(
             &payload,
         )));
     }
-    if matches!(&request.payload, FederatedIqPayload::Ping) {
-        return Ok(Some(federated_iq_result(
-            &request.stanza,
-            &room_jid,
-            &actor_full_jid,
-            "",
-        )));
-    }
-
     if matches!(
         &request.payload,
         FederatedIqPayload::RegisterGet | FederatedIqPayload::RegisterSet
     ) {
-        if room.is_locked()
+        if command
+            && room.is_locked()
             && !room.can_configure_locked_room(&actor_full_jid, northstar_time::Utc::now())
         {
             return Ok(federated_error(
@@ -406,11 +539,7 @@ async fn federated_muc_iq_owned(
             ));
         }
         if matches!(&request.payload, FederatedIqPayload::RegisterGet) {
-            let payload = if let Some(nick) = state
-                .muc_service()
-                .federated_reserved_nick(room.id, &actor_bare_jid)
-                .await?
-            {
+            let payload = if let Some(nick) = reserved_nick {
                 XmlElement::namespaced("query", "jabber:iq:register")
                     .child(XmlElement::new("registered"))
                     .child(XmlElement::new("username").text(nick))
@@ -516,13 +645,14 @@ async fn federated_muc_iq_owned(
                     return match outcome {
                         ClusterMucRegistrationOutcome::Applied { .. }
                         | ClusterMucRegistrationOutcome::Replay { .. } => {
-                            state.wake_committed_muc_operation(operation_id).await?;
-                            Ok(Some(federated_iq_result(
+                            Ok(committed_registration_reply(
+                                state.wake_committed_muc_operation(operation_id),
+                                operation_id,
                                 &request.stanza,
                                 &room_jid,
                                 &actor_full_jid,
-                                "",
-                            )))
+                            )
+                            .await)
                         }
                         ClusterMucRegistrationOutcome::Conflict => {
                             Ok(federated_error(&request.stanza, from, "cancel", "conflict"))
@@ -568,13 +698,14 @@ async fn federated_muc_iq_owned(
                     return match outcome {
                         ClusterMucRegistrationOutcome::Applied { .. }
                         | ClusterMucRegistrationOutcome::Replay { .. } => {
-                            state.wake_committed_muc_operation(operation_id).await?;
-                            Ok(Some(federated_iq_result(
+                            Ok(committed_registration_reply(
+                                state.wake_committed_muc_operation(operation_id),
+                                operation_id,
                                 &request.stanza,
                                 &room_jid,
                                 &actor_full_jid,
-                                "",
-                            )))
+                            )
+                            .await)
                         }
                         ClusterMucRegistrationOutcome::Conflict => {
                             Ok(federated_error(&request.stanza, from, "cancel", "conflict"))
@@ -680,110 +811,54 @@ async fn federated_muc_iq_owned(
         )));
     }
 
-    let own = state
-        .muc_occupants_for(&room_jid)
-        .into_iter()
-        .find(|(_, occupant)| same_remote_actor(&occupant.full_jid, &actor_full_jid));
-    let own = match own {
-        Some((_, own)) => own,
-        None if !to.contains('/')
-            && state.federated_muc_pg_authority_enabled()
-            && matches!(&request.payload, FederatedIqPayload::AdminSet { .. }) =>
-        {
-            let FederatedIqPayload::AdminSet { items } = request.payload else {
-                unreachable!()
-            };
-            return federated_muc_admin_set(
-                state,
-                &request.stanza,
-                &room,
-                FederatedMucAdminActor {
-                    requester: None,
-                    authenticated_domain,
-                    connection_id,
-                    full_jid: &actor_full_jid,
-                },
-                items,
-            )
-            .await;
-        }
-        None => {
-            return Ok(federated_error(
-                &request.stanza,
-                from,
-                "auth",
-                "not-authorized",
-            ));
+    let own = if view_kind == MucRoomViewKind::Items {
+        None
+    } else {
+        let own = state
+            .muc_occupants_for(&room_jid)
+            .into_iter()
+            .find(|(_, occupant)| same_remote_actor(&occupant.full_jid, &actor_full_jid));
+        match own {
+            Some((_, own)) if federated_endpoint_matches(&own, authenticated_domain) => Some(own),
+            None if !to.contains('/')
+                && state.federated_muc_pg_authority_enabled()
+                && matches!(&request.payload, FederatedIqPayload::AdminSet { .. }) =>
+            {
+                let FederatedIqPayload::AdminSet { items } = request.payload else {
+                    unreachable!()
+                };
+                return federated_muc_admin_set(
+                    state,
+                    &request.stanza,
+                    &room,
+                    FederatedMucAdminActor {
+                        requester: None,
+                        authenticated_domain,
+                        connection_id,
+                        full_jid: &actor_full_jid,
+                    },
+                    items,
+                )
+                .await;
+            }
+            _ => {
+                return Ok(federated_error(
+                    &request.stanza,
+                    from,
+                    "auth",
+                    "not-authorized",
+                ));
+            }
         }
     };
-    if !federated_endpoint_matches(&own, authenticated_domain) {
-        return Ok(federated_error(
-            &request.stanza,
-            from,
-            "auth",
-            "not-authorized",
-        ));
-    }
-    // An IQ does not refresh occupancy ownership. Presence is the sole path
-    // which can rebind a federated endpoint after exact authority checks.
-
-    if to.contains('/') {
-        let Some(target_nick) = to_jid.resourcepart() else {
-            return Ok(federated_error(
-                &request.stanza,
-                from,
-                "modify",
-                "jid-malformed",
-            ));
-        };
-        let Some(target) = state.local_muc_occupant_by_nick(&room_jid, target_nick) else {
-            return Ok(federated_error(
-                &request.stanza,
-                from,
-                "cancel",
-                "item-not-found",
-            ));
-        };
-        let forwarded = set_to(
-            &set_from(&request.stanza.raw, &format!("{room_jid}/{}", own.nick)),
-            &target.full_jid,
-        );
-        let blocked = state
-            .blocked_muc_recipient_accounts(
-                std::slice::from_ref(&target),
-                &[format!("{room_jid}/{}", own.nick), actor_full_jid.clone()],
-            )
-            .await;
-        if !northstar_xmpp_types::jid::canonical_bare_key(&target.full_jid)
-            .is_ok_and(|owner| blocked.contains(&owner))
-        {
-            let _ = state
-                .deliver_to_muc_occupant_unchecked(&target, forwarded)
-                .await;
-        }
-        return Ok(None);
-    }
-
     match request.payload {
         FederatedIqPayload::DiscoItems(disco) if disco.node.is_none() => {
-            let mut occupant_map = state
-                .federated_muc_global_occupants(&room_jid)
-                .await?
-                .into_values()
-                .filter_map(|json| serde_json::from_str::<SerializableMucOccupant>(&json).ok())
-                .map(|occupant| (occupant.nick.clone(), occupant))
-                .collect::<std::collections::HashMap<_, _>>();
-            for (_, occupant) in state.muc_occupants_for(&room_jid) {
-                let occupant = SerializableMucOccupant::from(&occupant);
-                occupant_map.insert(occupant.nick.clone(), occupant);
-            }
-            let mut occupants = occupant_map.into_values().collect::<Vec<_>>();
-            occupants.sort_by(|left, right| left.nick.cmp(&right.nick));
+            let occupants = nicks;
             let cursor = disco
                 .after
                 .as_deref()
                 .or_else(|| disco.before.as_ref().and_then(|value| value.as_deref()));
-            if cursor.is_some_and(|cursor| !occupants.iter().any(|item| item.nick == cursor)) {
+            if cursor.is_some_and(|cursor| !occupants.iter().any(|nick| nick == cursor)) {
                 return Ok(federated_error(
                     &request.stanza,
                     from,
@@ -794,18 +869,17 @@ async fn federated_muc_iq_owned(
             let total = occupants.len() as i64;
             let mut page = occupants
                 .iter()
-                .filter(|occupant| {
+                .filter(|nick| {
                     disco
                         .after
                         .as_deref()
-                        .is_none_or(|after| occupant.nick.as_str() > after)
+                        .is_none_or(|after| nick.as_str() > after)
                         && disco
                             .before
                             .as_ref()
                             .and_then(|value| value.as_deref())
-                            .is_none_or(|before| occupant.nick.as_str() < before)
+                            .is_none_or(|before| nick.as_str() < before)
                 })
-                .cloned()
                 .collect::<Vec<_>>();
             if disco.before.is_some() {
                 page.reverse();
@@ -816,18 +890,17 @@ async fn federated_muc_iq_owned(
             }
             let first_index = page
                 .first()
-                .and_then(|first| occupants.iter().position(|item| item.nick == first.nick))
+                .and_then(|first| occupants.iter().position(|nick| nick == *first))
                 .map_or(0, |index| index as i64);
             let mut payload =
                 XmlElement::namespaced("query", "http://jabber.org/protocol/disco#items");
-            for occupant in &page {
-                payload.push_child(
-                    XmlElement::new("item").attr("jid", format!("{}/{}", room_jid, occupant.nick)),
-                );
+            for nick in &page {
+                payload
+                    .push_child(XmlElement::new("item").attr("jid", format!("{room_jid}/{nick}")));
             }
             payload.push_validated_fragment(&northstar_xml_builder::disco::disco_rsm_result(
-                page.first().map(|occupant| occupant.nick.as_str()),
-                page.last().map(|occupant| occupant.nick.as_str()),
+                page.first().map(|nick| nick.as_str()),
+                page.last().map(|nick| nick.as_str()),
                 first_index,
                 total,
             ))?;
@@ -842,14 +915,14 @@ async fn federated_muc_iq_owned(
         FederatedIqPayload::DiscoItemsError(condition) => {
             Ok(federated_error(&request.stanza, from, "modify", condition))
         }
-        FederatedIqPayload::AdminGet { affiliation, role } => {
-            federated_muc_admin_get(state, &request.stanza, &room, &own, affiliation, role).await
-        }
-        FederatedIqPayload::OwnerGet => {
-            federated_muc_owner(state, &request.stanza, &room, &own, false).await
-        }
         FederatedIqPayload::OwnerSet => {
-            federated_muc_owner(state, &request.stanza, &room, &own, true).await
+            federated_muc_owner(
+                state,
+                &request.stanza,
+                &room,
+                own.as_ref().expect("owner set has an actor"),
+            )
+            .await
         }
         FederatedIqPayload::AdminSet { items } => {
             federated_muc_admin_set(
@@ -857,7 +930,7 @@ async fn federated_muc_iq_owned(
                 &request.stanza,
                 &room,
                 FederatedMucAdminActor {
-                    requester: Some(&own),
+                    requester: own.as_ref(),
                     authenticated_domain,
                     connection_id,
                     full_jid: &actor_full_jid,
@@ -878,7 +951,7 @@ async fn federated_muc_iq_owned(
                 state,
                 &request.stanza,
                 &room,
-                &own,
+                own.as_ref().expect("moderation has an actor"),
                 target,
                 reason,
                 has_retract,

@@ -1,4 +1,5 @@
 use super::*;
+mod hosted_disco;
 use northstar_abuse_policy::ContentIdentityAuthenticators;
 use northstar_federation_core::{FederationOutboxAdmission, S2sOutboxPolicy};
 use northstar_room_application::mix_service::*;

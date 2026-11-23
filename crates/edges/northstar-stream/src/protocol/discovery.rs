@@ -4,18 +4,17 @@ use northstar_pubsub_application::{
     PepAccountItemsRead, PepAccountQuery, PepNodeInfoRead, PepNodeItemsRead, PepNodeQuery,
     PepRequester, PubSubNodeInfo, PubSubNodeInfoQuery,
 };
-use northstar_room_application::mix_service::{
-    CORE_NODES, NODE_ALLOWED, NODE_AVATAR_DATA, NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG,
-    NODE_JIDMAP,
-};
 use northstar_room_application::muc_service::{
     MucReadPrincipal, MucRoomView, MucRoomViewKind, MucRoomViewer,
 };
+use northstar_room_core::mix::{MixAdministratorRetractionRights, MixChannelAddress};
 use northstar_xml_builder::disco::{disco_rsm_result_element, parse_disco_items_query};
 use northstar_xml_builder::stanza::{iq_error, iq_error_from, iq_result_from};
 use northstar_xml_builder::XmlElement;
+use northstar_xmpp_types::jid::CanonicalJid;
 
 mod host;
+mod hosted_mix_items;
 mod room_items;
 
 pub use self::host::{DiscoveryHost, PubSubDiscoItemsReply};
@@ -201,47 +200,36 @@ impl<H: DiscoveryHost> ProtocolSession<H> {
             if request.attribute("node").is_some() {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             }
-            let Some(channel) = self
-                .host()
-                .mix_service()
-                .mix_channel(
-                    &mix_domain,
-                    target.localpart().expect("MIX channel localpart checked"),
-                )
-                .await?
-            else {
-                return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
-            };
             let Some(user) = self.authenticated.as_ref() else {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
             };
-            let requester = format!("{}@{}", user.username, self.host().local_domain());
-            if !self
+            let requester = CanonicalJid::parse_bare(&format!(
+                "{}@{}",
+                user.username,
+                self.host().local_domain()
+            ))?;
+            let address = MixChannelAddress::parse(&target.bare())?;
+            let Some(view) = self
                 .host()
                 .mix_service()
-                .mix_channel_discoverable_to(&channel, &requester)
+                .hosted_disco(&address, &requester)
                 .await?
-            {
+                .filter(|view| view.visible_to_actor)
+            else {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
-            }
-            let linked = mirror_enabled
-                && self
-                    .host()
-                    .mix_service()
-                    .mix_muc_mirror_for_mix(channel.id)
-                    .await?
-                    .is_some();
+            };
             let mirror = northstar_room_application::mix_muc::conditional_mirror_discovery_form(
                 mirror_enabled,
-                linked,
+                view.muc_room_id.is_some(),
                 northstar_room_application::mix_muc::MirrorDirection::Muc,
                 &muc_domain,
             );
             let query = H::mix_channel_disco_info_payload(
-                channel.name.as_deref().unwrap_or(&channel.localpart),
-                channel.allow_user_message_retraction
-                    || channel.administrator_retraction_rights != "nobody",
-                channel.allow_private_messages,
+                view.name.as_deref().unwrap_or(view.address.localpart()),
+                view.allow_user_message_retraction
+                    || view.administrator_retraction_rights
+                        != MixAdministratorRetractionRights::Nobody,
+                view.allow_private_messages,
                 self.host()
                     .xmpp_extension_enabled(northstar_xep_0313::XEP_ID),
                 &mirror,
@@ -747,58 +735,30 @@ impl<H: DiscoveryHost> ProtocolSession<H> {
                 ));
             }
         } else if target.localpart().is_some() && target.domainpart() == mix_domain {
-            let Some(channel) = self
+            if !matches!(requested_node, None | Some("mix")) {
+                return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
+            }
+            let Some(user) = self.authenticated.as_ref() else {
+                return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
+            };
+            let requester = CanonicalJid::parse_bare(&format!(
+                "{}@{}",
+                user.username,
+                self.host().local_domain()
+            ))?;
+            let address = MixChannelAddress::parse(&target.bare())?;
+            let view = self
                 .host()
                 .mix_service()
-                .mix_channel(
-                    &mix_domain,
-                    target.localpart().expect("MIX channel localpart checked"),
-                )
-                .await?
-            else {
-                return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
-            };
-            if requested_node != Some("mix") {
-                if requested_node.is_some() {
-                    return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
-                }
-                return Ok(Action::Send(iq_result_from(id, from, &query.finish())));
-            }
-            let requester = self
-                .authenticated
-                .as_ref()
-                .map(|user| format!("{}@{}", user.username, self.host().local_domain()));
-            let Some(requester_jid) = requester.as_deref() else {
-                return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
-            };
-            if !self
-                .host()
-                .mix_service()
-                .mix_channel_discoverable_to(&channel, requester_jid)
-                .await?
-            {
-                return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));
-            }
-            let is_admin = if let Some(requester) = requester.as_deref() {
-                self.host()
-                    .mix_service()
-                    .mix_role(channel.id, requester)
-                    .await?
-                    .is_some()
-            } else {
-                false
-            };
-            for node in CORE_NODES {
-                query.push_child(disco_item(from, Some(node), None));
-            }
-            if is_admin {
-                for node in [NODE_CONFIG, NODE_ALLOWED, NODE_BANNED, NODE_JIDMAP] {
-                    query.push_child(disco_item(from, Some(node), None));
-                }
-            }
-            for node in [NODE_AVATAR_DATA, NODE_AVATAR_METADATA] {
-                query.push_child(disco_item(from, Some(node), None));
-            }
+                .hosted_disco(&address, &requester)
+                .await?;
+            return Ok(Action::Send(hosted_mix_items::reply(
+                view.as_ref(),
+                requested_node,
+                id,
+                from,
+                query,
+            )));
         } else if target.localpart().is_none() && target.domainpart() == muc_domain {
             if requested_node.is_some() {
                 return Ok(Action::Send(iq_error_from(id, from, "item-not-found")));

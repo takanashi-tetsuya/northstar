@@ -4,6 +4,7 @@ pub(super) struct UnusedPorts;
 
 mod administration;
 mod direct_invitation_stub;
+mod hosted_disco;
 mod pam_delivery_repository;
 
 mod mix {

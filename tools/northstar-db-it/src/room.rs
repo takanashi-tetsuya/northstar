@@ -8,6 +8,7 @@ mod foreground_conformance;
 mod mix_admin_patches;
 mod mix_delivery_capacity;
 mod mix_delivery_route_wake;
+mod mix_discovery;
 mod mix_identity;
 mod mix_mam;
 mod mix_mam_authority;

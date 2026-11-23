@@ -5,6 +5,7 @@ use northstar_room_application::mix_service::*;
 use northstar_time::{DateTime, Utc};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
+mod hosted_disco;
 
 mod administration;
 mod pam_delivery_repository;

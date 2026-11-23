@@ -25,6 +25,7 @@ mod delivery_capacity;
 mod delivery_queue;
 mod delivery_settlement;
 mod delivery_transfer;
+pub(crate) mod hosted_disco;
 mod intent;
 mod jid_map_retract;
 mod mam;

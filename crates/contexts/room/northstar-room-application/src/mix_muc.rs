@@ -9,6 +9,7 @@
 
 use crate::mix_service::{MixMucLinkOutcome, MixRepository, MixService};
 use anyhow::Result;
+use northstar_room_core::mix::{MixChannelId, MixRealJid};
 use northstar_xml_builder::XmlElement;
 
 pub const MIRROR_NS: &str = "urn:xmpp:mix:muc:0";
@@ -99,6 +100,26 @@ pub async fn maybe_link_local_mirror<R: MixRepository>(
         );
     }
     Ok(outcome)
+}
+
+pub async fn link_created_mix<R: MixRepository>(
+    mix: &MixService<R>,
+    channel_id: &MixChannelId,
+    owner: &MixRealJid,
+    local_domain: &str,
+) {
+    match mix.link_created_mix(channel_id, owner, local_domain).await {
+        Ok(MixMucLinkOutcome::Linked) => {
+            tracing::info!(%channel_id, "linked XEP-0408 MIX/MUC mirror");
+        }
+        Ok(MixMucLinkOutcome::AlreadyLinked) => {}
+        Ok(outcome) => {
+            tracing::debug!(%channel_id, ?outcome, "MIX channel created without a MUC mirror");
+        }
+        Err(error) => {
+            tracing::warn!(%channel_id, %error, "MIX channel created but MUC mirror link failed");
+        }
+    }
 }
 
 #[cfg(test)]

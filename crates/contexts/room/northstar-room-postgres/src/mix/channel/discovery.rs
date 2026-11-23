@@ -126,38 +126,10 @@ pub async fn mix_channel_discoverable_to(
     actor: &str,
 ) -> Result<bool> {
     let actor = northstar_xmpp_types::jid::CanonicalJid::parse(actor)?;
-    anyhow::ensure!(
-        actor.resourcepart().is_none(),
-        "MIX disco requester must be a bare JID or authenticated domain"
-    );
-    let actor_domain = actor.domainpart().to_owned();
-    let actor = actor.to_string();
-    let row = sqlx::query(
-        "SELECT c.discoverable, c.access_model,
-            EXISTS(SELECT 1 FROM mix_participants WHERE channel_id = $1 AND jid = $2) AS participant,
-            EXISTS(SELECT 1 FROM mix_channel_roles WHERE channel_id = $1 AND jid = $2) AS privileged,
-            EXISTS(SELECT 1 FROM mix_banned WHERE channel_id = $1 AND jid_pattern IN ($2, $3)) AS banned,
-            EXISTS(SELECT 1 FROM mix_allowed WHERE channel_id = $1 AND jid_pattern IN ($2, $3)) AS allowed
-         FROM mix_channels c WHERE c.id = $1",
-    )
-    .bind(channel.id)
-    .bind(&actor)
-    .bind(actor_domain)
-    .fetch_optional(pool)
-    .await?;
-    let Some(row) = row else {
-        return Ok(false);
-    };
-    let participant: bool = row.get("participant");
-    let privileged: bool = row.get("privileged");
-    if row.get::<bool, _>("banned") && !privileged {
-        return Ok(false);
-    }
-    if !row.get::<bool, _>("discoverable") {
-        return Ok(participant || privileged);
-    }
-    Ok(row.get::<String, _>("access_model") == "open"
-        || participant
-        || privileged
-        || row.get::<bool, _>("allowed"))
+    let channel_id = northstar_room_core::mix::MixChannelId::new(channel.id);
+    let row =
+        crate::mix::hosted_disco::fetch_discovery(pool, None, Some(&channel_id), &actor).await?;
+    Ok(row
+        .as_ref()
+        .is_some_and(|row| crate::mix::hosted_disco::discovery_admission(row).1))
 }

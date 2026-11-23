@@ -17,6 +17,7 @@ use uuid::Uuid;
 mod administration_repository;
 mod contracts;
 mod delivery_repository;
+mod hosted_disco_repository;
 mod identity_policy;
 mod mam_read;
 mod operations;
@@ -51,6 +52,7 @@ pub use self::contracts::{
     StoreMixMessageRequest, UpdateSubscriptionsOutcome, VerifiedMixReflection,
 };
 pub use self::delivery_repository::MixDeliveryRepository;
+pub use self::hosted_disco_repository::{HostedDiscoView, MixHostedDiscoRepository};
 pub use self::identity_policy::MixPublisherIdentity;
 pub use self::mam_read::{
     MixMamAdmissionOutcome, MixMamReadActor, MixMamReadCommand, MixMamReadOperation,
@@ -81,6 +83,7 @@ pub use self::wake::{MixDeliveryWakeBroker, MixDeliveryWakeSubscription};
 
 pub mod foreground;
 pub mod outbox;
+pub use northstar_room_core::mix::MixChannelAddress;
 pub use northstar_room_core::mix::{
     Admission as StoreMixMessageAdmission, MixChannelId, MixRealJid, Outcome as StoreEventOutcome,
     Participant as MixParticipant, Replay as MixBusinessReplay,

@@ -1,0 +1,26 @@
+use super::ControlledRepository;
+use anyhow::Result;
+use northstar_room_application::mix_service::{
+    HostedDiscoView, MixChannelAddress, MixChannelId, MixHostedDiscoRepository, MixMucLinkOutcome,
+    MixRealJid,
+};
+use northstar_xmpp_types::jid::CanonicalJid;
+
+impl MixHostedDiscoRepository for ControlledRepository {
+    async fn hosted_disco(
+        &self,
+        _address: &MixChannelAddress,
+        _actor: &CanonicalJid,
+    ) -> Result<Option<HostedDiscoView>> {
+        Err(self.unused("hosted_disco"))
+    }
+
+    async fn link_created_mix(
+        &self,
+        _channel_id: &MixChannelId,
+        _owner: &MixRealJid,
+        _local_domain: &str,
+    ) -> Result<MixMucLinkOutcome> {
+        Err(self.unused("link_created_mix"))
+    }
+}

@@ -6,6 +6,8 @@
 //! may only be created when the same bare JID owns both existing entities.
 
 use anyhow::Result;
+use northstar_room_core::mix::{MixChannelId, MixRealJid};
+use northstar_xmpp_types::jid::CanonicalJid;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -124,7 +126,46 @@ pub async fn link_mix_muc_by_localpart(
     let mix_domain = northstar_xmpp_types::jid::prepare_domainpart(mix_domain)?;
     let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
     let localpart = northstar_xmpp_types::jid::prepare_localpart(localpart)?;
-    let actor = northstar_xmpp_types::jid::CanonicalJid::parse_bare(actor_bare_jid)?;
+    let actor = CanonicalJid::parse_bare(actor_bare_jid)?;
+    link_mix_muc_pair(
+        pool,
+        &mix_domain,
+        Some(&localpart),
+        None,
+        &actor,
+        &local_domain,
+    )
+    .await
+}
+
+pub(crate) async fn link_created_mix(
+    pool: &PgPool,
+    channel_id: &MixChannelId,
+    owner: &MixRealJid,
+    local_domain: &str,
+) -> Result<LinkMixMucOutcome> {
+    let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
+    let mix_domain = northstar_xmpp_types::jid::prepare_domainpart(&format!("mix.{local_domain}"))?;
+    let actor = CanonicalJid::parse_bare(owner.as_str())?;
+    link_mix_muc_pair(
+        pool,
+        &mix_domain,
+        None,
+        Some(channel_id),
+        &actor,
+        &local_domain,
+    )
+    .await
+}
+
+async fn link_mix_muc_pair(
+    pool: &PgPool,
+    mix_domain: &str,
+    localpart: Option<&str>,
+    channel_id: Option<&MixChannelId>,
+    actor: &CanonicalJid,
+    local_domain: &str,
+) -> Result<LinkMixMucOutcome> {
     let Some(actor_localpart) = actor.localpart() else {
         return Ok(LinkMixMucOutcome::NotCommonOwner);
     };
@@ -135,12 +176,15 @@ pub async fn link_mix_muc_by_localpart(
         "SELECT c.id AS mix_channel_id, r.id AS muc_room_id
          FROM mix_channels c
          JOIN muc_rooms r ON r.localpart = c.localpart
-         WHERE c.service_domain = $1 AND c.localpart = $2
+         WHERE c.service_domain = $1
+           AND ($2::text IS NULL OR c.localpart = $2)
+           AND ($3::uuid IS NULL OR c.id = $3)
            AND r.destroyed_at IS NULL
          FOR UPDATE OF c, r",
     )
-    .bind(&mix_domain)
-    .bind(&localpart)
+    .bind(mix_domain)
+    .bind(localpart)
+    .bind(channel_id.map(MixChannelId::as_uuid))
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(pair) = pair else {

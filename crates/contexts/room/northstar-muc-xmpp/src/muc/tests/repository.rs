@@ -5,6 +5,7 @@ use std::time::Duration;
 
 mod addressed_delivery;
 mod administration;
+mod hosted_disco;
 mod pam_delivery_repository;
 mod pam_projection_repository;
 

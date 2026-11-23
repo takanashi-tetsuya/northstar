@@ -9,6 +9,7 @@ use northstar_time::{DateTime, Utc};
 use std::sync::Mutex;
 
 mod administration;
+mod hosted_disco;
 mod pam_delivery_repository;
 
 #[derive(Clone)]

@@ -1,4 +1,5 @@
 use super::*;
+mod hosted_disco;
 use northstar_delivery_core::{bosh_ownership, native_write, MixDelivery};
 use std::sync::Mutex as RecordingMutex;
 

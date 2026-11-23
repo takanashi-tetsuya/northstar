@@ -141,6 +141,21 @@ run_exact_ignored \
 run_exact_ignored \
   room::mix_admin_patches::initial_items_share_the_prepared_public_timestamp
 
+run_exact_ignored \
+  room::mix_discovery::disco_projection_is_one_snapshot_under_config_change
+
+run_exact_ignored \
+  room::mix_discovery::role_promotion_paired_with_visibility_change_is_one_snapshot
+
+run_exact_ignored \
+  room::mix_discovery::hidden_and_absent_channels_answer_alike
+
+run_exact_ignored \
+  room::mix_discovery::link_error_after_create_keeps_the_create_success
+
+run_exact_ignored \
+  room::mix_discovery::recreated_localpart_is_not_linked_by_a_waiting_link
+
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline -p northstar-db-it \
   room::mix_mam::mix_anon_misc_permissions_are_atomic_and_private \

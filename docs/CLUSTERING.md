@@ -251,6 +251,22 @@ rows. Ordering is scoped to the same room plus occupant incarnation (or the
 same node-pull consumer), so a dead unrelated recipient cannot freeze the whole
 room.
 
+MUC fan-out names exact occupancies (S48). Groupchat, author and moderation
+retractions capture their live audience, the active and suspended occupancies
+of the room incarnation, in the admission transaction; private messages,
+declines and voice requests prove the target route in one read-only snapshot.
+A route is the nickname, full JID, connection UUID and occupancy epoch, and a
+local route table delivers only while all four still match. Version 2 cluster
+envelopes (`envelope_version: 2`) carry the routes in `audience` (room
+delivery, only the destination node's routes, at most 512 per envelope and
+split below the signed payload limit) or `target_route` (private delivery,
+which keeps `target_nick`); voice requests add `require_role: "moderator"` and
+both nodes re-check the moderator before delivery. A malformed versioned
+envelope is rejected and never falls back to the roster; an unversioned
+envelope keeps the legacy room and nickname lookup. Old nodes treat version 2
+envelopes as legacy ones, so exact audiences hold only when every node runs
+the new version. Delivery stays best effort.
+
 Signed protocol replay admission is persisted by migration 0095. Its unique
 identity binds source process/key, destination process/key, channel, event ID
 and payload digest. Receiver restart therefore does not reopen the wire

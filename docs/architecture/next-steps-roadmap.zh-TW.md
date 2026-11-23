@@ -29,7 +29,7 @@
 9. **每個語義修正都有證據。** 單元測試證明純決策；資料庫測試以暫停點在讀取或寫入中途提交競爭的變更，證明快照與 fence；
    在唯讀連線上執行查詢，證明查詢不寫入。穩定狀態下的 XML、錯誤條件、順序與 RSM 游標不變，除非該變更是記錄在案的決定。
 
-## 2. S47 後的現況
+## 2. S48 後的現況
 
 - 工作區 95 個 package（94 個 member 加根 crate）：`kernel`（XEP 線格式、XML、時間型別）、`platform`（設定、PostgreSQL、runtime、安全、遙測、web
   surface）、`contexts`（abuse、archive、auth、federation、message、operations、pubsub、room、roster、session、upload，
@@ -42,13 +42,14 @@
   `local_routes/session_table.rs`（1,388 行）。
 - 語義退出：C1（PubSub/PEP）16 項發現全部關閉（S44 的 8 項、S46 的 8 項），C2（Archive/MAM）15 項
   全部關閉：S45 修正 10 項、C2-12（良性競態）以測試固定並維持現狀，S47 依使用者的產品決策實作其餘 4 項（C2-08、09、10、
-  13）。聯邦 MUC MAM 統一格式的對端互通證據留在 K 的 `EXT-FEDERATION`。其他上下文尚未做語義退出審計。
-- workspace 測試 3,687 個（S47 的 `31cf3328`），其中 395 個是 ignored 測試，需要 PostgreSQL、Redis 或其他專用環境，
-  由 CI 的專用腳本執行（其中 272 個在 `northstar-db-it`，包括 6 個不在 CI 執行的按需量測情境）。
-- Cargo.lock 485 個套件；migration 到 `0161`；`cargo audit` 忽略 RUSTSEC-2026-0459（SQLx 的 `libsqlite3-sys` 升到 ≥ 0.39
+  13）。聯邦 MUC MAM 統一格式的對端互通證據留在 K 的 `EXT-FEDERATION`。D 從 room 開始：S48 審計 C3（MUC）與 C4
+  （MIX）各 19 項，C3 全部關閉（工程結構藍圖 5.44），C4 在 S49。其他上下文尚未做語義退出審計。
+- workspace 測試 3,777 個（S48 的 `e2df0ddf`），其中 438 個是 ignored 測試，需要 PostgreSQL、Redis 或其他專用環境，
+  由 CI 的專用腳本執行（其中 315 個在 `northstar-db-it`，包括 6 個不在 CI 執行的按需量測情境）。
+- Cargo.lock 485 個套件；migration 到 `0162`；`cargo audit` 忽略 RUSTSEC-2026-0459（SQLx 的 `libsqlite3-sys` 升到 ≥ 0.39
   前保留）、RUSTSEC-2026-0543 與 RUSTSEC-2026-0542（`object_store` 經 chrono／humantime 引入，`cargo deny` 有相同例外）。
 
-## 3. 已完成的任務（S0–S47）
+## 3. 已完成的任務（S0–S48）
 
 細節見工程結構藍圖第 5 節的階段表與各盤點小節。
 
@@ -65,6 +66,7 @@
 | S45 | C2：MUC／MIX MAM 的讀取授權與路由、寫入時的政策取樣、MAM 關閉時隱藏附屬介面、以測試固定刪除與 legal hold 下的行為 |
 | S46 | C1 第二批：重播快照、訂閱命令、寫入前提、PEP 表單政策、頭像快取、型別化權威與注入的時鐘和 ID；預先拆分 9 個接近行數上限的檔案 |
 | S47 | C2 的 4 項產品決策：MIX 個人副本收斂到頻道撤回、legal hold 下撤回成功（顯示覆蓋層與 V3 匯出）、outbox 配額的 generation 列、本地與聯邦 MUC MAM 統一投影；先拆分 MIX repository port 與治理資料生命週期模組 |
+| S48 | D 的 room C3（MUC）：唯讀審計 room 上下文，修正 C3 的 19 項：確切的 occupant 路由與第 2 版叢集信封、提交時的受眾、房間退役的確切效果、延遲事件的渲染事實、唯讀快照、加入與 SM 連續性、定址投遞與邀請、注入的時鐘與 ID、型別化權威；runtime 執行緒保留 8 MiB stack（WP-715） |
 
 ## 4. 待辦總表
 
@@ -76,7 +78,7 @@
 | A | C1 語義退出第二批（C1-05、07、08、09、12、14、15、16） | 程式 | P0 | 無；A0 先做 | 5.1 | 完成（S46，工程結構藍圖 5.42） |
 | B | C2 的 4 項產品決策與實作（C2-08、09、10、13） | 決策＋程式 | P1 | 使用者決定 | 5.2 | 完成（S47，工程結構藍圖 5.43） |
 | C | 接近行數上限的檔案預先拆分 | 結構 | P0（隨 A 一起） | 無 | 5.3 | 完成（S46，工程結構藍圖 5.42） |
-| D | 其他上下文的語義退出審計與修正 | 審計＋程式 | P1 | A 的做法定型 | 5.4 | 未開始 |
+| D | 其他上下文的語義退出審計與修正 | 審計＋程式 | P1 | A 的做法定型 | 5.4 | 進行中：room 的 C3（MUC）完成（S48，工程結構藍圖 5.44），C4（MIX）在 S49 |
 | E | `northstar-workflows` 的範圍審查 | 結構 | P2 | D 的審計結果 | 5.5 | 未開始 |
 | F | 服務能力收斂（`ARCH-SVC`） | 程式 | P2 | 無 | 5.6 | 未開始 |
 | G | 資料庫角色分權（`ARCH-DB-ROLE`） | 程式＋migration | P2 | F | 5.7 | 未開始 |
@@ -86,7 +88,7 @@
 | K | 發佈資格（8.2 的 7 個 gate、R1–R3） | 環境證據 | P3 | 凍結候選版本 | 5.11 | 未開始 |
 | L | 可選產品範圍（XEP-0357、0447/0448、0487） | 產品 | P3 | K | 5.12 | 未開始 |
 
-建議的階段編號（實際編號以開工時為準）：S46 = A＋C（已完成）；S47 = B（已完成）；S48 起 = D，依 5.4 的順序每個上下文一個階段；
+建議的階段編號（實際編號以開工時為準）：S46 = A＋C（已完成）；S47 = B（已完成）；S48 = D 的 room C3（已完成）；S49 = room C4（MIX）；之後依 5.4 的順序每個上下文一個階段；
 E、F、G、I 在 D 的空檔或之後插入。WP 編號接續 WP-662（本文件）。
 
 ## 5. 各項詳細說明
@@ -175,6 +177,8 @@ R1 的上限是生產檔 1,500 行、測試檔 3,000 行，由 `node scripts/che
 做法：拆分規則見工程結構藍圖 R3 與第 6 節第 8 點的「拆分」。拆分 WP 只移動，不與語義修改放在同一個提交。
 
 ### 5.4 D：其他上下文的語義退出審計
+
+**進度**：room 已審計（S48，C3 MUC 19 項、C4 MIX 19 項；審計報告不入庫）。C3 在 S48 全部關閉（見[工程結構藍圖](engineering-structure.zh-TW.md) 5.44），C4 在 S49。
 
 S19–S30 把各上下文搬成 crate 時，SQL 與交易邊界逐字搬移，沒有逐條檢查快照與競態。C1、C2 的審計都找到 15 項左右的發現，
 其他上下文很可能有同類問題。每個上下文照 C1／C2 的方式做：先唯讀審計（一個 WP，報告不入庫），再依發現切修正 WP。
@@ -286,7 +290,9 @@ S46  A0 契約 ─┬─ A1 重播快照
               ├─ A4 PEP 政策層
               └─ A5 頭像 fence ── A6 收尾 ── 記錄
 S47  B（已完成）：4 個修正 WP 可並行（檔案大多不重疊；B-甲 與 C2-13 都碰 MUC 聯邦檔，依序整合）
-S48+ D：每個上下文先審計，再修正；審計可提前並行（唯讀），修正依順序
+S48  D-room C3（已完成）：WP-695 契約先行，WP-696–701 平行，WP-702、703 依序，WP-715 修正 stack 溢位
+S49  D-room C4：WP-705 只移動、WP-706 共用接線，WP-707–714 平行
+S50+ D：每個上下文先審計，再修正；審計可提前並行（唯讀），修正依順序
      E：D 的 room、message 審計完成後
      F → G：可在 D 的空檔並行（G 的 migration 依領域逐一進行）
      I：隨時可做的小 WP
@@ -384,6 +390,8 @@ crate 當成最新（S44 的教訓）。不要在 codex、驗證或 cargo 正在
 - 只在 test 或 test-support 使用的 import 要加相同的 cfg。
 - 有些 DB 測試自己建 schema、不跑 migration（例如 `room::muc` 的邀請原子性測試）。新增表或改動 SQL 時，搜尋所有手寫的
   fixture；單一 WP 的 DB 檢查要包含每個 fixture 碰到改動 SQL 的 `*-db-wsl.sh`，不只新增測試所在的腳本（S47 的 WP-688）。
+- 自建 schema 的 DB 測試使用該 DB 腳本會清理的前綴（`muc-db-wsl.sh` 只接受 `muc_lifecycle_test_`、`muc_invite_test_`、
+  `muc_history_test_`），規格要寫明（S48）。
 
 ### 9.3 整合
 
@@ -395,6 +403,10 @@ crate 當成最新（S44 的教訓）。不要在 codex、驗證或 cargo 正在
 - 單一 WP 的檢查不跑 ignored 的 DB 測試。每個 WP 新增或改動的 DB 測試在接鏈前各自跑過；S46 有兩個只在鏈上才出現的失敗
   （fixture 重用 SubID 撞上全域唯一索引、payload 政策移到鎖下後測試缺 payload）。
 - 合併 DB 腳本的衝突後，檢查每個測試名稱的前一行都是 `run_exact_ignored \`，否則 CI 會把測試名稱當成命令。
+- 改變共用行為（回傳型別、會話條件、事件內容）的 WP 會讓其他 WP 的測試只在鏈上失敗；修正併入改變行為的 WP（S48 的
+  WP-696、WP-700），再重放之後的提交。
+- 離線 CI 不包含 PostgreSQL protocol integration；改動 C2S、MUC 或 MIX 處理路徑的階段，推送前在本機 loopback
+  PostgreSQL 跑這個 job（S48 的 WP-715）。
 - 驗證時的 `cargo fmt --all` 會改寫委派產生的程式碼，格式化結果併入該 WP 的提交。
 - 共用 target 的 touch 在每個 WP 的單獨檢查之前也要做，不只整條鏈。
 - 其他工作階段可能同時推送到 `dev` 並使用尚未記錄的 WP 編號；推送前 fetch，已推送的編號不改，未推送的順延（S46 的 WP-681）。

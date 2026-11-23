@@ -39,6 +39,18 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - Render local and federated MUC MAM results with the same projection.
 - Keep concurrent federated MUC MAM requests within the S2S outbox row, byte
   and per-domain limits.
+- Deliver MUC groupchat, retractions, private messages, voice requests and
+  invitations only to the occupants committed with the command, so a reused
+  nickname or a replaced room never receives them.
+- Hide real JIDs in delayed MUC management events when either the policy
+  committed with the event or the policy at delivery hides them.
+- Leave an MUC room with status 332 when a stream resumption cannot prove its
+  suspended occupancy, instead of restoring it.
+- Answer an owner's configuration request for an expired locked room with
+  item-not-found, and a federated ping to the sender's own occupant from that
+  occupant.
+- Reserve 8 MiB stacks for runtime threads, so debug builds no longer abort on
+  deep MUC invitation paths.
 
 ## [0.2.0] - Release notes (publication date: GitHub Releases)
 

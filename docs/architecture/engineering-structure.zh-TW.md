@@ -149,6 +149,7 @@ WP-495 後，operation runtime 的現行位置為
 | S45 C2 語義退出 | WP-653–661 | MUC MAM 在同一快照證明確切的持久 occupancy、房間鎖定狀態與帳號權威（WP-653）；MIX MAM 的本地與聯邦查詢各由一個權威快照回答，聯邦查詢在 mutation replay 之前分派（WP-654）；個人歷史在寫入交易內取樣封存偏好（WP-655）；MIX 發布者身分在儲存交易內核對（WP-656）；MUC 討論是否封存由鎖定的 room 列決定（WP-657）；MAM 關閉時隱藏附屬介面（WP-658）；以資料庫測試固定刪除與 legal hold 下的分頁與撤回行為（WP-659）；vCard store 的測試專用 import 加上 cfg（WP-660）；記錄階段（WP-661）。盤點見 5.41 | C2 的 15 項發現關閉 10 項，C2-12 的目前行為由測試固定，需要產品決策的 4 項留在已知問題；新增 26 個單元測試與 22 個 ignored 資料庫測試，資料庫測試登記在 CI 執行的 DB 腳本，合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S46 C1 語義退出（第二批）與預先拆分 | WP-662–684 | 後續路線圖（WP-662）；接近行數上限的 9 個檔案依職責拆分：PubSub service（WP-663）、PubSub PostgreSQL 模組（WP-664）、direct lifecycle 的測試（WP-665）、XEP-0198 SM（WP-666）、BOSH crate 根（WP-667）與憑證發布（WP-668）只移動，叢集 listener（WP-669）、MUC join（WP-670）與聯邦 MUC 訊息（WP-671）的單一長函式依原順序抽成步驟函式；PubSub core 與 application 的 crate 根依宣告族拆分（WP-672）；型別化權威、注入的時鐘與 ID、型別化 admission 鍵的共用契約（WP-673）；按需的鎖與延遲量測（WP-674）；一般 presence 重播（WP-675）與 PEP 最新項目重播（WP-676）每頁一個唯讀快照；訂閱命令在訂閱鎖下決定（WP-677）；發布政策與擁有者寫入以鎖定狀態為準（WP-678）；PEP 發布與擁有者表單由一份 core 政策決定（WP-679）；頭像 presence 快取依擁有者 fence（WP-680）；其餘變更以型別化鍵 admission（WP-682）；PostgreSQL 與 workflow 的事件 ID 由服務的來源產生（WP-683）；`northstar-http` 健康檢查 fixture 保留連接埠（WP-681）；記錄階段（WP-684）。盤點見 5.42 | C1 的 16 項發現全部關閉；最大的生產檔由 1,492 行降為 1,425 行；拆分通過只移動檢查或逐行比對；新增 51 個單元測試與 29 個 ignored 資料庫測試（24 個登記在 CI 執行的 DB 腳本，5 個是按需量測），合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S47 C2 產品決策 | WP-685–691 | 依使用者對 S44 C2 審計 4 項的決定實作：先只移動地拆分 MIX repository port（WP-685）與治理資料生命週期模組（WP-686）；MIX 個人副本以永久的來源撤回事實收斂到頻道撤回（WP-687，migration 0159）；聯邦 MUC MAM 入列以交易內的 generation 列 fence outbox 配額（WP-688，migration 0160）；本地與聯邦 MUC MAM 共用 room-core 的一個投影（WP-689）；legal hold 期間撤回與審核經顯示覆蓋層成功，匯出改為附帶顯示變更的 V3 雜湊鏈（WP-690，migration 0161）；記錄階段（WP-691） |
+| S48 C3 語義退出 | WP-695–704、715 | 唯讀審計 room 上下文（C3 MUC、C4 MIX 各 19 項）後修正 C3：共用的確切 occupant 路由契約（WP-695）；groupchat 與撤回投遞給 admission 時提交的受眾，本地路徑先取使用者鎖（WP-698）；房間退役回傳確切的效果（WP-699）；延遲事件以提交時的事實渲染、ordinal 保留取完整 claim、容量分片依升序鎖定（WP-700）；房間讀取在一個唯讀快照回答且不寫入（WP-701）；加入與 SM resume 以提交的權威渲染（WP-696）；私訊、voice 請求與邀請以確切路由投遞（WP-697）；注入的時鐘與 ID，鎖定房間的期限由 PostgreSQL 判斷（WP-702）；型別化的轉換與行動者權威（WP-703）；runtime 執行緒的 stack 提高到 8 MiB，修正推送後 CI 在 debug build 抓到的溢位（WP-715）；記錄階段（WP-704）。盤點見 5.44 | C3 的 19 項發現全部關閉；新增 47 個單元測試與 43 個 ignored 資料庫測試，資料庫測試登記在 CI 執行的 DB 腳本，合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -2028,6 +2029,98 @@ S47 後最大的生產檔是 `northstar-stream` 的 `local_routes/session_table.
 `muc_mam_payload_never_trusts_archived_identity_extensions`，由 room-core 投影的測試取代。Cargo.lock 仍是 485 個套件；
 新增 migration 0159–0161，共 160 項。
 
+### 5.44 S48 盤點：C3 語義退出（`e2df0ddfd5a39ab636e569425b96a2a56fb655b8`）
+
+S48 依[後續路線圖](next-steps-roadmap.zh-TW.md)開始 D，room 上下文排第一。先唯讀審計（報告不入庫；審計報告標為 WP-694，
+這個編號後來由 runtime 帳號列鎖的修正使用），分成 C3（MUC，19 項）與 C4（MIX，19 項）。S48 修正 C3，C4 由 S49 處理。
+使用者決定了需要產品判斷的兩項：C3-09 鎖定房間的設定期限到時，房間連同仍在房內的建立者一起銷毀，維持現狀並修正文件；
+C3-11 延遲的管理事件取提交時與投遞時較嚴格的真實 JID 政策。WP-695 先落地共用的確切路由型別，WP-696–701 平行開發，
+WP-702、703 依序接在後面。C3 的 19 項發現至此全部關閉。WP-695–701 推送後，CI 的 PostgreSQL protocol integration
+在 debug build 的 worker 執行緒 stack 溢位，由 WP-715 修正。S47 與 S48 之間另有 WP-692（`url` 2.5.9）、WP-693
+（`northstar-http` 健康 fixture 的偶發失敗）與 WP-694（runtime 帳號列鎖 capability，migration 0162），內容見第 8 節。
+
+| WP | 內容 |
+| --- | --- |
+| WP-695 | C3-05／06／07 的共用前提：room-core `occupancy::MucOccupantRoute`（暱稱、full JID、connection、occupancy epoch）對應本地路由表的確切身分，暱稱被後來的 occupant 重用時不會匹配。叢集 fan-out 信封第 2 版以 `target_route`（私訊）或 `audience`（房間）攜帶路由，每個信封最多 512 個；沒有版本的信封照舊以房間與暱稱查找 |
+| WP-698 | C3-05：groupchat、作者撤回與審核撤回原本在提交後從名冊取即時受眾。`MucLiveAudienceRepository` 在同一 PostgreSQL 交易內 admission 並擷取該房間 incarnation 的 active 與 suspended occupancy（上限 10,000 個路由），回條把受眾綁到 fan-out permit，重放不帶受眾。叢集廣播只送目的節點的路由，每 512 個或接近簽章上限時分割；listener 只投遞到確切路由，拒絕格式錯誤的版本化信封。投遞仍是 best effort。C3-13：本地路徑先取 enabled-user capability，再取 namespace 29 與 room 列，與帳號刪除的使用者優先順序一致；本地行動者不存在、停用或無法解析時在任何房間鎖之前回 Unauthorized；聯邦路徑不取使用者鎖。6 個 DB 測試 |
+| WP-699 | C3-09：鎖定房間到期、擁有者取消、協定 destroy、暫時房間刪除與系統 tombstone 回傳 `CommittedRoomRetirement`：退役房間的 UUID 與 incarnation，以及交易在鎖下撤銷的每個 occupancy 的確切路由與狀態碼。到期 worker、擁有者取消、SM 拆除與會話清理只移除並通知這些路由。暫時房間清理帶著離開的 incarnation，鎖定該房間與其 occupancy，只在仍為空時退役，不再以房間位址查找；沒有連線 fence 的舊 SM 拆除只經一個相符的 SM 會話解析房間。5 個 DB 測試 |
+| WP-700 | C3-11：管理事件與 operation 一起記錄渲染事實（whois 政策、kick／ban 行動者暱稱）。renderer 只有在提交時的事實與投遞時的政策都允許時才揭露真實 JID，取不到收件者目前角色時以提交時的角色為準；升級前的列隱藏其他 occupant 的真實 JID，收件者在自己的 presence 仍看得到自己的 JID。C3-12：`reserve_item_exact` 取完整的目前 claim，回 Ready、Completed 或 Stale，過時的 claim 不到傳輸；completed 檢查改為純讀取。C3-19：`CapacityPlan` 在第一次插入前依升序鎖 outbox 容量分片；鎖定房間清掃、帳號刪除撤銷與租約過期在 room 與 occupancy 鎖之後取全部 64 個。7 個 DB 測試，使用一般角色的 fixture，加入 repository conformance |
+| WP-701 | C3-02：探索、註冊 GET、擁有者 GET 與 ping 不再在讀取時寫入：純讀取回報資料庫的設定期限與型別化的「secret 不存在」狀態，擁有者 GET 對過期房間回 item-not-found、留給到期 worker 移除，self-ping 經 `refresh_muc_occupant_activity` 更新確切 occupancy；命令路徑保留 secret 的延遲初始化。C3-03／04：room disco#info／#items、註冊 GET、管理清單與擁有者表單在同一個無鎖的 REPEATABLE READ READ ONLY 快照讀可見性、保留、鏡像連結、名冊與請求者權威；S2S 管理請求者要證明已提交的確切 occupancy。C3-14：S2S 註冊提交後喚醒失敗仍回成功，由 worker 輪詢補上。C3-18：聯邦 ping 自己的 occupant JID 由該 JID 回覆並更新 occupancy，未加入的寄件者回 not-acceptable。occupant 定址的 IQ 在一個陳述式證明寄件者並把目標暱稱解析為一個確切路由，留在本節點。7 個 DB 測試 |
+| WP-696 | C3-01：`MucJoinContinuityRepository` 提交 C2S 與聯邦 claim，回傳提交的角色、從屬、whois 政策、presence 與 occupant ID，以及在同一交易於 occupancy 列之後讀的主題、有界歷史與名冊；身分不符時在任何本地或 Redis 發布之前回內部錯誤。Argon2 留在房間鎖外，claim 前密碼雜湊已變更時回 auth/not-authorized；被拒的首次加入保留已提交的鎖定房間保留。C3-10：鎖下的 suspend 與 resume 要求確切的 occupancy、連線 generation、SM 會話，以及以資料庫時鐘判斷未過期的租約，過時的列不變。C3-17：PostgreSQL 權威開啟時一律執行 PostgreSQL 轉換，只有 Redis 投影跟隨叢集旗標。沒有有效 suspended 權威的 resume 以既有的 unavailable presence 與狀態碼 332 離開房間，不隱式重新加入。7 個 DB 測試 |
+| WP-697 | C3-06：`MucAddressedDeliveryRepository` 在一個唯讀快照證明寄件者的確切 occupancy、房間的私訊政策與目標的確切路由，路由不見或被重用時丟棄。叢集私訊信封第 2 版保留 `target_nick` 並加上 `target_route`。C3-07：voice 請求信封加 `require_role: "moderator"`，送出與接收節點在投遞前各以一個無鎖查詢重驗 moderator，查詢失敗不投遞。C3-08：mediated 與 XEP-0249 直接邀請在 admission 交易內以鎖定的房間 revision 決定開放或授權投遞，在同一快照證明邀請者並讀兩邊的封鎖清單；每位受邀者各自提交，提交前不嘗試 spool、outbox 或即時路由。S2S 私訊、decline 與 voice 用同一套權威。8 個 DB 測試 |
+| WP-702 | C3-15：room-core `clock.rs` 的 `MucClock`、`MucIdSource`（系統、固定與序列實作）、`MucTimeSources`，以及每個命令讀一次時鐘、取一次 ID 的 `MucRequestFacts`；節點組合讓 MUC 服務、協定 host、鎖定房間到期 worker 與 SM 拆除共用一個系統來源，協定測試用固定時鐘與序列 ID。鎖定房間的設定期限只由 PostgreSQL 判斷，在 room 列等待之後取 `clock_timestamp()`：涵蓋保留與首次加入、擁有者 GET／SET（含舊路徑）、聯邦 IQ 命令查找與 SM resume（過期時 fail closed）。新 port `MucRoomDeadlineRepository`、`MucRetirementIdentityRepository`。房間 secret 與 Argon2 salt 仍用 OS 亂數。3 個 DB 測試 |
+| WP-703 | C3-16：room-core `muc_authority` 的 `MucOccupancyTransition`（Suspend、Resume、Rebind、Leave，拼寫不變）、`VerifiedMucActor` 與 `VerifiedMucPrincipal`，由 `MucActorAuthority::verified` 從 kernel 的 `CanonicalJid`、`OccupantNick`、`Role`、`Affiliation` 建立，`ClusterMucOccupancyTarget` 有檢查過的存取子。轉換函式取 enum，在 SQL 與 digest 綁 `as_str()`，未知轉換的執行期檢查因型別排除而刪除。`canonical_local_muc_room` 委派給新的 `local_muc_room_jid`（回傳 `MucRoomJid`，在 kernel parser 之前拒絕 resource）。序列化的結構保留字串欄位，信封、儲存的 JSON 與 digest 不變 |
+| WP-715 | 推送 WP-695–701 後，CI 的 PostgreSQL protocol integration 在成員限定房間的 mediated 邀請中止了 debug server：`tokio-rt-worker` 的 stack 溢位。core dump 顯示 2 MiB 的 worker stack 上一條 2.09 MB 的呼叫鏈：WebSocket actor、協定分派（304 KB）、訊息投遞（703 KB）、MUC groupchat 分派（215 KB）、WP-697 重寫的邀請處理（180 KB）、邀請 repository 與叢集從屬交易，在 sqlx 內溢位。未最佳化的建置把一個 async 函式所有 await 的暫存放在同一個 frame。`main` 改為自建 multi-thread runtime，worker 與 blocking pool 執行緒各保留 8 MiB stack（虛擬保留，只提交用到的頁）；runtime 無法啟動時同樣經有界的 console 回報。架構門禁檢查兩者。CI 這個 job 的五個腳本在本機 loopback PostgreSQL 重現溢位，修正後通過 |
+| WP-704 | 記錄階段 |
+
+讀寫規則：
+
+- MUC 命令的權威、受眾與渲染事實在同一 PostgreSQL 交易決定並提交；提交後的步驟（本地路由、Redis、叢集信封、outbox）
+  只使用回條帶出的確切路由，不再以房間位址或暱稱重查名冊。路由不見或被重用時丟棄，不退回名冊。
+- 查詢不寫入：探索、註冊 GET、擁有者 GET 與管理清單在一個 REPEATABLE READ READ ONLY 快照回答；只有命令路徑會延遲
+  初始化 occupant-ID secret。
+- 鎖順序：本地路徑依序取 enabled-user capability、namespace 29 advisory 鎖、room 列、occupancy 列，最後依升序取 outbox
+  容量分片（清掃類取全部 64 個）；聯邦路徑不取使用者鎖。
+- 時間與 ID：每個命令讀一次牆鐘、取一次 ID（`MucRequestFacts`）；鎖定房間的期限只由 PostgreSQL 在列等待之後的
+  `clock_timestamp()` 判斷。可注入的 ID 來源只產生 operation 與事件 ID，房間 secret 與 Argon2 salt 一律用 OS 亂數。
+- 型別：kernel 的 MUC 位址與角色型別只由 core 的檢查過的存取子產生，序列化與 SQL 邊界轉回相同字串；room-core 不啟用
+  kernel 的 serde feature。
+- 投遞仍是 best effort（`ARCH-CLU-VOLATILE`）：S48 讓受眾確切，不讓 groupchat 變成可靠投遞。
+
+部署：沒有 migration，儲存格式、stanza 與狀態碼不變；runtime 執行緒的 stack 保留從 2 MiB 改為 8 MiB（WP-715），
+只多占虛擬位址空間。舊節點不認識 `envelope_version`：它把第 2 版的房間信封當成舊格式，
+投遞給本地名冊；私訊照 `target_nick` 投遞，也不重驗 voice 請求的 moderator；一個節點的受眾超過 512 個路由時，舊節點會對
+每個分割的信封各投遞一次。新節點收到沒有版本的信封時走舊路徑。所以確切受眾要等全部節點升級後才成立，建議所有節點一起
+升級；混版期間舊節點維持舊語義，而且可能重複投遞。
+
+線上行為的改變：
+
+- 延遲的管理事件取提交時與投遞時較嚴格的真實 JID 政策；升級前的待送列隱藏其他 occupant 的真實 JID（C3-11，使用者決定）。
+- 鎖定房間的設定期限到時，房間連同其中的 occupant（包括建立者）一起銷毀，這是原本的行為；`PROGRAM_RESPONSIBILITIES` 原本
+  寫成只清除空房間，已修正（C3-09，使用者決定）。
+- SM resume 沒有有效的 suspended 權威時 fail closed：送出 unavailable presence 與狀態碼 332，客戶端要重新加入；PostgreSQL
+  權威開啟時，單機模式也執行 PostgreSQL 轉換。
+- 擁有者 GET 對過期的鎖定房間回 item-not-found，不再在讀取時刪除房間。
+- S2S 管理請求者要證明已提交的確切 occupancy，過時或未加入的請求者回既有的 unauthorized。
+- 聯邦 ping 自己的 occupant JID 由該 JID 回覆並更新 occupancy，未加入的寄件者回 not-acceptable，與 C2S 一致（XEP-0410）。
+- S2S 註冊提交後喚醒失敗仍回成功。
+- claim 之前密碼雜湊已變更的加入回 auth/not-authorized。
+
+其他 stanza、錯誤條件、邀請 ID、spool 預設與 history 的上限、順序和篩選都不變。
+
+與審計的差異：
+
+- C3-16：審計建議 `matches_authenticated_scope` 改為 `verified(..).is_some()`。兩者不等價：檢查過的投影另外拒絕暱稱、角色
+  或從屬欄位格式錯誤的輸入，範圍判斷接受，所以保留原本體；MUC 歷史的行動者位址 helper 也保留舊的接受範圍。SQL 與 digest
+  的拼寫不變。
+- C3-05／06：審計列出確切路由與 locator 查找兩種做法，採用前者：版本化信封帶確切路由，接收端不再查名冊。
+- C3-12：S2S 的重複入列仍允許（叢集契約），只修正 completed 查詢中未受 fence 的保留。
+- C3-01 保留被拒首次加入的鎖定房間保留；C3-08 邀請仍逐位受邀者提交，不改成全有或全無；C3-02 的 self-ping 仍更新租約，
+  改為具名的活動命令。這些是審計列出、由架構決定的選項。
+- 審計把 C3-09 的「維持現狀並改文件」與「保留建立者」並列，使用者選前者；C3-11 的兩個選項中使用者選較嚴格者。
+
+尚未處理：C4（MIX）的 19 項由 S49 處理（WP-705 起）；debug build 的大 frame（訊息投遞 703 KB、協定分派 304 KB、
+MUC groupchat 分派 215 KB、邀請處理 180 KB）是結構債，要把這些處理函式依分支拆成小函式；D 的其他上下文（message 起）；
+第 2 版叢集信封沒有混版的自動化
+測試；room-core 的序列化結構仍是字串欄位，要改成型別化欄位需要新的信封版本；聯邦 MUC MAM 的對端互通仍是
+`EXT-FEDERATION` 的 F15。S47 記錄的 `maintenance_health` 偶發失敗已由 WP-693 修正。
+
+新決定：
+
+- 鎖定房間到期時銷毀房間與其中的 occupant，建立者也不例外（C3-09，WP-699）。
+- 延遲的 MUC 管理事件以提交時與投遞時較嚴格者決定是否揭露真實 JID；升級前的待送列以較嚴格的方式渲染（C3-11，WP-700）。
+- 叢集 MUC 投遞以確切 occupancy 路由為準，版本化信封不退回名冊（WP-695、697、698）。
+- SM resume 沒有有效的 suspended 權威時 fail closed，不隱式重新加入（WP-696）。
+- 鎖定房間的設定期限只由 PostgreSQL 的時鐘判斷（WP-702）。
+- voice 請求帶真實 JID，送出與接收兩端在投遞前都重驗 moderator（WP-697）。
+
+S48 後最大的生產檔仍是 `northstar-stream` 的 `local_routes/session_table.rs`（1,388 行），最大的測試檔仍是
+`stage4_replay/tests.rs`（2,742 行）。workspace 測試由 3,687 個增為 3,777 個（ignored 由 395 個增為 438 個，其中
+315 個在 `northstar-db-it`），原有名稱不變。新增的 43 個 ignored 資料庫測試中，36 個登記在 CI 執行的
+`muc-db-wsl.sh`，7 個 render capacity 測試在 `repository-conformance-db-wsl.sh`。自建 schema 的 MUC 資料庫測試使用
+`muc-db-wsl.sh` 會清理的前綴（`muc_lifecycle_test_`、`muc_invite_test_` 或 `muc_history_test_` 加 32 個十六進位字元）。
+Cargo.lock 仍是 485 個套件；S48 沒有新 migration，連同 WP-694 的 0162 共 161 項。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點），S31 的 WP-483 起 agy 額度用盡，再改由 Codex CLI 執行（第 10 點）。
@@ -2339,6 +2432,14 @@ S47 後最大的生產檔是 `northstar-stream` 的 `local_routes/session_table.
      分支，並由兩邊的測試共同驗證（S47）。
    - 委派寫的 DB 測試要在接鏈前實際執行，不能只看編譯：WP-690 的 4 個競態測試在整條鏈上才第一次執行，連續暴露三層 fixture
      錯誤；一個 WP 改變共用行為（匯出的隔離等級與雜湊格式）時，也要重跑其他 WP 依賴該行為的測試（S47）。
+   - 每個 WP 單獨的檢查都通過，整條鏈仍可能失敗：S48 有三個 WP 改了共用行為（WP-699 退役函式的回傳型別、WP-696 的
+     確切 SM 會話、WP-700 管理事件的 `render_policy` 與 `original_audience`），依賴舊行為的其他 WP 測試只在鏈上失敗，
+     鏈重建了三次。接鏈後先跑整條鏈的 clippy（含 `northstar-db-it`）與全部受影響的 DB 套件；修正併入改變行為的 WP，
+     再重放之後的提交（S48）。
+   - 自建 schema 的 DB 測試要用該 DB 腳本會清理的前綴（`muc-db-wsl.sh` 只接受三個 MUC 前綴），規格要寫明（S48）。
+   - 離線 CI 不跑 PostgreSQL protocol integration：S48 推送後 CI 才發現 debug build 的 worker stack 溢位（WP-715）。改動
+     C2S、MUC 或 MIX 處理路徑的階段，推送前要在本機 loopback PostgreSQL 跑這個 job 的五個腳本；容器要用 host network，
+     `inet_server_addr()` 才會是 loopback（S48）。
 10. Codex（S31 的 WP-483 起，2026-11-16）：agy 額度用盡期間，程式修改改由 Codex CLI（`gpt-6.1-sol`，2026-11-19 起
     `gpt-6.2-sol`）執行，呼叫方式與
     限制同第 8 點，`model_reasoning_effort` 依任務難度選擇；第 1、3、4、7 點與第 9 點的機械搬移做法照舊。agy 恢復後回到
@@ -2951,4 +3052,16 @@ Stage 證據仍綁定其原提交。
 | WP-690 | 完成：legal hold 期間撤回與審核經顯示覆蓋層成功，匯出改為 V3（C2-09，migration 0161） | 見 `git log --grep '\[WP-690\]'` |
 | WP-691 | 完成：記錄 S47 的階段與盤點（5.43）、目標架構第 4、5 節、執行計劃的 C2 列、已知問題的 4 列與 `EXT-FEDERATION`、資料生命週期、OpenAPI、聯邦矩陣的 F15 與路線圖的狀態。WP-685–690 接成一條鏈驗證：fmt、clippy、受影響 23 個 crate 的單獨建置與測試、workspace 測試與名稱比對、全部門禁與 Python 腳本測試、Stage 4 lanes、node 腳本測試、離線 CI，以及本機 PostgreSQL 上 MIX、MUC、MAM、聯邦、retention、operations API、abuse 與 PIE 的資料庫測試與 repository conformance。整條鏈的資料庫測試抓到 WP-690 新測試與 WP-687 一個測試的 fixture 錯誤（投遞的 MAM 旗標、缺 `jabber:client` 命名空間、匯出的隔離等級與 V2 雜湊），修正併入 WP-690 後重跑通過 | 見 `git log --grep '\[WP-691\]'` |
 | WP-692 | 完成：`url` 鎖定版本升到 2.5.9（RUSTSEC-2026-0592），連帶 `form_urlencoded` 升到 1.2.3；fuzz 的 lock 對齊同一版本。S47 推送後的 CI 稽核因這個新公告失敗 | 見 `git log --grep '\[WP-692\]'` |
+| WP-693 | 完成：`northstar-http` 的 `HealthFixture::stop` 在完整 workspace 執行時偶發「health listener survived shutdown」。同一個單元測試 binary 中的 `history_route_follows_effective_mam_profile` 會 spawn 子程序，子程序在 exec 之前持有所有描述子的複本，使已 drop 的 listener 仍在監聽；`crate::test_support` 的測試專用 fence 讓健康 fixture （共享）與 spawn 子程序的測試（排他）互斥，斷言不變。以壓力測試驗證：沒有 fence 時 52,152 次中 966 次連上已 drop 的 listener，有 fence 時為 0 | 見 `git log --grep '\[WP-693\]'` |
 | WP-694 | 完成：執行期角色對 `users` 沒有 `UPDATE`，而 PostgreSQL 的列鎖需要它，原本直接鎖 `users` 的 44 個生產陳述式（26 個檔案）在正式角色下以 42501 失敗；migration 0162 加入三個固定強度的 `northstar_lock_user_rows_*(uuid[])` 能力並改寫所有呼叫點，新增 `check-runtime-row-locks.py` 靜態門禁，角色 CI 以正式執行期登入重播 51 個呼叫鎖能力的陳述式並以 NOWAIT 探測鎖強度 | 見 `git log --grep '\[WP-694\]'` |
+| WP-695 | 完成：確切 MUC occupant 路由契約與叢集 fan-out 信封第 2 版（C3-05、06、07 的前提） | 見 `git log --grep '\[WP-695\]'` |
+| WP-696 | 完成：加入以提交的權威渲染；SM suspend 與 resume 在鎖下驗證確切 occupancy、會話與租約，失敗時 fail closed；PostgreSQL 轉換不再依賴叢集旗標（C3-01、10、17） | 見 `git log --grep '\[WP-696\]'` |
+| WP-697 | 完成：私訊、decline、voice 請求與邀請以確切路由和鎖定的房間 revision 投遞，voice 請求在兩端重驗 moderator（C3-06、07、08） | 見 `git log --grep '\[WP-697\]'` |
+| WP-698 | 完成：groupchat 與撤回投遞給 admission 時提交的受眾；本地路徑先取使用者鎖（C3-05、13） | 見 `git log --grep '\[WP-698\]'` |
+| WP-699 | 完成：房間退役回傳確切的路由與狀態碼，移除與通知只作用在這些路由（C3-09） | 見 `git log --grep '\[WP-699\]'` |
+| WP-700 | 完成：延遲的管理事件以提交時的渲染事實與較嚴格的政策決定真實 JID；ordinal 保留取完整 claim；容量分片依升序鎖定（C3-11、12、19） | 見 `git log --grep '\[WP-700\]'` |
+| WP-701 | 完成：房間讀取在一個唯讀快照回答且不寫入；S2S 管理請求者證明確切 occupancy；註冊的喚醒失敗不改回覆；聯邦 self-ping 與 C2S 一致（C3-02、03、04、14、18） | 見 `git log --grep '\[WP-701\]'` |
+| WP-702 | 完成：MUC 命令注入時鐘與 ID，鎖定房間的設定期限由 PostgreSQL 判斷（C3-15） | 見 `git log --grep '\[WP-702\]'` |
+| WP-703 | 完成：型別化的 occupancy 轉換與行動者權威（C3-16） | 見 `git log --grep '\[WP-703\]'` |
+| WP-704 | 完成：記錄 S48 的階段與盤點（5.44）、目標架構第 4、5 節、執行計劃的 C3 列、已知問題的 `ARCH-MUC-EXACT-ROUTE`、程式職責表的 `locked-muc-expiry`、叢集文件的第 2 版信封、CHANGELOG 與路線圖的狀態，並補記 WP-693。WP-695–703 接成一條鏈驗證：fmt、clippy、受影響 20 個 crate 的單獨建置與測試、workspace 測試與名稱比對、全部門禁與 Python 腳本測試、Stage 4 lanes、node 腳本測試、離線 CI，以及本機 PostgreSQL 上 MUC 的資料庫測試與 repository conformance。整條鏈的 clippy 與資料庫測試抓到三個跨 WP 的測試失敗（WP-699 的回傳型別、WP-696 的確切 SM 會話、WP-700 的渲染事實與原始受眾），修正併入 WP-700 與 WP-696 後重跑通過。推送後 CI 抓到的 stack 溢位由 WP-715 修正，之後在本機重跑該 job 的五個腳本通過 | 見 `git log --grep '\[WP-704\]'` |
+| WP-715 | 完成：runtime worker 與 blocking pool 執行緒保留 8 MiB stack，修正 debug build 在 MUC 邀請路徑的溢位；架構門禁檢查 `main` 的回報與 stack 設定 | 見 `git log --grep '\[WP-715\]'` |

@@ -150,6 +150,7 @@ WP-495 後，operation runtime 的現行位置為
 | S46 C1 語義退出（第二批）與預先拆分 | WP-662–684 | 後續路線圖（WP-662）；接近行數上限的 9 個檔案依職責拆分：PubSub service（WP-663）、PubSub PostgreSQL 模組（WP-664）、direct lifecycle 的測試（WP-665）、XEP-0198 SM（WP-666）、BOSH crate 根（WP-667）與憑證發布（WP-668）只移動，叢集 listener（WP-669）、MUC join（WP-670）與聯邦 MUC 訊息（WP-671）的單一長函式依原順序抽成步驟函式；PubSub core 與 application 的 crate 根依宣告族拆分（WP-672）；型別化權威、注入的時鐘與 ID、型別化 admission 鍵的共用契約（WP-673）；按需的鎖與延遲量測（WP-674）；一般 presence 重播（WP-675）與 PEP 最新項目重播（WP-676）每頁一個唯讀快照；訂閱命令在訂閱鎖下決定（WP-677）；發布政策與擁有者寫入以鎖定狀態為準（WP-678）；PEP 發布與擁有者表單由一份 core 政策決定（WP-679）；頭像 presence 快取依擁有者 fence（WP-680）；其餘變更以型別化鍵 admission（WP-682）；PostgreSQL 與 workflow 的事件 ID 由服務的來源產生（WP-683）；`northstar-http` 健康檢查 fixture 保留連接埠（WP-681）；記錄階段（WP-684）。盤點見 5.42 | C1 的 16 項發現全部關閉；最大的生產檔由 1,492 行降為 1,425 行；拆分通過只移動檢查或逐行比對；新增 51 個單元測試與 29 個 ignored 資料庫測試（24 個登記在 CI 執行的 DB 腳本，5 個是按需量測），合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S47 C2 產品決策 | WP-685–691 | 依使用者對 S44 C2 審計 4 項的決定實作：先只移動地拆分 MIX repository port（WP-685）與治理資料生命週期模組（WP-686）；MIX 個人副本以永久的來源撤回事實收斂到頻道撤回（WP-687，migration 0159）；聯邦 MUC MAM 入列以交易內的 generation 列 fence outbox 配額（WP-688，migration 0160）；本地與聯邦 MUC MAM 共用 room-core 的一個投影（WP-689）；legal hold 期間撤回與審核經顯示覆蓋層成功，匯出改為附帶顯示變更的 V3 雜湊鏈（WP-690，migration 0161）；記錄階段（WP-691） |
 | S48 C3 語義退出 | WP-695–704、715 | 唯讀審計 room 上下文（C3 MUC、C4 MIX 各 19 項）後修正 C3：共用的確切 occupant 路由契約（WP-695）；groupchat 與撤回投遞給 admission 時提交的受眾，本地路徑先取使用者鎖（WP-698）；房間退役回傳確切的效果（WP-699）；延遲事件以提交時的事實渲染、ordinal 保留取完整 claim、容量分片依升序鎖定（WP-700）；房間讀取在一個唯讀快照回答且不寫入（WP-701）；加入與 SM resume 以提交的權威渲染（WP-696）；私訊、voice 請求與邀請以確切路由投遞（WP-697）；注入的時鐘與 ID，鎖定房間的期限由 PostgreSQL 判斷（WP-702）；型別化的轉換與行動者權威（WP-703）；runtime 執行緒的 stack 提高到 8 MiB，修正推送後 CI 在 debug build 抓到的溢位（WP-715）；記錄階段（WP-704）。盤點見 5.44 | C3 的 19 項發現全部關閉；新增 47 個單元測試與 43 個 ignored 資料庫測試，資料庫測試登記在 CI 執行的 DB 腳本，合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
+| S49 C4 語義退出 | WP-705–714、716、717 | 修正 S48 審計的 C4（MIX）：先只移動地把 MIX 協定與儲存的大檔拆成葉模組（WP-705），加入型別化的 MIX 位址與權威（WP-706）；presence 復原以資料庫時鐘的 cutoff 分頁清完（WP-709）；反射流量以一個 PAM 快照 admission，只有新的儲存扇出給入准帳號（WP-708）；PAM 投影與名冊 delta 跟 Core 成員同交易提交，遠端 PAM 加入轉送邀請與 ANON 偏好（WP-707）；管理表單以稀疏 patch 在頻道鎖下合併，項目時間戳由注入的時鐘取一次（WP-710）；託管探索在一個快照回答、隱藏頻道與不存在的頻道相同，MUC 鏡像在建立之後以頻道 UUID fence 連結（WP-711）；relay 回程只到 admission 時的確切路由，回覆與逾時恰好一個消費者（WP-712）；一般發布只渲染一次，持久投遞綁定收件者帳號（WP-713，migration 0163）；聯邦邀請的授權、token 與結果原子提交（WP-714）；叢集測試改等維護掃除已崩潰節點的 MUC 成員（WP-716）；記錄階段（WP-717）。盤點見 5.45 | C4 的 19 項發現全部關閉，room 上下文完成；新增 38 個單元測試與 45 個 ignored 資料庫測試，資料庫測試登記在 CI 執行的 `mix-family-db-wsl.sh`，合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱除了 WP-713 改名的一個之外不變；全部門禁、Python 腳本測試、離線 CI 與本機 PostgreSQL protocol integration 通過 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -2121,6 +2122,95 @@ S48 後最大的生產檔仍是 `northstar-stream` 的 `local_routes/session_tab
 `muc-db-wsl.sh` 會清理的前綴（`muc_lifecycle_test_`、`muc_invite_test_` 或 `muc_history_test_` 加 32 個十六進位字元）。
 Cargo.lock 仍是 485 個套件；S48 沒有新 migration，連同 WP-694 的 0162 共 161 項。
 
+### 5.45 S49 盤點：C4 語義退出（`d0e6af431bee732f1a134c636f9423eb6c1cb458`）
+
+S49 修正 S48 審計的 C4（MIX，19 項），依審計的封包分工：WP-705 先只移動地把 MIX 協定與儲存的大檔拆成葉模組（P0），
+WP-706 加入型別化的 MIX 位址與權威（P9，C4-18），之後 WP-707–714 各負責一個封包（P1–P8）平行開發，在一條鏈上依
+WP-709、708、707、710–714 的順序接起來（WP-708 的 probe 回覆要用 WP-709 的 liveness API）。使用者決定了需要產品判斷的
+兩項：C4-11 持久投遞綁定收件者的帳號 UUID，需要 migration 0163；C4-13 遠端 PAM 加入把邀請與 ANON 偏好完整轉送給遠端頻道。
+C4 的 19 項發現至此全部關閉，room 上下文的語義退出完成。S48 推送後 CI 的多節點叢集測試失敗，由 WP-716 修正並併入本階段。
+程式修改由 Codex CLI（`gpt-6.2-sol`）執行（第 6 節第 10 點）。
+
+| WP | 內容 |
+| --- | --- |
+| WP-705 | P0：C4 的八個封包都會改同一批大型 MIX 檔，先把分支本體只移動到同一父模組的子模組。`northstar-mix-xmpp`：channel_iq 的成員、銷毀、偏好、建立與邀請，channel_pubsub 的存取與管理發布，session 的 PAM、名冊、presence 與 IQ relay，federation 的 disco、IQ 分派、PAM 完成、relay 結果與反射入口；IQ relay 到期與 presence 復原兩個 worker 從 `lib.rs` 移到 `workers/`。`northstar-room-postgres` 的 mix：頻道建立、探索與銷毀，參與者復原與成員，管理存取與表單，PAM 完成的讀取，presence 與訊息發布。父模組在舊路徑 re-export 每個移動的項目，呼叫端不變；陳述式、鎖、交易與 wire 輸出不變。架構門禁改在 MIX crate 的全部生產檔中找兩個 worker 的註冊，仍要求各恰好一個，模式、重要性、watchdog 與 drain 政策不變 |
+| WP-706 | P9／C4-18：MIX 權威原本以字串傳遞，頻道 JID、參與者 ID、編碼的 relay JID 與 PAM 狀態在每個使用點各自解析。room-core 新增 `mix::authority`：`MixChannelAddress`、`MixChannelId`、`MixLocalParticipantId`、`MixRealJid`、`MixParticipantNick`、`MixStableParticipantId`、`MixParticipantId`、`MixRelayAddress`，以及 PAM 狀態、角色、JID 可見性、存取模型、撤回權、JID 可見性偏好、allow／block 與 PAM 操作的封閉 enum；每個 parser 只接受儲存字串與 wire 已使用的形式。room-application 與 mix-xmpp 既有的字串 helper 改為委派給這些型別，簽章、錯誤與輸出位元組不變 |
+| WP-709 | P3／C4-04、C4-14 的 cutoff 部分：啟動時的 presence 清掃最多過期一頁，空頁就當作完成，被並行寫入者鎖住或在第一頁之後的列永遠顯示 presence；cutoff 取自程序時鐘，復原標記在交易開始時蓋章，開始於 cutoff 之前、寫入於其後的發布會被過期。`MixPresenceRecoveryRepository` 在唯讀快照取一個 PostgreSQL cutoff（`prepare_recovery`），保留 30 秒的 probe 視窗，每頁最多 128 列（`RECOVERY_PRESENCE_PAGE_CAP`）。每頁一個 READ COMMITTED 交易：生產者 fence、以 SKIP LOCKED 取過期的 presence 列、頻道共享鎖、寫 unavailable outbox，最後無鎖檢查是否還有剩餘；空頁但仍有剩餘時以 100 ms 到 1 s 的退避重試。明確的 available 發布在寫入時蓋標記；重新確保既有的確切 resource 只更新時間戳。等過 route gate 後重驗連線、capability generation、gate 身分、可用性、可路由性與帳號。`refresh_probe_presence_liveness` 保留明確的 payload，不建列也不入列。6 個 DB 測試 |
+| WP-708 | P2／C4-03、C4-19：反射的 MIX 流量以多個陳述式讀帳號狀態、PAM 成員、訂閱與封鎖，期間提交的離開、重新加入或解除封鎖可能讓沒有任何單一狀態允許的反射通過；admission 失敗的反射原文仍可能封存與路由，新的儲存扇出到該位址的每個本地會話。`MixPamDeliveryRepository::pam_delivery_view` 以一個唯讀陳述式快照回答 presence、probe 與反射撤回的入口，不取列鎖或 advisory 鎖，送出或聯邦入列在讀取之後。`archive_verified_mix_reflection` 取型別化的頻道與收件者，在 READ COMMITTED 交易內取既有的來源共享 advisory 鎖、讀接收權威，再封存或去重，回傳 Denied、Conflict，或帶入准帳號 UUID 與 Stored／Replay 的 AdmittedOriginal；只有新的儲存在提交後扇出給該帳號有能力的本地會話，重放不扇出。反射的 presence 錯誤要求綁定的頻道、已加入且訂閱 presence 的啟用帳號、沒有頻道或網域封鎖、該帳號有能力的 resource，未綁定的錯誤被吸收。C4-04 的 probe 回覆部分接在 WP-709 之後：遠端已驗證 resource 對託管頻道送出的空 available presence 先呼叫 `refresh_probe_presence_liveness`，它改為回傳是否更新了該 resource 已知的 presence 列，已知的 payload 保留；沒有已知列時當作一般發布，從未發布過的參與者仍會出現。4 個 DB 測試 |
+| WP-707 | P1／C4-01、C4-02、C4-13、C4-10 的成員部分：託管的 PAM 成員與訂閱是 Core 狀態在不同路徑寫入的第二份副本，直接的 Core 離開留下 PAM 列與名冊項目，Core 的訂閱變更不到 PAM 投影；名冊推送在提交後重讀最新的名冊變更，並行的 ban 與重新加入可能把版本配錯註記；查找與鎖之間被銷毀的頻道以 repository 錯誤失敗；遠端 PAM 加入丟掉邀請與 ANON 偏好。`MixPamProjectionRepository` 回傳 `CommittedMixChange<T>`：結果加上交易寫入的每個名冊列各一個 `CommittedMixRosterDelta`（帳號、版本、變更、註記）。加入、離開、訂閱與暱稱更新、銷毀、ban／ACL 與遠端 PAM 完成在既有的 READ COMMITTED 投遞交易內綁定已知的本地帳號與參與者 incarnation，鎖順序為投遞 fence、帳號 capability、頻道、參與者、PAM、名冊。每個改變 Core 訂閱的路徑都把同一組訂閱寫進 PAM 投影；直接的 Core 離開一併移除 PAM 列與名冊項目，重複清理成功且不增加版本；銷毀與 ban 在頻道之前依 UUID 升序鎖候選帳號。推送由 delta 渲染，提交後的重讀刪除。查找後遺失的頻道是型別化的 `HostedMixOutcome::MissingChannel`，對應既有的 item-not-found。遠端 PAM 加入以既有的 XEP-0369 語法轉送邀請與 ANON 表單，預期值放在不透明的請求 ID；結果漏掉請求的偏好時走格式錯誤結果的路徑，不提交成員或名冊變更。投影 port 不是 `MixRepository` 的 supertrait，由 MIX host port 同時要求兩者，避免測試替身的預設回退形成 trait 循環。7 個 DB 測試 |
+| WP-710 | P4／C4-05、C4-08、C4-09、C4-14 的項目 ID 部分：偏好、資訊與設定表單在交易前與儲存狀態合併，兩個不相交的編輯會遺失其中之一，回覆可能報告未提交的值；設定在取頻道鎖之前檢查擁有權，期間被撤銷的擁有者仍可套用；預設值與無效數字由提交內容決定；資訊與設定的項目 ID 各自讀程序時鐘。`MixAdministrationRepository` 改取只帶提交欄位的 `PreferencePatch`、`InfoPatch`、`ConfigPatch`，在既有的已提交投遞 reconciliation 之後各以一個 READ COMMITTED 交易執行：投遞 advisory fence、可選的聯邦 IQ 鎖、頻道 FOR UPDATE，偏好再取參與者與偏好列。patch 合併進鎖定的狀態，回覆、投影與聯邦 journal 用提交的值。鎖定的 JID 可見性不再允許的偏好回 modify/not-acceptable 並保留原偏好；資訊依鎖定的列檢查提交的可見性；設定在鎖下授權目前的擁有者（auth/forbidden，不留副作用），保留預期 revision 衝突，格式錯誤或溢位的數字退回鎖定的值。room-core 新增 `MixClock`（系統與固定實作），`MixService` 每個命令以 `prepare_item_timestamp` 取一次，建立頻道的兩個初始項目共用同一個 ID，RFC 3339 格式不變。7 個 DB 測試 |
+| WP-711 | P5／C4-06、C4-07、C4-12：託管頻道的 disco#info 與 #items 以多個陳述式讀設定、名稱、請求者的 admission 與角色以及 MUC 鏡像，並行的設定或角色變更可能得到一半舊一半新的回答；隱藏頻道與不存在的頻道回答不同，洩漏了隱藏頻道；建立在成功路徑內連結 MUC 鏡像，連結失敗讓已提交的建立失敗，等待中的連結可能接到同一 localpart 重建的頻道。`MixHostedDiscoRepository::hosted_disco` 以一個 SELECT 在陳述式快照讀型別化的 incarnation、探索設定與名稱、行動者的 admission 與角色以及 active 的 MUC 對應，不取鎖也不寫入；C2S info／items 與 S2S info 由這個 view 渲染，隱藏頻道與不存在的頻道回相同的 item-not-found。建立交易不變；`link_created_mix` 之後在自己的 READ COMMITTED 交易內連結：既有的 `FOR UPDATE OF c, r` 成對鎖、鎖後檢查共同擁有權、插入前鎖住既有的鏡像列，以建立的頻道 UUID fence。連結失敗只記錄，已提交的建立仍成功；過時的 UUID 不會連到替換的頻道。5 個 DB 測試 |
+| WP-712 | P6／C4-17、C4-14 的經過時間部分：relay 的 MIX IQ 回覆或逾時 stanza 回程時依 JID 定址，可能到達替換的本地會話、同位址重建的頻道或替換的 PAM 成員；relay 等待檢查期間越過期限的回覆，若到期 worker 還沒 tick 仍可能勝出。room-core 新增 `RelayReturnAuthority` 與 `RelayReturnRoute`（帶帳號、驗證 generation 與連線的確切本地路由，或聯邦 full JID）、`RelayPamIncarnation`、`MixRelayMonotonic` 時鐘與 `ResponseTake`。`MixIqRelayIndex::take_response(id, expected, now)` 以 admission token 在共用的 30 秒單調期限上消費，回覆與到期 worker 恰好一個消費者，過時的回覆不能取用重用的 ID。託管 profile 快照另外回傳授權轉送的頻道 UUID，`MixRelayReturnRepository` 回答該頻道、PAM incarnation 與本地帳號是否仍為目前的，`deliver_return` 只在原本的確切連線入列。單純的離開或封鎖不重新授權、也不取消已 admission 的回覆；PAM incarnation、頻道 UUID、帳號或路由不同時，回覆與逾時都抑制。遲到但仍合格的回覆產生既有的 remote-server-timeout；聯邦回程仍定址到已驗證的 full JID，協定沒有連線 token。回程檢查是無鎖的獨立讀取；index 先取 admission mutex 再取 map 分片，await 期間不持有 guard。2 個 DB 測試 |
+| WP-713 | P7／C4-10 的訊息部分、C4-11：一般 MIX 發布先以無鎖讀取渲染發布者身分，再在鎖下渲染一次，兩次可見性變更造成衝突，期間被銷毀的頻道以 repository 錯誤失敗；持久的本地投遞只記收件者位址，同名刪除後重建的帳號可能收到舊帳號的訊息。`MixPublicationRepository::publish_message` 從 READ COMMITTED admission 交易（投遞 fence、頻道 FOR UPDATE、意圖與發布者讀取、封存與 outbox 寫入）讀到的發布者事實同步渲染一次；鎖下頻道或發布者不見時回 Absent，對應 item-not-found。migration 0163 在 `mix_delivery_recipients` 與 `mix_delivery_dead_letters` 加 `recipient_local_user_id`，以 migration 當時存在的帳號回填本地收件者（C4-11，使用者決定）；投影把每個本地收件者綁到目前的帳號，沒有帳號的本地位址不建列，遠端收件者仍以位址為準。封存或路由之前，worker 與接收的叢集節點以無鎖的獨立讀取檢查 claim 的列的帳號仍存在、啟用並擁有選定的會話；不符或舊的 NULL 走既有的 account-unavailable dead letter。dead letter 與 requeue 保留原 UUID；叢集信封、claim token 與 ACK 不變。9 個 DB 測試 |
+| WP-714 | P8／C4-15、C4-16：聯邦邀請請求在一個交易授權，拒絕的 journal 與入列在另一個交易，與第一次決定競爭的重試可能被重新授權或看到不同的答案；精確重試可能產生第二個 token，改變的 digest 依碰撞被發現的位置回不同的錯誤。`MixInvitationRepository::execute_mix_invitation` 取型別化的頻道位址、頻道 UUID、邀請者與受邀者，token 的熵在寫入前由 OS 準備（Debug 時遮蔽）。聯邦路徑維持預設的 READ COMMITTED：IQ 鍵 advisory 鎖、清理過期結果並查 digest、頻道列鎖、權威檢查、只在成功時清理 token 並插入雜湊、結果 journal，再取既有的 S2S outbox 鎖；拒絕不寫 token，拒絕與 S2S 回覆隨決定一起提交。本地路徑取相同的頻道與 token 鎖，不取 IQ fence、journal 或 outbox。`finalize_mix_iq` 為已持有 admission fence 的呼叫者記錄結果。精確重試回原本的 token、不產生新雜湊；改變的 digest 不論在分派前、fence 或 fallback admission 被發現，都回同一個 cancel/conflict。wire 方法仍是 get；token 格式、一小時 TTL、雜湊儲存、七天的結果保留與錯誤優先順序不變。5 個 DB 測試 |
+| WP-716 | S48 推送後 CI 的多節點叢集 job 失敗：測試斷言一次明確的 room disco#items 讀取會在 3 秒內把已崩潰節點的成員從 Redis MUC 投影移除。WP-701 之後這個讀取只在一個 PostgreSQL 快照回答、什麼都不寫（包括 Redis），WP-695–701 那次 CI 通過只是剛好碰上 30 秒一次的叢集維護。測試保留讀取的檢查（回覆已不含該成員），改為最多等 45 秒讓維護完成：維護會續約本地的確切 occupant、掃描每個 active 房間，並移除節點與程序租約都已消失的成員。只改 `scripts/cluster-wsl.py` |
+| WP-717 | 記錄階段 |
+
+讀寫規則：
+
+- MIX 命令的權威、名冊 delta 與 PAM 投影在同一個 READ COMMITTED 交易提交；推送、回覆與聯邦 journal 由回條帶出的 delta
+  與提交的值渲染，不在提交後重讀。
+- 鎖順序：投遞 advisory fence、（聯邦 IQ 才有的）IQ 鍵鎖、帳號 capability、頻道、參與者、PAM、名冊；銷毀與 ban 在頻道之前
+  依 UUID 升序鎖候選帳號。presence 復原每頁依序取生產者 fence、SKIP LOCKED 的 presence 列、頻道共享鎖。
+- 查詢不取鎖：託管探索、PAM 入口與 relay 回程的檢查以一個陳述式快照或無鎖的獨立讀取回答；PAM 資格是快照決定。
+- 時間：presence 復原的 cutoff 由 PostgreSQL 取一次；管理項目的時間戳每個命令由 `MixClock` 取一次；relay 期限用單調時鐘，
+  回覆與到期共用一個消費 token。
+- 身分：持久的本地投遞綁定帳號 UUID，封存或路由前重驗帳號與會話；relay 回程只到原本的確切連線，聯邦回程以已驗證的
+  full JID 定址。
+- 型別：MIX 位址、參與者 ID 與 PAM 狀態由 room-core 的型別解析，SQL 與 wire 邊界轉回相同的字串。
+
+部署：migration 0163 對 `mix_delivery_recipients` 與 `mix_delivery_dead_letters` 取 ACCESS EXCLUSIVE 鎖，回填改寫符合的列。
+先停止 MIX 寫入者，migrate，升級所有節點，再恢復；舊 worker 會略過帳號檢查。叢集信封、stanza、儲存的編碼與封存位元組不變。
+
+線上行為的改變：
+
+- 刪除後以同名重建的帳號不再收到舊帳號的持久 MIX 投遞；migration 時沒有帳號的本地收件者列與帳號不符的 claim 走既有的
+  account-unavailable dead letter（C4-11，使用者決定）。
+- 遠端 PAM 加入把邀請與 ANON 偏好轉送給遠端頻道；結果漏掉請求的偏好時當作格式錯誤，不提交成員或名冊（C4-13，使用者決定）。
+- 直接的 Core 離開一併移除 PAM 成員與名冊項目；Core 的訂閱變更同步到 PAM 投影。
+- 管理表單只套用提交的欄位；鎖定的 JID 可見性不允許的偏好回 modify/not-acceptable；被撤銷擁有權的設定回 auth/forbidden。
+- 隱藏的頻道對 C2S 探索回答與不存在的頻道相同的 item-not-found；MUC 鏡像連結失敗不再讓已提交的建立失敗。
+- 查找與鎖之間被銷毀的頻道回 item-not-found，不再是內部錯誤。
+- 反射的原文只有 admission 通過才封存與路由，只扇出到入准帳號有能力的會話；未綁定的反射 presence 錯誤被吸收。
+- relay 的回覆與逾時只回到原本的確切連線；頻道、PAM incarnation、帳號或路由被替換時兩者都不送。
+- 聯邦邀請的精確重試回原本的 token；拒絕不產生 token。
+- 啟動時的 presence 復原清完所有過期列，包括被鎖住或在第一頁之後的列；空的 probe 回覆保留已知的 presence payload。
+
+其他 stanza、錯誤條件、token 格式與 TTL、叢集信封與儲存格式都不變。
+
+與審計的差異：
+
+- C4-15：審計把邀請的 GET 列為改變狀態的命令（LAYER）。wire 方法維持 get，改以 IQ fence 讓授權、token、結果 journal 與
+  S2S 回覆原子提交。
+- C4-13：協定沒有邀請的回聲，伺服器無法驗證對端是否使用了 token，只能檢查結果是否保留請求的偏好。
+- C4-12：審計列出原子 bridge 與分開連結兩種做法，採用後者：建立交易不變，連結在自己的交易以頻道 UUID fence，失敗只記錄。
+- C4-03：PAM 資格是快照決定，讀取之後的離開或封鎖不撤銷已讀到的決定；C4-17：單純的離開或封鎖不取消已 admission 的
+  回覆，只有 incarnation、頻道 UUID、帳號或路由不同時才抑制。這些是審計列出、由架構決定的選項。
+- C4-18：依審計，型別作為前提落地，只在新 port 與擁有封包的呼叫端使用，不大量改名未觸及的 port。
+
+尚未處理：room-postgres 的 `mix/channel.rs` 等字串 helper 還沒改用 WP-706 的型別；WP-705 為保持只移動而在抽出的函式
+加上的 `clippy::needless_return`、`clippy::ptr_arg` 與 `clippy::too_many_arguments` 豁免要逐步移除（後者改成參數結構）；
+WP-701 之後 `northstar-muc-xmpp` 的 `discovery` 模組已沒有呼叫者，可以刪除；S48 記錄的 debug build 大 frame 仍是結構債；
+D 的下一個上下文是 message；MIX 聯邦的對端互通仍是 `EXT-FEDERATION`。
+
+新決定：
+
+- 持久的本地 MIX 投遞綁定收件者帳號 UUID，投遞前重驗（C4-11，WP-713，migration 0163）。
+- 遠端 PAM 加入完整轉送邀請與 ANON 偏好（C4-13，WP-707）。
+- PAM 投影是 Core 成員在同一交易寫入的投影，名冊推送由提交的 delta 渲染（WP-707）。
+- 隱藏頻道與不存在的頻道對探索回答相同（WP-711）。
+- MUC 鏡像連結是建立之後的 best effort，以頻道 UUID fence（WP-711）。
+- relay 的回覆與逾時恰好一個消費者，回程只到確切的原連線（WP-712）。
+
+S49 後最大的生產檔仍是 `northstar-stream` 的 `local_routes/session_table.rs`（1,388 行）；MIX 協定 crate 最大的生產檔由
+`federation.rs` 的 1,036 行降為 `message.rs` 的 772 行，room-postgres 的 mix 模組由 `admin.rs` 的 789 行降為
+`pam_completion.rs` 的 731 行；最大的測試檔仍是 `stage4_replay/tests.rs`（2,742 行）。workspace 測試由 3,777 個增為
+3,860 個（ignored 由 438 個增為 483 個，其中 360 個在 `northstar-db-it`）。原有名稱只有一個改變：WP-713 讓一般發布只渲染
+一次，原本測兩次渲染的 `channel_archive_identity_is_rendered_once_more_and_second_mismatch_conflicts` 改測仍會重新渲染的
+撤回路徑，名稱改為 `retraction_archive_identity_is_rendered_once_more_and_second_mismatch_conflicts`。新增 38 個單元測試與
+45 個 ignored 資料庫測試，資料庫測試全部登記在 CI 執行的 `mix-family-db-wsl.sh`，並列入 `room-db-experiments.py` 的預期清單
+（共 120 個）。Cargo.lock 仍是 485 個套件；新增 migration 0163，共 162 項。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點），S31 的 WP-483 起 agy 額度用盡，再改由 Codex CLI 執行（第 10 點）。
@@ -2440,6 +2530,16 @@ Cargo.lock 仍是 485 個套件；S48 沒有新 migration，連同 WP-694 的 01
    - 離線 CI 不跑 PostgreSQL protocol integration：S48 推送後 CI 才發現 debug build 的 worker stack 溢位（WP-715）。改動
      C2S、MUC 或 MIX 處理路徑的階段，推送前要在本機 loopback PostgreSQL 跑這個 job 的五個腳本；容器要用 host network，
      `inet_server_addr()` 才會是 loopback（S48）。
+   - 多個平行 WP 各自在同一模組加 re-export 時，合併後同一項目可能被 `pub use` 兩次（E0252）：S49 的 WP-709、710、711
+     都轉出 `MixChannelId`，鏈在 WP-707 之後重建一次。匯入清單要三方合併（結果 = 我方 −（基準 − 對方）＋（對方 − 基準）），
+     接鏈後以腳本掃描變更檔中重複的 `use`（S49）。
+   - 兩邊都只新增行的衝突不能整行去重：只有含識別字的行算重複，`};` 與空行屬於各自一側；WP-714 的衝突解決把
+     `#[allow(unused_variables)]` 留在插入的 `mod` 行上，測試替身的 impl 因此在 clippy 報 139 個錯。解決後確認屬性仍附在原本
+     的項目上（S49）。
+   - 新 port 的預設方法若回退到 `MixRepository`，就不能再成為它的 supertrait，否則測試替身形成 trait 循環；由 host port 同時
+     要求兩者（S49 的 WP-707）。
+   - 讀取改為不寫入時，要搜尋依賴讀取副作用的測試，包括 `scripts/` 的叢集與整合腳本：WP-701 讓 room 讀取不碰 Redis 後，
+     叢集測試只在碰上維護週期時通過，S48 推送後才失敗（WP-716）（S49）。
 10. Codex（S31 的 WP-483 起，2026-11-16）：agy 額度用盡期間，程式修改改由 Codex CLI（`gpt-6.1-sol`，2026-11-19 起
     `gpt-6.2-sol`）執行，呼叫方式與
     限制同第 8 點，`model_reasoning_effort` 依任務難度選擇；第 1、3、4、7 點與第 9 點的機械搬移做法照舊。agy 恢復後回到
@@ -3065,3 +3165,15 @@ Stage 證據仍綁定其原提交。
 | WP-703 | 完成：型別化的 occupancy 轉換與行動者權威（C3-16） | 見 `git log --grep '\[WP-703\]'` |
 | WP-704 | 完成：記錄 S48 的階段與盤點（5.44）、目標架構第 4、5 節、執行計劃的 C3 列、已知問題的 `ARCH-MUC-EXACT-ROUTE`、程式職責表的 `locked-muc-expiry`、叢集文件的第 2 版信封、CHANGELOG 與路線圖的狀態，並補記 WP-693。WP-695–703 接成一條鏈驗證：fmt、clippy、受影響 20 個 crate 的單獨建置與測試、workspace 測試與名稱比對、全部門禁與 Python 腳本測試、Stage 4 lanes、node 腳本測試、離線 CI，以及本機 PostgreSQL 上 MUC 的資料庫測試與 repository conformance。整條鏈的 clippy 與資料庫測試抓到三個跨 WP 的測試失敗（WP-699 的回傳型別、WP-696 的確切 SM 會話、WP-700 的渲染事實與原始受眾），修正併入 WP-700 與 WP-696 後重跑通過。推送後 CI 抓到的 stack 溢位由 WP-715 修正，之後在本機重跑該 job 的五個腳本通過 | 見 `git log --grep '\[WP-704\]'` |
 | WP-715 | 完成：runtime worker 與 blocking pool 執行緒保留 8 MiB stack，修正 debug build 在 MUC 邀請路徑的溢位；架構門禁檢查 `main` 的回報與 stack 設定 | 見 `git log --grep '\[WP-715\]'` |
+| WP-705 | 完成：MIX 協定與儲存的大檔只移動地拆成葉模組，兩個 MIX worker 移到 `workers/`（C4 的 P0） | 見 `git log --grep '\[WP-705\]'` |
+| WP-706 | 完成：room-core 的型別化 MIX 位址、參與者 ID、relay 位址與 PAM 狀態，既有字串 helper 委派給它們（C4-18） | 見 `git log --grep '\[WP-706\]'` |
+| WP-707 | 完成：PAM 投影與名冊 delta 跟 Core 成員同交易提交，推送由 delta 渲染；遠端 PAM 加入轉送邀請與 ANON 偏好（C4-01、02、10、13） | 見 `git log --grep '\[WP-707\]'` |
+| WP-708 | 完成：反射流量以一個 PAM 快照 admission，只有新的儲存扇出給入准帳號；空的 probe 回覆更新已知 presence 的 liveness（C4-03、04、19） | 見 `git log --grep '\[WP-708\]'` |
+| WP-709 | 完成：presence 復原以 PostgreSQL 的 cutoff 分頁清完，被鎖住的列以退避重試（C4-04、14） | 見 `git log --grep '\[WP-709\]'` |
+| WP-710 | 完成：MIX 管理表單以稀疏 patch 在頻道鎖下合併並在鎖下授權擁有者；`MixClock` 每命令取一次項目時間戳（C4-05、08、09、14） | 見 `git log --grep '\[WP-710\]'` |
+| WP-711 | 完成：託管探索在一個快照回答，隱藏與不存在的頻道相同；MUC 鏡像在建立之後以頻道 UUID fence 連結（C4-06、07、12） | 見 `git log --grep '\[WP-711\]'` |
+| WP-712 | 完成：relay 的回覆與逾時只回到確切的原路由，以 admission token 與單調期限保證單一消費者（C4-14、17） | 見 `git log --grep '\[WP-712\]'` |
+| WP-713 | 完成：一般 MIX 發布在鎖下只渲染一次；持久投遞綁定收件者帳號並在投遞前重驗（C4-10、11，migration 0163） | 見 `git log --grep '\[WP-713\]'` |
+| WP-714 | 完成：聯邦邀請的授權、token、結果 journal 與 S2S 回覆原子提交，精確重試回原 token（C4-15、16） | 見 `git log --grep '\[WP-714\]'` |
+| WP-716 | 完成：多節點叢集測試改等維護掃除已崩潰節點的 MUC 成員；WP-701 之後 room 讀取不再寫 Redis | 見 `git log --grep '\[WP-716\]'` |
+| WP-717 | 完成：記錄 S49 的階段與盤點（5.45）、目標架構第 4、5 節、執行計劃的 C4 列、已知問題的 `ARCH-MIX-COMMITTED-AUTHORITY`、程式職責表的兩個 MIX worker、CHANGELOG 與路線圖的狀態。WP-705–714 接成一條鏈驗證：fmt、clippy、受影響 21 個 crate 的單獨建置與測試、workspace 測試與名稱比對、全部門禁與 Python 腳本測試、Stage 4 lanes、node 腳本測試、離線 CI、本機 PostgreSQL 上 MIX、MUC、帳號與訊息的資料庫測試與 repository conformance，以及本機的 PostgreSQL protocol integration。接鏈抓到重複的 re-export、被移走的屬性與架構門禁的表單 producer 對應，修正併入對應的 WP | 見 `git log --grep '\[WP-717\]'` |

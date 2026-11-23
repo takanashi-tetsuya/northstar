@@ -51,6 +51,23 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   occupant.
 - Reserve 8 MiB stacks for runtime threads, so debug builds no longer abort on
   deep MUC invitation paths.
+- Keep a MIX channel's PAM membership, subscriptions and roster item in step
+  with its Core membership, and push each roster change with the version and
+  annotation committed together.
+- Forward the invitation and ANON preferences of a remote MIX PAM join to the
+  remote channel.
+- Apply MIX preference, information and configuration forms only to the
+  submitted fields, against the locked channel, and accept configuration only
+  from the owner at that moment.
+- Answer service discovery for a hidden MIX channel exactly as for an absent
+  one, and let a channel creation succeed when linking its MUC mirror fails.
+- Deliver durable MIX messages only to the account that held the address when
+  they were queued, so an account recreated under the same name does not
+  receive the old account's messages.
+- Return relayed MIX IQ replies and their timeouts only to the original
+  connection, and give a retried federated MIX invitation its original token.
+- Expire all stale MIX presence at startup, including rows that were locked or
+  beyond the first page.
 
 ## [0.2.0] - Release notes (publication date: GitHub Releases)
 

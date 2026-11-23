@@ -508,11 +508,7 @@ impl<R: MixRepository> MixService<R> {
 }
 
 pub fn valid_stable_participant_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 1023
-        && !value.contains('@')
-        && !value.contains('/')
-        && !value.contains('#')
+    northstar_room_core::mix::MixStableParticipantId::parse(value).is_ok()
 }
 pub fn mix_timestamp_item_id() -> String {
     Utc::now().to_rfc3339_opts(northstar_time::SecondsFormat::Nanos, true)

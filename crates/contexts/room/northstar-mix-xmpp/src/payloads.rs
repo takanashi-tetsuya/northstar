@@ -111,59 +111,21 @@ pub fn core_join_payload(
 /// encoded bare JID: `stable-id#channel@mix-service`.  Ensure that embedding
 /// the opaque ID in an RFC 7622 localpart does not change it under PRECIS.
 pub fn encoded_participant_jid(channel_jid: &str, participant_id: &str) -> Result<String> {
-    anyhow::ensure!(
-        northstar_room_application::mix_service::valid_stable_participant_id(participant_id),
-        "invalid MIX stable participant id"
-    );
-    let channel = northstar_xmpp_types::jid::CanonicalJid::parse_bare(channel_jid)?;
-    let channel_localpart = channel
-        .localpart()
-        .context("MIX channel JID requires a localpart")?;
-    let encoded_localpart = format!("{participant_id}#{channel_localpart}");
-    let encoded = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
-        "{encoded_localpart}@{}",
-        channel.domainpart()
-    ))?;
-    anyhow::ensure!(
-        encoded.localpart() == Some(encoded_localpart.as_str()),
-        "MIX stable participant id is not a canonical JID localpart prefix"
-    );
-    Ok(encoded.to_string())
+    northstar_room_core::mix::MixRelayAddress::encode(channel_jid, participant_id, None)
+        .map(|address| address.to_string())
 }
 
 pub fn decode_participant_jid(value: &str) -> Result<(String, String)> {
-    let raw_localpart = value
-        .split_once('@')
-        .map(|(localpart, _)| localpart)
-        .context("encoded MIX participant JID requires a localpart")?;
-    let encoded = northstar_xmpp_types::jid::CanonicalJid::parse_bare(value)?;
-    anyhow::ensure!(
-        encoded.localpart() == Some(raw_localpart),
-        "encoded MIX participant JID is not in canonical localpart form"
-    );
-    let (participant_id, channel_localpart) = encoded
-        .localpart()
-        .and_then(|localpart| localpart.split_once('#'))
-        .context("encoded MIX participant JID is missing its channel")?;
-    anyhow::ensure!(
-        northstar_room_application::mix_service::valid_stable_participant_id(participant_id),
-        "invalid MIX stable participant id"
-    );
-    let channel = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&format!(
-        "{channel_localpart}@{}",
-        encoded.domainpart()
-    ))?;
-    Ok((participant_id.to_owned(), channel.to_string()))
+    let address = northstar_room_core::mix::MixRelayAddress::parse_bare(value)?;
+    Ok((
+        address.participant_id().to_string(),
+        address.channel().to_string(),
+    ))
 }
 
 pub fn participant_id_from_encoded_jid(value: &str, channel_jid: &str) -> Result<String> {
-    let (participant_id, encoded_channel) = decode_participant_jid(value)?;
-    let channel = northstar_xmpp_types::jid::CanonicalJid::parse_bare(channel_jid)?;
-    anyhow::ensure!(
-        encoded_channel == channel.to_string(),
-        "encoded MIX participant JID has the wrong channel"
-    );
-    Ok(participant_id)
+    northstar_room_core::mix::MixRelayAddress::parse_bare_for_channel(value, channel_jid)
+        .map(|address| address.participant_id().to_string())
 }
 
 pub fn pam_join_payload(

@@ -1,4 +1,5 @@
 use super::{MixChannel, MixParticipant};
+use northstar_room_core::mix::MixJidVisibility;
 use uuid::Uuid;
 
 /// Publisher identity used to render an archive payload before admission.
@@ -12,7 +13,10 @@ pub struct MixPublisherIdentity {
 impl MixPublisherIdentity {
     pub fn from_state(channel: &MixChannel, participant: &MixParticipant) -> Self {
         Self {
-            archive_jid_visible: channel.jid_visibility == "visible",
+            archive_jid_visible: matches!(
+                MixJidVisibility::parse(&channel.jid_visibility),
+                Ok(MixJidVisibility::Visible)
+            ),
             nick: participant.nick.clone(),
             participant_id: participant.participant_id,
         }

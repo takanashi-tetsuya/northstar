@@ -1,6 +1,9 @@
 //! Data-only facts for one ordinary MIX message. Read evidence is distinct
 //! from the fresh message transaction and from durable outbox delivery.
 
+mod authority;
+pub use authority::*;
+
 pub const CORE_NS: &str = "urn:xmpp:mix:core:1";
 pub const PAM_NS: &str = "urn:xmpp:mix:pam:2";
 pub const ADMIN_NS: &str = "urn:xmpp:mix:admin:0";

@@ -223,8 +223,8 @@ pub fn encoded_participant_full_jid(
     participant_id: &str,
     resource: &str,
 ) -> Result<String> {
-    let bare = encoded_participant_jid(channel_jid, participant_id)?;
-    northstar_xmpp_types::jid::canonicalize(&format!("{bare}/{resource}"))
+    northstar_room_core::mix::MixRelayAddress::encode(channel_jid, participant_id, Some(resource))
+        .map(|address| address.to_string())
 }
 
 pub async fn handle_channel_relay_request(

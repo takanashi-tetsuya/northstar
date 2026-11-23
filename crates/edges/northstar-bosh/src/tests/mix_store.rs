@@ -10,6 +10,8 @@ mod hosted_disco;
 mod administration;
 mod pam_delivery_repository;
 
+mod publication_stub;
+
 #[derive(Clone)]
 pub(super) struct MixStore {
     trace: Trace,

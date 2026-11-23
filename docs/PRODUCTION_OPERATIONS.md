@@ -1085,11 +1085,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 161 files from `0001` through
-`0162`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 162 files from `0001` through
+`0163`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0162`, with the exact SQLx description and SHA-384 checksum, before it
+through `0163`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url`, `storage_database_url`, and `command_database_url`
 secrets; none of these identities may attempt DDL. Pending, failed, unknown,
@@ -1185,6 +1185,16 @@ migration only adds functions and changes no data, but the older binary's
 exact attestation does not accept the new catalog: stop every server process,
 migrate, reconcile exact grants, attest the runtime role and start only
 updated binaries. There is no mixed-version period or rolling rollback.
+[Migration `0163`](../migrations/0163_mix_delivery_recipient_account.sql)
+binds each local MIX delivery recipient to the account UUID that owned its
+address when the row was projected; a claimed row whose account is missing,
+disabled or replaced is dead-lettered as `account-unavailable` before archive
+or routing. The backfill binds existing rows to the account present **at
+migration time**; historical dead letters keep `NULL` and requeue never binds
+them to a new account. Both `ALTER TABLE` statements hold `ACCESS EXCLUSIVE`
+until commit and the backfill rewrites every matched recipient row, so its
+duration grows with the queue. Quiesce MIX delivery on every node, migrate,
+and start only updated binaries: an older worker skips the account check.
 On an existing volume, stop every old server process, generate the new storage
 password and URL secrets, reconcile the new role, run migrations and exact
 grants, then start the new binary. The older binary's exact role/ACL audit does
@@ -1358,7 +1368,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0162` manifest
+5. run the one-shot migration job through the complete `0001`-`0163` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

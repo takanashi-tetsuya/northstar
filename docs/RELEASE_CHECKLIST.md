@@ -228,9 +228,13 @@ and Docker artifacts and their provenance. They do not repeat source CI.
   runtime holds `EXECUTE` on the three `northstar_lock_user_rows_*(uuid[])`
   capabilities and still has no table or column `UPDATE` on `users` before
   starting updated binaries; never run old and new processes together.
+- [ ] Apply [migration `0163`](../migrations/0163_mix_delivery_recipient_account.sql)
+  with MIX delivery quiesced on every node. Expect `ACCESS EXCLUSIVE` on both
+  delivery tables for the length of the recipient backfill, then start only
+  updated binaries; an older worker does not check the bound account.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 161 migrations from `0001` through the current
-  repository maximum `0162`, with `0021` as the sole intentional gap.
+  identity and verify all 162 migrations from `0001` through the current
+  repository maximum `0163`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

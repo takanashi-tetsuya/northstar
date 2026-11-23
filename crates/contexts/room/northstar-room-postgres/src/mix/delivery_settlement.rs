@@ -593,8 +593,8 @@ pub async fn requeue_mix_delivery_dead_letter(pool: &PgPool, dead_letter_id: Uui
     sqlx::query(
         "INSERT INTO mix_delivery_recipients(
              delivery_id,event_id,recipient_participant_id,recipient_jid,
-             delivery_sequence,attempt_count,next_attempt_at,created_at
-         ) VALUES($1,$2,$3,$4,$5,0,clock_timestamp(),$6)",
+             delivery_sequence,attempt_count,next_attempt_at,created_at,recipient_local_user_id
+         ) VALUES($1,$2,$3,$4,$5,0,clock_timestamp(),$6,$7)",
     )
     .bind(delivery_id)
     .bind(event_id)
@@ -602,6 +602,7 @@ pub async fn requeue_mix_delivery_dead_letter(pool: &PgPool, dead_letter_id: Uui
     .bind(&recipient_jid)
     .bind(delivery_sequence)
     .bind(row.get::<DateTime<Utc>, _>("original_created_at"))
+    .bind(row.get::<Option<Uuid>, _>("recipient_local_user_id"))
     .execute(&mut *transaction)
     .await?;
     // Capacity is reserved after the complete recoverable projection exists;

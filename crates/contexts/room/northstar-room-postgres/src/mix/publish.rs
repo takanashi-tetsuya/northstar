@@ -6,6 +6,7 @@ mod message;
 mod presence;
 
 pub(super) use self::message::matches_locked_publisher_identity;
+pub use self::message::publish_message;
 pub use self::message::{store_mix_message, store_mix_message_inner, store_mix_message_observed};
 pub use self::presence::{ensure_mix_presence, store_mix_presence, store_mix_presence_with_policy};
 pub(crate) use self::presence::{refresh_probe_presence_liveness, refresh_recovery_presence};

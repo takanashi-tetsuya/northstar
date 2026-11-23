@@ -1,6 +1,11 @@
 //! Channel stanza delivery to one participant, local or clustered, and its durable completion.
 
 use super::*;
+use northstar_room_application::mix_service::MixDeliveryRecipientAuthority;
+use northstar_room_core::mix::MixRealJid;
+
+mod recipient_authority;
+use self::recipient_authority::{check_route_account, resolve_recipient_authority};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChannelStanzaDatabaseLane {
@@ -193,6 +198,10 @@ pub async fn deliver_channel_stanza_inner(
         }
     };
     let domain = recipient_jid.domainpart();
+    let authority = match durable_source {
+        Some(source) => Some(resolve_recipient_authority(context, source, &recipient_jid).await?),
+        None => None,
+    };
     if same_jid_domain(domain, context.local_domain()) {
         let Some(username) = recipient_jid.localpart() else {
             return Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker);
@@ -233,6 +242,7 @@ pub async fn deliver_channel_stanza_inner(
             }
             return Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker);
         };
+        check_route_account(authority.as_ref(), user.id)?;
         // `recipient` is an immutable MIX Core participant/subscription
         // snapshot captured by the channel mutation transaction.  XEP-0405
         // PAM is only an optional account-side roster projection; requiring a
@@ -351,6 +361,9 @@ pub async fn deliver_channel_stanza_inner(
             }
         }
         let mut local_targets = context.session_entries_for(&recipient.jid);
+        local_targets.retain(|(_, session)| {
+            check_route_account(authority.as_ref(), session.user_id()).is_ok()
+        });
         // One leased recipient row may cross exactly one local transport.
         // Sorting makes the choice deterministic across the hash-map-backed
         // live-route registry; a source transferred to SM/BOSH or written to

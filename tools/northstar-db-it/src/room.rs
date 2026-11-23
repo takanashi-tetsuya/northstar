@@ -7,6 +7,7 @@ mod discussion_conformance;
 mod foreground_conformance;
 mod mix_admin_patches;
 mod mix_delivery_capacity;
+mod mix_delivery_identity;
 mod mix_delivery_route_wake;
 mod mix_discovery;
 mod mix_identity;

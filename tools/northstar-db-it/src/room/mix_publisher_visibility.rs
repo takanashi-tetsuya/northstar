@@ -3,10 +3,12 @@
 use anyhow::Result;
 use northstar_archive_core::{MamArchiveQuery, MamRsmPage};
 use northstar_room_application::mix_service::{
-    participant_jid_visible, MixPayloads, MixPublisherIdentity,
+    participant_jid_visible, LockedPublisher, MixPayloads, MixPublisherIdentity, MixReplayIdentity,
+    MixService, PreparedMessage, PublicationOutcome,
 };
+use northstar_room_core::mix::{MixChannelId, MixRealJid};
 use northstar_room_postgres::mix::*;
-use northstar_workflows::room_effects::WorkflowRoomEffects;
+use northstar_workflows::room_effects::{PostgresMixRepository, WorkflowRoomEffects};
 use northstar_xml_builder::XmlElement;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::time::Duration;
@@ -395,6 +397,176 @@ async fn unfiltered_mix_mam_preserves_payload_committed_under_visible_policy() -
         assert_eq!(page.events[0].item_id, original.item.to_string());
         assert_eq!(page.events[0].payload, original.payload);
         Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    fixture.close().await?;
+    result
+}
+
+fn publication_service(fixture: &Fixture) -> Result<MixService<PostgresMixRepository>> {
+    use northstar_abuse_application::guard::{
+        test_mix_message_content_keyring, test_mix_retraction_content_keyring,
+    };
+    MixService::new(
+        PostgresMixRepository::new(fixture.pool.clone()),
+        test_mix_message_content_keyring(),
+        test_mix_retraction_content_keyring(),
+        3,
+        fixture.schema.clone(),
+    )
+}
+
+fn prepare_message(channel: MixChannelId) -> Result<PreparedMessage> {
+    Ok(PreparedMessage {
+        channel_id: channel,
+        actor: MixRealJid::parse(ACTOR)?,
+        item_id: Uuid::new_v4(),
+        children: "<body>single</body>".into(),
+        identity: Some(MixReplayIdentity {
+            client_id: "single".into(),
+            canonical_semantics: b"single".to_vec(),
+        }),
+        encrypted: false,
+    })
+}
+
+fn render_published_message(message: &PreparedMessage, author: &LockedPublisher) -> Result<String> {
+    let mut identity = XmlElement::namespaced("mix", "urn:xmpp:mix:core:1");
+    if let Some(nick) = &author.nick {
+        identity.push_child(XmlElement::new("nick").text(nick.as_str()));
+    }
+    if let Some(jid) = &author.archive_jid {
+        identity.push_child(XmlElement::new("jid").text(jid.as_str()));
+    }
+    Ok(XmlElement::namespaced("message", "jabber:client")
+        .attr("from", author.channel.as_str())
+        .attr("id", message.item_id)
+        .attr("type", "groupchat")
+        .validated_fragment(&message.children)?
+        .child(identity)
+        .finish())
+}
+
+fn unexpected_publication_render(_: &PreparedMessage, _: &LockedPublisher) -> Result<String> {
+    panic!("replayed or absent publication must not render")
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn two_stale_observations_then_one_locked_admission_publishes_once() -> Result<()> {
+    let fixture = Fixture::new().await?;
+    let result = async {
+        let pool = &fixture.pool;
+        let channel = fixture.channel("locked-publisher", "visible").await?;
+        let first = PendingWrite::render(pool, channel, Uuid::new_v4(), None, "first").await?;
+        sqlx::query("UPDATE mix_channels SET jid_visibility='hidden' WHERE id=$1")
+            .bind(channel)
+            .execute(pool)
+            .await?;
+        let second = PendingWrite::render(pool, channel, Uuid::new_v4(), None, "second").await?;
+        assert!(first.publisher.archive_jid_visible);
+        assert!(!second.publisher.archive_jid_visible);
+        assert_eq!(second.publisher.nick.as_deref(), Some("Publisher"));
+        let before = artifacts(pool, channel).await?;
+        let mut change = pool.begin().await?;
+        let blocker = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *change)
+            .await?;
+        sqlx::query("SELECT id FROM mix_channels WHERE id=$1 FOR UPDATE")
+            .bind(channel)
+            .execute(&mut *change)
+            .await?;
+        let service = publication_service(&fixture)?;
+        let message = prepare_message(MixChannelId::new(channel))?;
+        let publisher = service.clone();
+        let task = tokio::spawn(async move {
+            let outcome = publisher
+                .publish_message(&message, render_published_message, None)
+                .await;
+            (message, outcome)
+        });
+        crate::support::blocked_backend(pool, blocker).await;
+        sqlx::query(
+            "UPDATE mix_participants SET nick='Locked Nick' WHERE channel_id=$1 AND jid=$2",
+        )
+        .bind(channel)
+        .bind(ACTOR)
+        .execute(&mut *change)
+        .await?;
+        change.commit().await?;
+        let (message, outcome) = task.await?;
+        assert_eq!(outcome?, PublicationOutcome::Published(message.item_id));
+        let stored = payload(pool, channel, message.item_id).await?;
+        assert!(stored.contains("<nick>Locked Nick</nick>"));
+        assert!(!stored.contains("<jid>"));
+        let (stanza, recipient): (String, String) = sqlx::query_as(
+            "SELECT event.stanza_template, recipient.recipient_jid
+               FROM mix_delivery_events event JOIN mix_delivery_recipients recipient USING(event_id)
+              WHERE event.event_id=$1",
+        )
+        .bind(message.item_id)
+        .fetch_one(pool)
+        .await?;
+        assert!(stanza.contains("<nick>Locked Nick</nick>"));
+        assert!(!stanza.contains("<jid>"));
+        assert_eq!(recipient, ACTOR);
+        assert_eq!(
+            service
+                .publish_message(&message, unexpected_publication_render, None)
+                .await?,
+            PublicationOutcome::Replay(message.item_id)
+        );
+        assert_eq!(
+            artifacts(pool, channel).await?,
+            (
+                before.0 + 1,
+                before.1 + 1,
+                before.2 + 1,
+                before.3 + 1,
+                before.4
+            )
+        );
+        Ok(())
+    }
+    .await;
+    fixture.close().await?;
+    result
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn destroy_during_publication_is_typed_not_found() -> Result<()> {
+    let fixture = Fixture::new().await?;
+    let result = async {
+        let pool = &fixture.pool;
+        let channel = fixture.channel("destroyed-publisher", "visible").await?;
+        let message = prepare_message(MixChannelId::new(channel))?;
+        let event = message.item_id;
+        let mut destroy = pool.begin().await?;
+        let blocker = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut *destroy)
+            .await?;
+        sqlx::query("DELETE FROM mix_channels WHERE id=$1")
+            .bind(channel)
+            .execute(&mut *destroy)
+            .await?;
+        let service = publication_service(&fixture)?;
+        let task = tokio::spawn(async move {
+            service
+                .publish_message(&message, unexpected_publication_render, None)
+                .await
+        });
+        crate::support::blocked_backend(pool, blocker).await;
+        destroy.commit().await?;
+        assert_eq!(task.await??, PublicationOutcome::Absent);
+        let projected: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM mix_delivery_events WHERE event_id=$1)",
+        )
+        .bind(event)
+        .fetch_one(pool)
+        .await?;
+        assert!(!projected);
+        Ok(())
     }
     .await;
     fixture.close().await?;

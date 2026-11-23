@@ -5,6 +5,7 @@ use std::sync::Mutex as RecordingMutex;
 
 mod administration;
 mod pam_delivery_repository;
+mod publication_stub;
 
 #[derive(Clone, Copy, Default)]
 pub(super) enum Reply {

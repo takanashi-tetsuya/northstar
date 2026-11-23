@@ -162,6 +162,33 @@ run_exact_ignored \
 run_exact_ignored \
   room::relay_profile_snapshot::pam_replacement_with_the_same_jid_does_not_receive_a_relay_reply
 
+run_exact_ignored \
+  room::mix_publisher_visibility::two_stale_observations_then_one_locked_admission_publishes_once
+
+run_exact_ignored \
+  room::mix_publisher_visibility::destroy_during_publication_is_typed_not_found
+
+run_exact_ignored \
+  room::mix_delivery_identity::reassigned_address_does_not_receive_the_old_accounts_delivery
+
+run_exact_ignored \
+  room::mix_delivery_identity::disabled_recipient_is_settled_without_delivery
+
+run_exact_ignored \
+  room::mix_delivery_identity::legacy_row_without_account_is_not_delivered_to_a_new_account
+
+run_exact_ignored \
+  room::mix_delivery_identity::remote_recipient_rows_keep_address_delivery
+
+run_exact_ignored \
+  room::mix_delivery_identity::migration_backfills_existing_local_recipients
+
+run_exact_ignored \
+  room::mix_delivery_capacity::bound_delivery_ack_releases_original_capacity
+
+run_exact_ignored \
+  room::mix_delivery_route_wake::dead_letter_requeue_preserves_the_bound_account
+
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline -p northstar-db-it \
   room::mix_mam::mix_anon_misc_permissions_are_atomic_and_private \

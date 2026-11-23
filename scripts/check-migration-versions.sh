@@ -1708,6 +1708,28 @@ if [ "$(grep -Ec '^ +FOR (KEY SHARE|SHARE|UPDATE) OF account;$' "$user_row_lock_
 fi
 echo "migration 0162 adds read-only-account row-lock capabilities"
 
+recipient_account_migration="migrations/0163_mix_delivery_recipient_account.sql"
+recipient_account_sql=$(tr -s '[:space:]' ' ' < "$recipient_account_migration")
+for required_fragment in \
+    'ALTER TABLE mix_delivery_recipients ADD COLUMN recipient_local_user_id UUID NULL;' \
+    'ALTER TABLE mix_delivery_dead_letters ADD COLUMN recipient_local_user_id UUID NULL;' \
+    'UPDATE mix_delivery_recipients AS recipient SET recipient_local_user_id = account.id' \
+    "AND split_part(event.channel_jid, '@', 2) = 'mix.' || split_part(recipient.recipient_jid, '@', 2)" \
+    "AND account.username = split_part(recipient.recipient_jid, '@', 1);"
+do
+    if ! printf '%s\n' "$recipient_account_sql" | grep -Fq "$required_fragment"; then
+        echo "migration 0163 recipient account binding is missing: $required_fragment" >&2
+        exit 1
+    fi
+done
+# Nullable columns only: legacy and remote rows keep NULL, dead letters are
+# not backfilled, and nothing is granted, dropped or constrained.
+if grep -Eiq 'NOT NULL|DEFAULT|REFERENCES|^[[:space:]]*(GRANT|REVOKE|DROP|DELETE|INSERT|TRUNCATE|CREATE)\b|UPDATE[[:space:]]+mix_delivery_dead_letters' "$recipient_account_migration"; then
+    echo "migration 0163 must only add nullable account columns and backfill live recipients" >&2
+    exit 1
+fi
+echo "migration 0163 binds local MIX recipients to their account at migration time"
+
 # Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0
 # development line. They are immutable: SQLx will reject changed content in an
 # existing database, and this repository-side manifest catches the same mistake

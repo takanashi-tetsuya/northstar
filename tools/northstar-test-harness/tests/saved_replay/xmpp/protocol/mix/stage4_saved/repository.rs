@@ -11,6 +11,7 @@ use std::sync::Mutex;
 mod administration;
 mod hosted_disco;
 mod pam_delivery_repository;
+mod publication_stub;
 
 #[derive(Clone)]
 pub(crate) struct ControlledRepository(pub(super) Arc<Mutex<Supplied>>, pub(super) Recorder);

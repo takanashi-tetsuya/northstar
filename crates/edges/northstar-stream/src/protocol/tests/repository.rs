@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 mod administration;
+mod publication_stub;
 
 #[derive(Clone)]
 pub(super) struct UnusedRepository {

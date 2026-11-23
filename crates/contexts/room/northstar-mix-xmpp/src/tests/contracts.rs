@@ -310,8 +310,9 @@ fn archive_publisher_identity_uses_channel_visibility_and_participant_nick() {
 }
 
 #[tokio::test]
-async fn channel_archive_identity_is_rendered_once_more_and_second_mismatch_conflicts() {
-    for (observed, retract) in [(true, false), (false, false), (false, true)] {
+async fn retraction_archive_identity_is_rendered_once_more_and_second_mismatch_conflicts() {
+    {
+        let (observed, retract) = (false, true);
         for second_mismatch in [false, true] {
             let context = Context::new(1);
             *context.state.publisher_visibility.lock().unwrap() =
@@ -1094,7 +1095,9 @@ pub async fn ingress_contracts() {
             "bob@local.test"
         };
         expected.push(Call::Member(Uuid::from_u128(93), actor.into()));
-        expected.push(Call::Preference(Uuid::from_u128(93), actor.into()));
+        if retract {
+            expected.push(Call::Preference(Uuid::from_u128(93), actor.into()));
+        }
         if !federated {
             expected.push(Call::Frame(MixFrameStage::Admission));
         }
@@ -1111,8 +1114,8 @@ pub async fn ingress_contracts() {
                     "message",
                     "room@mix.local.test",
                     "bob@remote.test/phone",
-                    "auth",
-                    "forbidden",
+                    "cancel",
+                    "item-not-found",
                 ),
                 1,
             ));
@@ -1198,11 +1201,13 @@ pub async fn ingress_contracts() {
         if reject {
             assert!(result.unwrap_err().is::<foreground::Rejected>(), "{label}");
         } else {
-            assert!(result.unwrap().unwrap().contains("forbidden"), "{label}");
+            assert!(
+                result.unwrap().unwrap().contains("item-not-found"),
+                "{label}"
+            );
             expected.extend([
                 Call::Replay(false),
                 Call::Member(Uuid::from_u128(93), "bob@local.test".into()),
-                Call::Preference(Uuid::from_u128(93), "bob@local.test".into()),
                 Call::Frame(MixFrameStage::Admission),
                 Call::Store(false),
             ]);
@@ -1210,3 +1215,6 @@ pub async fn ingress_contracts() {
         assert_eq!(context.state.calls(), expected, "{label}");
     }
 }
+
+#[cfg(test)]
+mod publication_identity;

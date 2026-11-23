@@ -6,6 +6,7 @@ mod administration;
 mod direct_invitation_stub;
 mod hosted_disco;
 mod pam_delivery_repository;
+mod publication_stub;
 
 mod mix {
     use super::UnusedPorts;

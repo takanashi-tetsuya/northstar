@@ -2,8 +2,12 @@
 
 use super::*;
 use northstar_room_application::mix_service::{
-    foreground, participant_jid_visible, MixPublisherIdentity,
+    participant_jid_visible, MixPublisherIdentity, PreparedMessage, PublicationOutcome,
 };
+use northstar_room_core::mix::{MixChannelId, MixRealJid};
+
+mod publication;
+use self::publication::render_publication;
 
 pub fn message_children(raw: &str) -> Result<(String, bool)> {
     let document = Document::parse(raw).context("malformed MIX message")?;
@@ -582,10 +586,50 @@ pub async fn process_channel_message(
         }
     }
     let service = state.mix_service();
+    let Some(retraction_target) = retraction_target else {
+        let channel_jid = channel.jid();
+        if service
+            .mix_participant(channel.id, actor_bare)
+            .await?
+            .is_none()
+        {
+            return Ok(Some(message_error(
+                &id,
+                &channel_jid,
+                actor_full,
+                "auth",
+                "forbidden",
+            )));
+        }
+        let message = PreparedMessage {
+            channel_id: MixChannelId::new(channel.id),
+            actor: MixRealJid::parse(actor_bare)?,
+            item_id: Uuid::new_v4(),
+            children: message_children.expect("ordinary MIX message has parsed children"),
+            identity: message_replay_identity,
+            encrypted: message_encrypted,
+        };
+        enter_first_admission(observation, false);
+        let (error_type, condition) = match service
+            .publish_message(&message, render_publication, foreground.as_ref())
+            .await?
+        {
+            PublicationOutcome::Published(_) | PublicationOutcome::Replay(_) => return Ok(None),
+            PublicationOutcome::Absent => ("cancel", "item-not-found"),
+            PublicationOutcome::TooLarge => ("modify", "policy-violation"),
+            PublicationOutcome::Conflict => ("cancel", "conflict"),
+        };
+        return Ok(Some(message_error(
+            &id,
+            &channel_jid,
+            actor_full,
+            error_type,
+            condition,
+        )));
+    };
     let mut channel = channel;
     let mut authoritative_id = None;
     let mut retry = false;
-    let mut previous_request: Option<foreground::StoreRequest> = None;
     loop {
         if retry {
             let Some(current) = service
@@ -620,14 +664,13 @@ pub async fn process_channel_message(
         let archived_jid = publisher_identity.archive_jid_visible.then_some(actor_bare);
         let live_jid = participant_jid_visible(&channel, &preference).then_some(actor_bare);
         let channel_jid = channel.jid();
-        if retraction_target.is_some() {
-            anyhow::ensure!(
-                !id.is_empty() && id.len() <= 1_024 && !id.chars().any(char::is_control),
-                "MIX retraction requires a bounded client action id"
-            );
-        }
+        anyhow::ensure!(
+            !id.is_empty() && id.len() <= 1_024 && !id.chars().any(char::is_control),
+            "MIX retraction requires a bounded client action id"
+        );
         let item_id = *authoritative_id.get_or_insert_with(Uuid::new_v4);
-        let error = if let Some(target_id) = retraction_target {
+        let error = {
+            let target_id = retraction_target;
             let tombstone = mix_retraction_tombstone(
                 &channel_jid,
                 target_id,
@@ -665,64 +708,6 @@ pub async fn process_channel_message(
                 RetractMixMessageOutcome::IdentityPolicyChanged if !retry => None,
                 RetractMixMessageOutcome::Conflict
                 | RetractMixMessageOutcome::IdentityPolicyChanged => Some(("cancel", "conflict")),
-            }
-        } else {
-            let children = message_children
-                .as_deref()
-                .expect("non-retraction MIX message has parsed children");
-            let archive = mix_channel_message(MixChannelMessage {
-                from: &channel_jid,
-                to: None,
-                id: item_id,
-                payload: Some(children),
-                nick: publisher_identity.nick.as_deref(),
-                jid: archived_jid,
-            })?;
-            enter_first_admission(observation, retry);
-            let outcome = if let Some(owner) = &foreground {
-                let command = foreground::StoreCommand {
-                    channel_id: channel.id,
-                    actor: actor_bare.to_owned(),
-                    item_id,
-                    payload: archive,
-                    identity: message_replay_identity.clone(),
-                    delivery_payload: children.to_owned(),
-                    visible_jid: live_jid.map(str::to_owned),
-                    encrypted: message_encrypted,
-                };
-                let request = match previous_request.take() {
-                    Some(previous) => previous.retry_with_identity(command, publisher_identity)?,
-                    None => owner.store_request(command, publisher_identity)?,
-                };
-                let outcome = service.store_mix_message_observed(&request).await?.outcome;
-                if outcome == StoreEventOutcome::IdentityPolicyChanged && !retry {
-                    previous_request = Some(request);
-                }
-                outcome
-            } else {
-                service
-                    .store_mix_message(StoreMixMessageRequest {
-                        channel_id: channel.id,
-                        actor: actor_bare,
-                        item_id: &item_id.to_string(),
-                        payload: &archive,
-                        identity: message_replay_identity.clone(),
-                        delivery_payload: children,
-                        publisher_identity: &publisher_identity,
-                        visible_jid: live_jid,
-                        encrypted: message_encrypted,
-                    })
-                    .await?
-                    .outcome
-            };
-            match outcome {
-                StoreEventOutcome::Stored(_) | StoreEventOutcome::Replay(_) => return Ok(None),
-                StoreEventOutcome::NotParticipant => Some(("auth", "forbidden")),
-                StoreEventOutcome::TooLarge => Some(("modify", "policy-violation")),
-                StoreEventOutcome::IdentityPolicyChanged if !retry => None,
-                StoreEventOutcome::Conflict | StoreEventOutcome::IdentityPolicyChanged => {
-                    Some(("cancel", "conflict"))
-                }
             }
         };
         if let Some((error_type, condition)) = error {

@@ -7,6 +7,7 @@ use northstar_time::{DateTime, Utc};
 
 mod administration;
 mod pam_delivery_repository;
+mod publication_stub;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Call {

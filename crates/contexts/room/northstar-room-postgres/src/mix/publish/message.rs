@@ -1,5 +1,10 @@
 use super::*;
 use northstar_room_application::mix_service::MixPublisherIdentity;
+use northstar_room_core::mix::{MixChannelId, MixRealJid};
+
+mod publication;
+pub use self::publication::publish_message;
+use self::publication::{locked_message_payload, MessagePayload};
 
 #[expect(
     clippy::too_many_arguments,
@@ -88,18 +93,64 @@ pub async fn store_mix_message_inner(
         authoritative_id.to_string() == item_id,
         "MIX message item id must be a canonical UUID"
     );
-    let actor = canonical_user_bare(actor)?;
+    admit_message(
+        pool,
+        &MixChannelId::new(channel_id),
+        &MixRealJid::parse(actor)?,
+        authoritative_id,
+        MessagePayload::Rendered {
+            payload,
+            publisher_identity,
+            visible_jid,
+        },
+        identity,
+        delivery_payload,
+        encrypted,
+        payloads,
+        observation,
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "shared legacy and locked publication transaction"
+)]
+async fn admit_message(
+    pool: &PgPool,
+    channel_id: &MixChannelId,
+    actor: &MixRealJid,
+    authoritative_id: Uuid,
+    input: MessagePayload<'_>,
+    identity: Option<MixBusinessIdentity<'_>>,
+    delivery_payload: &str,
+    encrypted: bool,
+    payloads: &dyn MixEventPayloadRenderer,
+    observation: Option<&northstar_room_application::mix::StoreRequest>,
+) -> Result<StoreMixMessageAdmission> {
+    let actor = actor.as_str();
+    let channel_id = channel_id.as_uuid();
     let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     let channel_row = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
         .bind(channel_id)
-        .fetch_one(&mut *transaction)
+        .fetch_optional(&mut *transaction)
         .await?;
+    let Some(channel_row) = channel_row else {
+        if matches!(input, MessagePayload::Rendered { .. }) {
+            return Err(sqlx::Error::RowNotFound.into());
+        }
+        transaction.rollback().await?;
+        return Ok(StoreMixMessageAdmission {
+            outcome: StoreEventOutcome::NotParticipant,
+            recipients: Vec::new(),
+        });
+    };
     let channel = channel_from_row(&channel_row);
     if let Some(identity) = identity {
         if let Some(existing) = existing_mix_business_intent_tx(
             &mut transaction,
             channel_id,
-            &actor,
+            actor,
             "message",
             identity.client_id,
         )
@@ -115,33 +166,55 @@ pub async fn store_mix_message_inner(
             });
         }
     }
-    let Some(participant) = mix_participant(&mut *transaction, channel_id, &actor).await? else {
+    let Some(participant) = mix_participant(&mut *transaction, channel_id, actor).await? else {
         transaction.rollback().await?;
         return Ok(StoreMixMessageAdmission {
             outcome: StoreEventOutcome::NotParticipant,
             recipients: Vec::new(),
         });
     };
-    if !matches_locked_publisher_identity(
-        &mut transaction,
-        &channel,
-        &participant,
-        publisher_identity,
-        visible_jid,
-    )
-    .await?
-    {
-        transaction.rollback().await?;
-        return Ok(StoreMixMessageAdmission {
-            outcome: StoreEventOutcome::IdentityPolicyChanged,
-            recipients: Vec::new(),
-        });
-    }
+    let (payload, visible_jid) = match input {
+        MessagePayload::Rendered {
+            payload,
+            publisher_identity,
+            visible_jid,
+        } => {
+            if !matches_locked_publisher_identity(
+                &mut transaction,
+                &channel,
+                &participant,
+                publisher_identity,
+                visible_jid,
+            )
+            .await?
+            {
+                transaction.rollback().await?;
+                return Ok(StoreMixMessageAdmission {
+                    outcome: StoreEventOutcome::IdentityPolicyChanged,
+                    recipients: Vec::new(),
+                });
+            }
+            (std::borrow::Cow::Borrowed(payload), visible_jid)
+        }
+        MessagePayload::Locked { message, renderer } => {
+            let (payload, visible_jid) =
+                locked_message_payload(&mut transaction, &channel, &participant, message, renderer)
+                    .await?;
+            if payload.len() > 1_048_576 {
+                transaction.rollback().await?;
+                return Ok(StoreMixMessageAdmission {
+                    outcome: StoreEventOutcome::TooLarge,
+                    recipients: Vec::new(),
+                });
+            }
+            (std::borrow::Cow::Owned(payload), visible_jid)
+        }
+    };
     if let Some(identity) = identity {
         if let Some(existing) = admit_mix_business_intent_tx(
             &mut transaction,
             channel_id,
-            &actor,
+            actor,
             "message",
             identity,
             authoritative_id,
@@ -163,9 +236,9 @@ pub async fn store_mix_message_inner(
         &mut transaction,
         &channel,
         NODE_MESSAGES,
-        item_id,
+        &authoritative_id.to_string(),
         Some(&participant),
-        payload,
+        &payload,
     )
     .await;
     match stored {
@@ -200,6 +273,13 @@ pub async fn store_mix_message_inner(
                 },
             )
             .await?;
+            let recipients = projection.as_ref().map_or_else(Vec::new, |projection| {
+                projection
+                    .recipients
+                    .iter()
+                    .map(|row| row.participant.clone())
+                    .collect()
+            });
             if let Some(request) = observation {
                 northstar_room_application::mix::commit_observed(
                     transaction.commit(),
@@ -252,14 +332,22 @@ pub(crate) async fn matches_locked_publisher_identity(
     if MixPublisherIdentity::from_state(channel, participant) != *rendered {
         return Ok(false);
     }
-    let live_jid_visible = if channel.jid_visibility == "maybe" {
+    let live_jid_visible = locked_live_jid_visible(transaction, channel, participant).await?;
+    Ok(visible_jid == live_jid_visible.then_some(participant.jid.as_str()))
+}
+
+async fn locked_live_jid_visible(
+    transaction: &mut Transaction<'_, Postgres>,
+    channel: &MixChannel,
+    participant: &MixParticipant,
+) -> Result<bool> {
+    Ok(if channel.jid_visibility == "maybe" {
         let preference =
             mix_participant_preference(&mut **transaction, channel.id, &participant.jid)
                 .await?
                 .unwrap_or_default();
         participant_jid_visible(channel, &preference)
     } else {
-        rendered.archive_jid_visible
-    };
-    Ok(visible_jid == live_jid_visible.then_some(participant.jid.as_str()))
+        channel.jid_visibility == "visible"
+    })
 }

@@ -190,3 +190,23 @@ async fn delivery_ack_is_independent_of_the_producer_fence_and_release_is_atomic
     assert_eq!(final_totals, baseline);
     audit_mix_delivery_capacity_ledger(&pool).await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn bound_delivery_ack_releases_original_capacity() -> anyhow::Result<()> {
+    let fixture = super::mix_delivery_identity::Fixture::new().await?;
+    let result = async {
+        let account = fixture.account().await?;
+        let id = fixture.enqueue_local().await?;
+        let row = fixture.claim(id).await?;
+        assert_eq!(fixture.stored_account(id).await?, Some(account));
+        assert!(!acknowledge_mix_delivery(&fixture.pool, id, Uuid::new_v4()).await?);
+        assert!(acknowledge_mix_delivery(&fixture.pool, id, row.lease_token).await?);
+        reconcile_mix_delivery_capacity_committed(&fixture.pool).await?;
+        audit_mix_delivery_capacity_ledger(&fixture.pool).await?;
+        Ok(())
+    }
+    .await;
+    fixture.close().await?;
+    result
+}

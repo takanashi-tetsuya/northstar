@@ -8,6 +8,7 @@ mod administration;
 mod hosted_disco;
 mod pam_delivery_repository;
 mod pam_projection_repository;
+mod publication_stub;
 
 // Unrelated ports fail loudly if a handler unexpectedly reaches them.
 macro_rules! unused_async {

@@ -10,6 +10,8 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
+mod publication_observation;
+
 #[derive(Clone)]
 pub struct PreparedIngress(Arc<Ingress>);
 
@@ -307,6 +309,14 @@ impl Observation {
         command: StoreCommand,
         publisher_identity: MixPublisherIdentity,
     ) -> Result<StoreRequest, Rejected> {
+        self.issue_store_request(command, Some(publisher_identity))
+    }
+
+    fn issue_store_request(
+        &self,
+        command: StoreCommand,
+        publisher_identity: Option<MixPublisherIdentity>,
+    ) -> Result<StoreRequest, Rejected> {
         let mut state = self.state();
         active(&state.snapshot)?;
         if state.snapshot.request_issued {
@@ -402,14 +412,16 @@ impl ReplayRequest {
 pub struct StoreRequest {
     observation: Observation,
     command: Arc<StoreCommand>,
-    publisher_identity: MixPublisherIdentity,
+    publisher_identity: Option<MixPublisherIdentity>,
 }
 impl StoreRequest {
     pub fn command(&self) -> &StoreCommand {
         &self.command
     }
     pub fn publisher_identity(&self) -> &MixPublisherIdentity {
-        &self.publisher_identity
+        self.publisher_identity
+            .as_ref()
+            .expect("legacy rendered MIX request")
     }
     pub fn observation(&self) -> &Observation {
         &self.observation
@@ -424,7 +436,7 @@ impl StoreRequest {
     ) -> Result<Self, Rejected> {
         let mut state = self.observation.state();
         active(&state.snapshot)?;
-        if state.retried {
+        if state.retried || self.publisher_identity.is_none() {
             return Err(Rejected::AlreadyIssued);
         }
         if !command.matches_ingress(self.observation.ingress())
@@ -452,7 +464,7 @@ impl StoreRequest {
         Ok(Self {
             observation: self.observation,
             command,
-            publisher_identity,
+            publisher_identity: Some(publisher_identity),
         })
     }
     fn start(&self, configured_domain: &str) -> Result<(), Rejected> {
@@ -709,7 +721,7 @@ pub(crate) fn assert_store_allocations_cannot_be_substituted() {
     let substitute = StoreRequest {
         observation: observation.clone(),
         command: Arc::new(fixture::command(false)),
-        publisher_identity: fixture::publisher_identity(),
+        publisher_identity: Some(fixture::publisher_identity()),
     };
     let before = observation.snapshot();
     assert_eq!(

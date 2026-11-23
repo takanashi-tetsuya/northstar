@@ -511,3 +511,50 @@ async fn dead_letter_requeue_uses_tail_and_preserves_current_head_wake() {
         .unwrap();
     audit_mix_delivery_capacity_ledger(&pool).await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires an isolated TEST_DATABASE_URL PostgreSQL database"]
+async fn dead_letter_requeue_preserves_the_bound_account() -> anyhow::Result<()> {
+    let fixture = super::mix_delivery_identity::Fixture::new().await?;
+    let result = async {
+        let original = fixture.account().await?;
+        let id = fixture.enqueue_local().await?;
+        let row = fixture.claim(id).await?;
+        assert!(
+            dead_letter_mix_delivery(
+                &fixture.pool,
+                id,
+                row.lease_token,
+                "policy-cancelled",
+                "fixture"
+            )
+            .await?
+        );
+        let letter = mix_delivery_dead_letters(&fixture.pool, None, 1)
+            .await?
+            .pop()
+            .expect("dead letter");
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(original)
+            .execute(&fixture.pool)
+            .await?;
+        assert_ne!(fixture.account().await?, original);
+        assert!(requeue_mix_delivery_dead_letter(&fixture.pool, letter.dead_letter_id).await?);
+        assert_eq!(fixture.stored_account(id).await?, Some(original));
+        let requeued = fixture.claim(id).await?;
+        let address = northstar_room_core::mix::MixRealJid::parse(&requeued.recipient.jid)?;
+        assert_eq!(
+            claimed_recipient_account(
+                &fixture.pool,
+                super::mix_delivery_identity::source(&requeued),
+                &address
+            )
+            .await?,
+            None
+        );
+        Ok(())
+    }
+    .await;
+    fixture.close().await?;
+    result
+}

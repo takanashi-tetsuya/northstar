@@ -470,6 +470,14 @@ async fn mix_anon_misc_permissions_are_atomic_and_private() {
         .execute(&pool)
         .await
         .unwrap();
+    // Local MIX deliveries bind the recipient account (C4-11), so the guest
+    // needs one to stay in the committed message audience below.
+    sqlx::query("INSERT INTO users(id,username,password_hash) VALUES($1,$2,'test-only')")
+        .bind(Uuid::new_v4())
+        .bind(format!("guest-{suffix}"))
+        .execute(&pool)
+        .await
+        .unwrap();
     let owner = format!("{owner_username}@example.test");
     let guest = format!("guest-{suffix}@example.test");
     let localpart = format!("family-{}", &suffix[..16]);

@@ -85,9 +85,9 @@ use northstar_room_application::mix_service::{
     MixInvitationProof, MixMamReadActor, MixMutationOutcome, MixParticipant,
     MixParticipantPreference, MixReadOutcome, MixReplayIdentity, PamMembership, PamOperationReplay,
     PresenceOutcome, RegisterMixNickOutcome, RemotePamCompletionOutcome, RetractMixMessageOutcome,
-    RetractMixMessageRequest, SetNickError, SourceArchiveAdmission, StoreEventOutcome,
-    StoreMixMessageRequest, ALL_NODES, NODE_ALLOWED, NODE_AVATAR_DATA, NODE_AVATAR_METADATA,
-    NODE_BANNED, NODE_CONFIG, NODE_INFO, NODE_JIDMAP, NODE_MESSAGES, NODE_PRESENCE,
+    RetractMixMessageRequest, SetNickError, SourceArchiveAdmission, ALL_NODES, NODE_ALLOWED,
+    NODE_AVATAR_DATA, NODE_AVATAR_METADATA, NODE_BANNED, NODE_CONFIG, NODE_INFO, NODE_JIDMAP,
+    NODE_MESSAGES, NODE_PRESENCE,
 };
 pub use northstar_room_core::mix::{
     MixSessionCapability, ADMIN_NS, ANON_NS, CORE_NS, MISC_NS, PAM_NS, PRESENCE_NS,

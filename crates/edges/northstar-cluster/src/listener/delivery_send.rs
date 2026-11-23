@@ -120,8 +120,30 @@ pub(super) async fn handoff_mix_delivery<A: ClusterAdapters>(
     mix_handoff: &mut Option<ClusterMixHandoff>,
 ) -> DirectDeliverySend {
     let DirectDeliveryRecipient {
-        session, delivery, ..
+        session,
+        delivery,
+        jid,
     } = *recipient;
+    let Ok(address) = northstar_room_core::mix::MixRealJid::parse(jid) else {
+        return DirectDeliverySend::Accepted(false);
+    };
+    match message_policy
+        .mix
+        .outbox_claimed_recipient_account(source, &address)
+        .await
+    {
+        Ok(Some(account_id)) if account_id == session.user_id => {}
+        Ok(Some(_)) => return DirectDeliverySend::Accepted(false),
+        Ok(None) => return DirectDeliverySend::StopFanout,
+        Err(error) => {
+            tracing::warn!(
+                ?error,
+                delivery_id = %source.delivery_id,
+                "failed to verify remote MIX recipient account"
+            );
+            return DirectDeliverySend::StopFanout;
+        }
+    }
     // Rotate the signed source into this node's durable
     // fence before putting it on a local C2S output.  No
     // acknowledgement is emitted until that output has

@@ -30,7 +30,7 @@ const files = {
 // Sources read as whole production modules (the file plus its non-test
 // child module files), so items keep being found after a module split.
 const productionModules = new Set([
-  'bosh', 'mix', 'mixDb', 'state',
+  'bosh', 'mix', 'mixCore', 'mixDb', 'state',
 ]);
 
 // These directories hold independently owned modules, so read the file plus
@@ -409,7 +409,11 @@ export function verifyMixForegroundBoundaries({ mixCore, mixData, mixDb, state }
   }
   requireBoundary(dense(codeOnly(state)).includes('MixService::new_with_outbox_database_admission(northstar_workflows::room_effects::PostgresMixRepository::new(pool.clone()),config.domain.clone(),'),
     'MIX ServerNode construction must supply actual runtime configuration');
-  const sql = dense(body(mixDb, 'async\\s+fn\\s+store_mix_message_inner\\b'));
+  const sql = dense(body(mixDb, 'async\\s+fn\\s+admit_message\\b'));
+  for (const entry of ['store_mix_message_inner', 'publish_message']) {
+    requireBoundary(dense(body(mixDb, `async\\s+fn\\s+${entry}\\b`)).includes('admit_message('),
+      `MIX ${entry} must use the common locked admission`);
+  }
   requireBoundary(count(sql, 'request.observed_existing(foreground_existing(&existing))?;}transaction.rollback().await?;') === 2,
     'MIX raw Existing must be retained before both rollback awaits');
 }

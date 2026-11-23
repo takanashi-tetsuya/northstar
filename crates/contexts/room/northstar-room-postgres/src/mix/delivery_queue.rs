@@ -2,6 +2,9 @@
 
 use super::*;
 
+mod recipient_account;
+pub use self::recipient_account::claimed_recipient_account;
+
 pub struct MixDeliveryProjection<'a> {
     pub channel: &'a MixChannel,
     pub event_id: Uuid,
@@ -65,9 +68,32 @@ pub async fn enqueue_mix_deliveries_tx_with_facts(
         recipient_jids.iter().collect::<BTreeSet<_>>().len() == recipients.len(),
         "duplicate MIX delivery recipient"
     );
+    let accounts = sqlx::query_as::<_, (String, bool, Option<Uuid>)>(
+        "SELECT input.jid, authority.is_local, account.id
+           FROM unnest($1::text[]) AS input(jid)
+           CROSS JOIN LATERAL (
+               SELECT $2 = 'mix.' || split_part(input.jid, '@', 2) AS is_local
+           ) AS authority
+           LEFT JOIN users AS account ON authority.is_local
+             AND account.username = split_part(input.jid, '@', 1)",
+    )
+    .bind(&recipient_jids)
+    .bind(&channel.service_domain)
+    .fetch_all(&mut **transaction)
+    .await?
+    .into_iter()
+    .filter_map(|(jid, local, account)| (!local || account.is_some()).then_some((jid, account)))
+    .collect::<BTreeMap<_, _>>();
+    if accounts.is_empty() {
+        return Ok(None);
+    }
+    let recipient_jids = recipient_jids
+        .into_iter()
+        .filter(|jid| accounts.contains_key(jid))
+        .collect::<Vec<_>>();
     let projected_recipients = ordered_recipients
-        .iter()
-        .copied()
+        .into_iter()
+        .filter(|recipient| accounts.contains_key(&recipient.jid))
         .map(|recipient| (Uuid::new_v4(), recipient))
         .collect::<Vec<_>>();
     let mut capacity_deltas = BTreeMap::new();
@@ -126,12 +152,12 @@ pub async fn enqueue_mix_deliveries_tx_with_facts(
         })
         .collect::<BTreeMap<_, _>>();
     anyhow::ensure!(
-        sequences.len() == recipients.len(),
+        sequences.len() == projected_recipients.len(),
         "duplicate MIX delivery recipient"
     );
 
     let mut builder = QueryBuilder::<Postgres>::new(
-        "INSERT INTO mix_delivery_recipients(delivery_id,event_id,recipient_participant_id,recipient_jid,delivery_sequence) ",
+        "INSERT INTO mix_delivery_recipients(delivery_id,event_id,recipient_participant_id,recipient_jid,delivery_sequence,recipient_local_user_id) ",
     );
     builder.push_values(
         &projected_recipients,
@@ -144,7 +170,8 @@ pub async fn enqueue_mix_deliveries_tx_with_facts(
                     *sequences
                         .get(&recipient.jid)
                         .expect("every normalized MIX recipient has a sequence"),
-                );
+                )
+                .push_bind(accounts[&recipient.jid]);
         },
     );
     builder.build().execute(&mut **transaction).await?;
@@ -159,10 +186,12 @@ pub async fn enqueue_mix_deliveries_tx_with_facts(
         .collect::<BTreeMap<_, _>>();
     let recipients = recipients
         .iter()
-        .map(|recipient| northstar_room_core::mix::RecipientProjection {
-            participant: recipient.clone(),
-            delivery_id: delivery_ids[recipient.jid.as_str()],
-            sequence: sequences[&recipient.jid],
+        .filter_map(|recipient| {
+            Some(northstar_room_core::mix::RecipientProjection {
+                participant: recipient.clone(),
+                delivery_id: *delivery_ids.get(recipient.jid.as_str())?,
+                sequence: sequences[&recipient.jid],
+            })
         })
         .collect();
     Ok(Some(northstar_room_core::mix::DeliveryProjection {
@@ -218,14 +247,14 @@ pub async fn move_mix_delivery_to_dead_letter_tx(
     let inserted = sqlx::query(
         "INSERT INTO mix_delivery_dead_letters(
              dead_letter_id,delivery_id,event_id,channel_id,channel_jid,
-             recipient_participant_id,recipient_jid,delivery_sequence,
+             recipient_participant_id,recipient_jid,delivery_sequence,recipient_local_user_id,
              stanza_template,authoritative_stanza_id,archive,encrypted,
              attempt_count,terminal_reason,last_error,
              original_created_at,original_expires_at
          )
          SELECT $5,recipient.delivery_id,event.event_id,event.channel_id,event.channel_jid,
                 recipient.recipient_participant_id,recipient.recipient_jid,
-                recipient.delivery_sequence,event.stanza_template,
+                recipient.delivery_sequence,recipient.recipient_local_user_id,event.stanza_template,
                 event.authoritative_stanza_id,event.archive,event.encrypted,
                 recipient.attempt_count,$3,left($4,2048),
                 recipient.created_at,event.expires_at

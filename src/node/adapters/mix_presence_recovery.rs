@@ -7,8 +7,10 @@ use northstar_federation_application::effective_policy::EffectiveFederationPolic
 use northstar_mix_xmpp::ports::MixPresenceRecoveryPort;
 use northstar_mix_xmpp::presence_recovery_routes::MixPresenceRecoveryRoutes;
 use northstar_room_application::mix_service::{
-    MixAccount, MixChannel, MixService, PamMembership, PresenceOutcome,
+    MixAccount, MixChannel, MixService, PamMembership, PresenceOutcome, RecoveryEpoch,
+    RecoveryPresenceSource, RecoveryProgress,
 };
+use northstar_room_core::mix::MixChannelId;
 use northstar_time::{DateTime, Utc};
 use northstar_workflows::room_effects::PostgresMixRepository;
 use std::sync::Arc;
@@ -92,5 +94,26 @@ impl MixPresenceRecoveryPort for MixPresenceRecoveryContext {
             .expire_unrefreshed_mix_presence(cutoff)
             .await?
             .len())
+    }
+
+    async fn refresh_recovery_presence(
+        &self,
+        epoch: RecoveryEpoch,
+        channel: &MixChannelId,
+        source: &RecoveryPresenceSource,
+    ) -> Result<PresenceOutcome> {
+        self.service
+            .refresh_recovery_presence(epoch, channel, source)
+            .await
+    }
+
+    async fn expire_recovery_presence_page(
+        &self,
+        epoch: RecoveryEpoch,
+        budget: u32,
+    ) -> Result<RecoveryProgress> {
+        self.service
+            .expire_recovery_presence_page(epoch, budget)
+            .await
     }
 }

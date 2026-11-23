@@ -6,7 +6,8 @@ mod membership;
 mod recovery;
 
 pub use self::membership::{leave_mix_channel, set_mix_nick, update_mix_subscriptions};
-pub use self::recovery::{expire_unrefreshed_mix_presence, prepare_mix_presence_after_restart};
+pub use self::recovery::expire_unrefreshed_mix_presence;
+pub(crate) use self::recovery::{expire_recovery_presence_page, prepare_recovery};
 
 pub async fn mix_participant<'e>(
     executor: impl sqlx::Executor<'e, Database = Postgres>,

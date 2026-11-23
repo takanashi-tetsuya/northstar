@@ -1830,3 +1830,6 @@ fn registration_requirement() -> northstar_abuse_policy::WorkRequirement {
         notice: "retry the same registration".to_owned(),
     }
 }
+
+#[cfg(test)]
+mod presence_recovery;

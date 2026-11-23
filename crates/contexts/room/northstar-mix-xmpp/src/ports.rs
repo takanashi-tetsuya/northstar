@@ -12,8 +12,9 @@ use northstar_delivery_core::{
 use northstar_federation_core::FederationRoute;
 use northstar_room_application::mix_service::{
     foreground, MixAccount, MixChannel, MixRepository, MixService, PamMembership, PresenceOutcome,
+    RecoveryEpoch, RecoveryPresenceSource, RecoveryProgress,
 };
-use northstar_room_core::mix::MixSessionCapability;
+use northstar_room_core::mix::{MixChannelAddress, MixChannelId, MixSessionCapability};
 use northstar_room_core::mix_iq_relay::{MixIqRelayIndex, PendingMixIqRelay};
 use northstar_roster_core::RosterChange;
 use northstar_stream::frame_execution::{SessionExecutions, Stage};
@@ -206,6 +207,15 @@ pub trait MixPresenceRoutes: Send + Sync + 'static {
         expected_gate: &Arc<Mutex<()>>,
         channel_jid: &str,
     ) -> Option<(bool, bool)>;
+    fn recovery_epoch_state(
+        &self,
+        source: &RecoveryPresenceSource,
+        account: Uuid,
+        expected_connection_id: Uuid,
+        expected_caps_generation: u64,
+        expected_gate: &Arc<Mutex<()>>,
+        channel: &MixChannelAddress,
+    ) -> Option<(bool, bool)>;
 }
 
 /// The effects MIX presence recovery may apply.
@@ -246,6 +256,17 @@ pub trait MixPresenceRecoveryPort: Send + Sync + 'static {
         &self,
         cutoff: DateTime<Utc>,
     ) -> impl Future<Output = Result<usize>> + Send;
+    fn refresh_recovery_presence(
+        &self,
+        epoch: RecoveryEpoch,
+        channel: &MixChannelId,
+        source: &RecoveryPresenceSource,
+    ) -> impl Future<Output = Result<PresenceOutcome>> + Send;
+    fn expire_recovery_presence_page(
+        &self,
+        epoch: RecoveryEpoch,
+        budget: u32,
+    ) -> impl Future<Output = Result<RecoveryProgress>> + Send;
 }
 
 /// Server-wide capabilities the MIX handlers use.

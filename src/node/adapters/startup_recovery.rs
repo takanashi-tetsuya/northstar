@@ -5,8 +5,11 @@ use northstar_abuse_policy::model::AbuseKeyDeploymentIdentity;
 use northstar_operations_application::startup_recovery::{
     DurableCapacityAuditPorts, RestartRecoveryPorts,
 };
-use northstar_room_postgres::mix::MixPresenceProbeTarget;
-use northstar_time::{DateTime, Utc};
+use northstar_room_application::mix_service::{
+    MixPresenceRecoveryRepository, RecoveryEpoch, RecoveryProbeTarget,
+};
+use northstar_room_core::mix::MixChannelAddress;
+use northstar_workflows::room_effects::PostgresMixRepository;
 use sqlx::PgPool;
 
 pub(in crate::node) struct StartupRecoveryAdapters<'a> {
@@ -25,7 +28,7 @@ impl DurableCapacityAuditPorts for StartupRecoveryAdapters<'_> {
 }
 
 impl RestartRecoveryPorts for StartupRecoveryAdapters<'_> {
-    type MixPresenceRecovery = (DateTime<Utc>, Vec<MixPresenceProbeTarget>);
+    type MixPresenceRecovery = (RecoveryEpoch, Vec<RecoveryProbeTarget>);
     type AbuseKeyDeployment = AbuseKeyDeploymentIdentity;
 
     async fn recover_remote_pam(&self) -> Result<()> {
@@ -33,8 +36,11 @@ impl RestartRecoveryPorts for StartupRecoveryAdapters<'_> {
     }
 
     async fn prepare_mix_presence(&self) -> Result<Self::MixPresenceRecovery> {
-        northstar_room_postgres::mix::prepare_mix_presence_after_restart(self.pool, self.domain)
-            .await
+        MixChannelAddress::prepare_service_domain(self.domain)?;
+        let prepared = PostgresMixRepository::new(self.pool.clone())
+            .prepare_recovery()
+            .await?;
+        Ok((prepared.epoch, prepared.targets))
     }
 
     async fn reconcile_mix_muc_mirrors(&self) -> Result<u64> {

@@ -872,3 +872,6 @@ pub fn pam_result(index: u128) -> ClaimedPamResult {
         lease_token: Uuid::from_u128(300 + index),
     }
 }
+
+#[cfg(test)]
+mod presence_recovery;

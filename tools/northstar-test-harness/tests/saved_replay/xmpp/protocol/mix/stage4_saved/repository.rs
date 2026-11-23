@@ -927,3 +927,6 @@ impl MixDeliveryRepository for ControlledRepository {
         Ok(returned)
     }
 }
+
+#[cfg(test)]
+mod presence_recovery;

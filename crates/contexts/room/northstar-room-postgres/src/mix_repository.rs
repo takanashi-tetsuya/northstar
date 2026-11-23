@@ -9,6 +9,7 @@ use uuid::Uuid;
 mod delivery_impl;
 mod mam_read_impl;
 mod pam_impl;
+mod presence_recovery_impl;
 mod relay_profile_snapshot;
 mod repository_impl;
 #[derive(Clone)]

@@ -1,21 +1,25 @@
 use super::super::{
-    publish_verified_mix_presence_with, same_jid_domain, Arc, CanonicalJid, Context, Duration,
-    XmlElement, MIX_IQ_RELAY_TTL,
+    same_jid_domain, Arc, CanonicalJid, Context, Duration, XmlElement, MIX_IQ_RELAY_TTL,
 };
 use crate::ports::*;
-use northstar_room_application::mix_service::MixPresenceProbeTarget;
+use crate::presence::publish_route_presence;
+use anyhow::Result;
+use northstar_room_application::mix_service::{
+    RecoveryEpoch, RecoveryPresenceSource, RecoveryProbeTarget, RecoveryProgress,
+    RECOVERY_PRESENCE_PAGE_CAP,
+};
+use std::future::Future;
+
+const RETRY_MIN: Duration = Duration::from_millis(100);
+const RETRY_MAX: Duration = Duration::from_secs(1);
 
 pub fn start_mix_presence_recovery(
     context: Arc<impl MixPresenceRecoveryPort>,
     registry: Arc<northstar_runtime::workers::WorkerRegistry>,
-    cutoff: northstar_time::DateTime<northstar_time::Utc>,
-    // The state layer snapshots these targets straight from its own
-    // repository query; the persistence-type conversion happens on this
-    // boundary so the protocol never names the storage DTO.
-    probes: impl IntoIterator<Item = impl Into<MixPresenceProbeTarget>>,
+    epoch: RecoveryEpoch,
+    probes: Vec<RecoveryProbeTarget>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
-    let probes: Vec<MixPresenceProbeTarget> = probes.into_iter().map(Into::into).collect();
     registry.supervise(
         "mix-presence-recovery",
         northstar_runtime::workers::WorkerCriticality::Restartable,
@@ -26,47 +30,67 @@ pub fn start_mix_presence_recovery(
             let context = Arc::clone(&context);
             let probes = probes.clone();
             async move {
-        for probe in probes {
-            let Ok(participant) = CanonicalJid::parse_bare(&probe.participant_jid) else {
-                tracing::warn!(participant = %probe.participant_jid, "ignored malformed persisted MIX participant JID");
-                continue;
-            };
-            let domain = participant.domainpart();
-            if same_jid_domain(domain, context.local_domain()) {
-                for (full_jid, connection_id, caps_generation) in context.routes().local_epochs(&probe.participant_jid) {
-                    publish_verified_mix_presence_with(
-                        context.as_ref(),
-                        &full_jid,
-                        connection_id,
-                        caps_generation,
-                    )
-                    .await?;
+                for probe in probes {
+                    let participant = CanonicalJid::parse_bare(probe.participant.as_str())?;
+                    let domain = participant.domainpart();
+                    if same_jid_domain(domain, context.local_domain()) {
+                        for (full_jid, connection_id, caps_generation) in
+                            context.routes().local_epochs(probe.participant.as_str())
+                        {
+                            let source = RecoveryPresenceSource::parse(&full_jid)?;
+                            publish_route_presence(
+                                context.as_ref(),
+                                &source,
+                                connection_id,
+                                caps_generation,
+                                Some(epoch),
+                            )
+                            .await?;
+                            heartbeat.ok();
+                        }
+                    } else if context.federation_domain_allowed(domain) {
+                        let stanza = XmlElement::namespaced("presence", "jabber:client")
+                            .attr("type", "probe")
+                            .attr("from", probe.channel.as_str())
+                            .attr("to", probe.participant.as_str())
+                            .finish();
+                        context.send_federated(domain, stanza, None).await;
+                    }
+                    heartbeat.ok();
                 }
-                continue;
-            }
-            if !context.federation_domain_allowed(domain) { continue; }
-            let stanza = XmlElement::namespaced("presence", "jabber:client")
-                .attr("type", "probe")
-                .attr("from", &probe.channel_jid)
-                .attr("to", &probe.participant_jid)
-                .finish();
-            context.send_federated(domain, stanza, None).await;
-        }
-        // The deadline is intentionally short and bounded: a remote resource
-        // that cannot answer a startup probe is no longer authoritative
-        // current state. A later available presence recreates the item.
-        tokio::time::sleep(MIX_IQ_RELAY_TTL).await;
-        let _expired_count = match context.expire_unrefreshed(cutoff).await {
-            Ok(expired) => expired,
-            Err(error) => {
-                return Err(error).context("failed to expire unrefreshed MIX presence");
-            }
-        };
-        // Expiry and every unavailable projection were committed atomically;
-        // the delivery worker owns transport retries.
-        heartbeat.ok();
-        Ok(())
+                drain_recovery_pages(
+                    |budget| context.expire_recovery_presence_page(epoch, budget),
+                    || heartbeat.ok(),
+                )
+                .await
             }
         },
     );
 }
+
+async fn drain_recovery_pages<F: Future<Output = Result<RecoveryProgress>>>(
+    mut expire_page: impl FnMut(u32) -> F,
+    mut heartbeat: impl FnMut(),
+) -> Result<()> {
+    tokio::time::sleep(MIX_IQ_RELAY_TTL).await;
+    let mut retry = RETRY_MIN;
+    loop {
+        let progress = expire_page(RECOVERY_PRESENCE_PAGE_CAP)
+            .await
+            .context("failed to expire unrefreshed MIX presence")?;
+        heartbeat();
+        if !progress.has_remaining {
+            return Ok(());
+        }
+        if progress.expired == 0 {
+            tokio::time::sleep(retry).await;
+            retry = (retry * 2).min(RETRY_MAX);
+        } else {
+            retry = RETRY_MIN;
+            tokio::task::yield_now().await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests;

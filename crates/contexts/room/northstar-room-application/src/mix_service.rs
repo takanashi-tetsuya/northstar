@@ -21,6 +21,7 @@ mod mam_read;
 mod operations;
 mod pam_repository;
 mod payloads;
+mod presence_recovery_repository;
 mod wake;
 
 pub use self::contracts::{
@@ -58,7 +59,12 @@ use self::payloads::{
 pub use self::payloads::{
     FederatedMixSuccess, MixEventPayloadRenderer, MixPayloads, MixPresenceDelivery, PamJoinResult,
 };
+pub use self::presence_recovery_repository::{
+    MixPresenceRecoveryRepository, RecoveryEpoch, RecoveryEpochAndTargets, RecoveryPresenceSource,
+    RecoveryProbeTarget, RecoveryProgress, RECOVERY_PRESENCE_PAGE_CAP,
+};
 pub use self::wake::{MixDeliveryWakeBroker, MixDeliveryWakeSubscription};
+pub use northstar_room_core::mix::MixChannelId;
 
 pub mod foreground;
 pub mod outbox;

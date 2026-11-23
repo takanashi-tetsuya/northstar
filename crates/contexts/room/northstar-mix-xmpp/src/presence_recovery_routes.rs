@@ -2,6 +2,8 @@
 
 use crate::ports::MixPresenceRoutes;
 use dashmap::DashMap;
+use northstar_room_application::mix_service::RecoveryPresenceSource;
+use northstar_room_core::mix::MixChannelAddress;
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::local_routes::session_table::{
     mix_presence_epoch_is_current, mix_presence_fallback_is_suppressed, session_entries_for_in,
@@ -50,14 +52,11 @@ impl MixPresenceRoutes for MixPresenceRecoveryRoutes {
     ) -> Option<(bool, bool)> {
         self.sessions.get(full_jid).map(|session| {
             (
-                mix_presence_epoch_is_current(
-                    session.connection_id,
+                current_epoch(
+                    &session,
                     expected_connection_id,
-                    session.caps_observation_generation.load(Ordering::Acquire),
                     expected_caps_generation,
-                    session.routable.load(Ordering::Acquire),
-                    session.available.load(Ordering::Acquire),
-                    Arc::ptr_eq(&session.mix_presence_gate, expected_gate),
+                    expected_gate,
                 ),
                 mix_presence_fallback_is_suppressed(
                     &session.mix_presence_fallback_suppressed,
@@ -66,6 +65,51 @@ impl MixPresenceRoutes for MixPresenceRecoveryRoutes {
             )
         })
     }
+
+    fn recovery_epoch_state(
+        &self,
+        source: &RecoveryPresenceSource,
+        account: Uuid,
+        expected_connection_id: Uuid,
+        expected_caps_generation: u64,
+        expected_gate: &Arc<tokio::sync::Mutex<()>>,
+        channel: &MixChannelAddress,
+    ) -> Option<(bool, bool)> {
+        self.sessions
+            .get(&source.full().to_string())
+            .map(|session| {
+                (
+                    session.user_id == account
+                        && current_epoch(
+                            &session,
+                            expected_connection_id,
+                            expected_caps_generation,
+                            expected_gate,
+                        ),
+                    mix_presence_fallback_is_suppressed(
+                        &session.mix_presence_fallback_suppressed,
+                        channel.as_str(),
+                    ),
+                )
+            })
+    }
+}
+
+fn current_epoch(
+    session: &OnlineSession,
+    expected_connection_id: Uuid,
+    expected_caps_generation: u64,
+    expected_gate: &Arc<tokio::sync::Mutex<()>>,
+) -> bool {
+    mix_presence_epoch_is_current(
+        session.connection_id,
+        expected_connection_id,
+        session.caps_observation_generation.load(Ordering::Acquire),
+        expected_caps_generation,
+        session.routable.load(Ordering::Acquire),
+        session.available.load(Ordering::Acquire),
+        Arc::ptr_eq(&session.mix_presence_gate, expected_gate),
+    )
 }
 
 #[cfg(test)]
@@ -231,3 +275,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod recovery_tests;

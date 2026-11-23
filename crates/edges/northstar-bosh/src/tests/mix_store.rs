@@ -807,3 +807,6 @@ impl MixDeliveryRepository for MixStore {
         panic!("unexpected port call: requeue_mix_delivery_dead_letter")
     }
 }
+
+#[cfg(test)]
+mod presence_recovery;

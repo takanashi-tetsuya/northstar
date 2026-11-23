@@ -1,6 +1,8 @@
 //! Channel presence processing, verified presence publication and route currency.
 
 use super::*;
+use northstar_room_application::mix_service::{RecoveryEpoch, RecoveryPresenceSource};
+use northstar_room_core::mix::{MixChannelAddress, MixChannelId};
 
 /// MIX presence withdrawal for a fenced client resource.
 pub async fn disconnect_mix_presence(
@@ -144,7 +146,25 @@ pub async fn publish_verified_mix_presence_with(
     expected_connection_id: Uuid,
     expected_caps_generation: u64,
 ) -> Result<()> {
-    let actor = northstar_xmpp_types::jid::CanonicalJid::parse(actor_full)?;
+    let source = RecoveryPresenceSource::parse(actor_full)?;
+    publish_route_presence(
+        context,
+        &source,
+        expected_connection_id,
+        expected_caps_generation,
+        None,
+    )
+    .await
+}
+
+pub(super) async fn publish_route_presence(
+    context: &impl MixPresenceRecoveryPort,
+    source: &RecoveryPresenceSource,
+    expected_connection_id: Uuid,
+    expected_caps_generation: u64,
+    recovery_epoch: Option<RecoveryEpoch>,
+) -> Result<()> {
+    let actor = source.full();
     let actor_full = actor.to_string();
     // Snapshot only the epoch identity and its shared gate. The authoritative
     // route is deliberately re-read after the async lock acquisition; using a
@@ -160,12 +180,12 @@ pub async fn publish_verified_mix_presence_with(
     let Some(user) = context.find_enabled_user(username).await? else {
         return Ok(());
     };
-    let actor_bare = actor.bare();
+    let actor_bare = source.participant().as_str();
     // A verified MIX-capable resource makes an already-persisted delivery
     // head eligible immediately. This is deliberately separate from the
     // presence projection below: a MAM/archive write or presence update never
     // acknowledges the durable recipient row.
-    context.wake_delivery_recipient(&actor_bare).await?;
+    context.wake_delivery_recipient(actor_bare).await?;
     let available = XmlElement::namespaced("presence", "jabber:client")
         .attr("from", &actor_full)
         .finish();
@@ -173,24 +193,36 @@ pub async fn publish_verified_mix_presence_with(
         if !pam_membership_receives(&membership, NODE_PRESENCE) {
             continue;
         }
-        let Ok(channel) = CanonicalJid::parse_bare(&membership.channel_jid) else {
+        let Ok(channel) = MixChannelAddress::parse(&membership.channel_jid) else {
             tracing::warn!(channel = %membership.channel_jid, "ignored malformed persisted MIX membership JID");
             continue;
         };
-        let domain = channel.domainpart();
+        let domain = channel.domain();
         let directed = northstar_xml_builder::rewrite::set_to(&available, &membership.channel_jid);
         // Hold the epoch for only one durable projection. User/membership
         // discovery above is intentionally outside it. Explicit presence or
         // teardown can therefore make progress between channels, and every
         // iteration revalidates the exact route before applying an effect.
         let mix_presence_epoch = Arc::clone(&mix_presence_gate).lock_owned().await;
-        let Some((epoch_is_current, fallback_suppressed)) = context.routes().epoch_state(
-            &actor_full,
-            expected_connection_id,
-            expected_caps_generation,
-            &expected_mix_presence_gate,
-            &membership.channel_jid,
-        ) else {
+        let route_state = if recovery_epoch.is_some() {
+            context.routes().recovery_epoch_state(
+                source,
+                user.id,
+                expected_connection_id,
+                expected_caps_generation,
+                &expected_mix_presence_gate,
+                &channel,
+            )
+        } else {
+            context.routes().epoch_state(
+                &actor_full,
+                expected_connection_id,
+                expected_caps_generation,
+                &expected_mix_presence_gate,
+                &membership.channel_jid,
+            )
+        };
+        let Some((epoch_is_current, fallback_suppressed)) = route_state else {
             break;
         };
         if !epoch_is_current {
@@ -200,23 +232,21 @@ pub async fn publish_verified_mix_presence_with(
             continue;
         }
         if domain == context.local_mix_domain() {
-            let Some(channel) = context
-                .mix_channel(
-                    domain,
-                    channel
-                        .localpart()
-                        .expect("joined MIX channel has a localpart"),
-                )
-                .await?
-            else {
+            let Some(channel) = context.mix_channel(domain, channel.localpart()).await? else {
                 continue;
             };
-            let _ = context
-                .ensure_presence(channel.id, &actor_bare, &actor_full)
-                .await?;
+            if let Some(epoch) = recovery_epoch {
+                context
+                    .refresh_recovery_presence(epoch, &MixChannelId::new(channel.id), source)
+                    .await?;
+            } else {
+                context
+                    .ensure_presence(channel.id, actor_bare, &actor_full)
+                    .await?;
+            }
         } else if context.federation_domain_allowed(domain) {
             context
-                .send_federated(domain, directed, Some(actor_bare.clone()))
+                .send_federated(domain, directed, Some(actor_bare.to_owned()))
                 .await;
         }
         drop(mix_presence_epoch);

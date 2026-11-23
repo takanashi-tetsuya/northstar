@@ -409,3 +409,6 @@ impl MixDeliveryRepository for Repository {
         mix_delivery_dead_letters(before: Option<(DateTime<Utc>, Uuid)>, limit: i64) -> Vec<MixDeliveryDeadLetter>;
     }
 }
+
+#[cfg(test)]
+mod presence_recovery;

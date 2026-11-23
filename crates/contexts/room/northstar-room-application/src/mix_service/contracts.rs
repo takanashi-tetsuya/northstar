@@ -520,7 +520,9 @@ pub struct MixAccessEntryUpdate<'a> {
     pub operation: MixAccessEntryOperation<'a>,
 }
 
-pub trait MixRepository: MixMamReadRepository + MixPamRepository + MixDeliveryRepository {
+pub trait MixRepository:
+    MixMamReadRepository + MixPamRepository + MixDeliveryRepository + MixPresenceRecoveryRepository
+{
     fn link_local_muc_mirror(
         &self,
         mix_domain: &str,

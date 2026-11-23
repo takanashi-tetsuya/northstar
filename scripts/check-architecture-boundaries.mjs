@@ -701,12 +701,15 @@ const mix = perFile.find(({ name }) => name === 'mix.rs') ?? {
 const mixProducerMappings = [
   ['destroy_mix_channel', 'destroy_mix_channel'],
   ['join_mix_channel', 'join_mix_channel'],
-  ['expire_unrefreshed_mix_presence', 'expire_unrefreshed_mix_presence'],
+  ['expire_unrefreshed_mix_presence', 'expire_presence_page'],
+  ['expire_recovery_presence_page', 'expire_presence_page'],
   ['update_mix_subscriptions', 'update_mix_subscriptions'],
   ['set_mix_nick', 'set_mix_nick'],
   ['leave_mix_channel', 'leave_mix_channel'],
-  ['store_mix_presence', 'store_mix_presence_with_policy'],
-  ['ensure_mix_presence', 'store_mix_presence_with_policy'],
+  ['store_mix_presence', 'write_mix_presence'],
+  ['ensure_mix_presence', 'write_mix_presence'],
+  ['refresh_recovery_presence', 'write_mix_presence'],
+  ['refresh_probe_presence_liveness', 'write_mix_presence'],
   ['store_mix_message', 'store_mix_message_inner'],
   ['store_mix_message_observed', 'store_mix_message_inner'],
   ['publish_mix_avatar', 'publish_mix_avatar'],
@@ -939,11 +942,11 @@ const mixRepositoryTransactionEntries = [
   'requeue_mix_delivery_dead_letter',
   'destroy_mix_channel',
   'join_mix_channel',
-  'expire_unrefreshed_mix_presence',
+  'expire_presence_page',
   'update_mix_subscriptions',
   'set_mix_nick',
   'leave_mix_channel',
-  'store_mix_presence_with_policy',
+  'write_mix_presence',
   'store_mix_message_inner',
   'publish_mix_avatar',
   'retract_mix_avatar',
@@ -2764,15 +2767,27 @@ if (!lockedMucExpiryWorker.includes('.locked_muc_expiry_context')
     || /(?:db|muc)::delete_expired_locked_muc_rooms\s*\(/.test(lockedMucExpiryWorker)) {
   throw new Error('locked MUC expiry worker must commit through its repository service');
 }
-const mixPresenceRecovery = structBody(readProductionModule('crates/contexts/room/northstar-mix-xmpp/src/lib.rs', { root }), 'pub fn start_mix_presence_recovery(');
+const mixPresenceSource = readProductionModule('crates/contexts/room/northstar-mix-xmpp/src/lib.rs', { root });
+const mixPresenceRecovery = structBody(mixPresenceSource, 'pub fn start_mix_presence_recovery(');
 const mixPresenceContext = read('src/node/adapters/mix_presence_recovery.rs');
-const verifiedMixPresence = structBody(readProductionModule('crates/contexts/room/northstar-mix-xmpp/src/lib.rs', { root }), 'async fn publish_verified_mix_presence_with(');
+const verifiedMixPresence = structBody(mixPresenceSource, 'async fn publish_verified_mix_presence_with(');
+const fencedMixPresence = structBody(mixPresenceSource, 'async fn publish_route_presence(');
+const mixPresenceDrain = structBody(mixPresenceSource, 'async fn drain_recovery_pages<');
 if (!state.includes('Arc::new(state.mix_presence_recovery_context())')
-    || /\b(?:ServerNode|PgPool|ClusterManager)\b/.test(mixPresenceRecovery)
+    || /\b(?:ServerNode|PgPool|ClusterManager)\b/.test(mixPresenceRecovery + fencedMixPresence + mixPresenceDrain)
     || /\b(?:Arc<ServerNode>|PgPool|ClusterManager)\b/.test(mixPresenceContext)
     || !mixPresenceRecovery.includes('context.routes().local_epochs(')
-    || !mixPresenceRecovery.includes('context.expire_unrefreshed(cutoff)')
-    || !verifiedMixPresence.includes('context.routes().epoch_state(')
+    || !mixPresenceRecovery.includes('publish_route_presence(')
+    || !mixPresenceRecovery.includes('drain_recovery_pages(')
+    || !mixPresenceRecovery.includes('context.expire_recovery_presence_page(epoch, budget)')
+    || !mixPresenceDrain.includes('expire_page(RECOVERY_PRESENCE_PAGE_CAP)')
+    || !mixPresenceDrain.includes('if !progress.has_remaining')
+    || !mixPresenceDrain.includes('tokio::time::sleep(retry)')
+    || !verifiedMixPresence.includes('publish_route_presence(')
+    || !fencedMixPresence.includes('context.routes().epoch_state(')
+    || !fencedMixPresence.includes('context.routes().recovery_epoch_state(')
+    || !/context\s*\.refresh_recovery_presence\(/.test(fencedMixPresence)
+    || !/self\.service\s*\.expire_recovery_presence_page\(epoch, budget\)/.test(mixPresenceContext)
     || !mixPresenceContext.includes('self.policy.domain_allowed(')) {
   throw new Error('MIX presence recovery must use live route fences and narrow application effects');
 }

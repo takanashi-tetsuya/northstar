@@ -69,6 +69,24 @@ run_exact_ignored \
 run_exact_ignored \
   room::relay_profile_snapshot::relay_profile_snapshots_work_on_a_read_only_connection
 
+run_exact_ignored \
+  room::mix_presence_recovery::startup_sweep_drains_more_than_one_page
+
+run_exact_ignored \
+  room::mix_presence_recovery::skipped_locked_rows_are_revisited
+
+run_exact_ignored \
+  room::mix_presence_recovery::reensured_resource_before_cutoff_survives_the_sweep
+
+run_exact_ignored \
+  room::mix_presence_recovery::fresh_concurrent_publish_survives_the_sweep
+
+run_exact_ignored \
+  room::mix_presence_recovery::liveness_refresh_keeps_the_explicit_payload
+
+run_exact_ignored \
+  room::mix_presence_recovery::cutoff_uses_the_database_clock_under_process_skew
+
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline -p northstar-db-it \
   room::mix_mam::mix_anon_misc_permissions_are_atomic_and_private \

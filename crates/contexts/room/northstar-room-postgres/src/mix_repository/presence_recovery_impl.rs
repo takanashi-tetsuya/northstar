@@ -22,11 +22,8 @@ impl<E: RoomEffects> MixPresenceRecoveryRepository for PostgresMixRepository<E> 
         &self,
         channel: &MixChannelId,
         source: &RecoveryPresenceSource,
-    ) -> Result<PresenceOutcome> {
-        Ok(presence_outcome(
-            crate::mix::refresh_probe_presence_liveness(&self.pool, channel, source, &MixPayloads)
-                .await?,
-        ))
+    ) -> Result<bool> {
+        crate::mix::refresh_probe_presence_liveness(&self.pool, channel, source, &MixPayloads).await
     }
 
     async fn expire_recovery_presence_page(

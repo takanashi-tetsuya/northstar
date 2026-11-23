@@ -87,6 +87,18 @@ run_exact_ignored \
 run_exact_ignored \
   room::mix_presence_recovery::cutoff_uses_the_database_clock_under_process_skew
 
+run_exact_ignored \
+  room::mix_pam_ingress::leave_while_blocked_then_unblock_admits_no_reflection
+
+run_exact_ignored \
+  room::mix_pam_ingress::pending_rejoin_replacing_subscriptions_is_read_in_one_snapshot
+
+run_exact_ignored \
+  room::mix_pam_ingress::denied_reflection_archives_nothing_and_fans_out_nothing
+
+run_exact_ignored \
+  room::mix_pam_ingress::reflected_presence_error_reaches_only_eligible_resources
+
 TEST_DATABASE_URL="postgres://xmpp_test:xmpp-test-password@127.0.0.1:${PGPORT:-5432}/xmpp_test?options=-csearch_path%3D$test_schema" \
   cargo test --locked --offline -p northstar-db-it \
   room::mix_mam::mix_anon_misc_permissions_are_atomic_and_private \

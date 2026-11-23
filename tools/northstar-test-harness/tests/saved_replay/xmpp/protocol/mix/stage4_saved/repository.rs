@@ -8,6 +8,8 @@ use northstar_room_core::mix as room;
 use northstar_time::{DateTime, Utc};
 use std::sync::Mutex;
 
+mod pam_delivery_repository;
+
 #[derive(Clone)]
 pub(crate) struct ControlledRepository(pub(super) Arc<Mutex<Supplied>>, pub(super) Recorder);
 #[derive(Default)]

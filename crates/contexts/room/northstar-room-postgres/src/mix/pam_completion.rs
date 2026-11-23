@@ -3,6 +3,7 @@
 use super::*;
 
 mod read;
+pub use self::read::pam_delivery_view;
 
 pub(crate) use self::read::joined_pam_membership;
 pub use self::read::{

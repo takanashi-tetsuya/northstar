@@ -4,7 +4,9 @@ use super::relay::relay_profile_reply;
 use super::*;
 use northstar_room_application::mix_service::{
     MixRelayProfileDenial, MixRelayProfileQuery, MixRelayProfileRequester, MixRelayProfileResult,
+    PamDeliveryQuery, RecoveryPresenceSource,
 };
+use northstar_room_core::mix::{MixChannelAddress, MixChannelId, MixRealJid};
 
 mod disco;
 mod iq_dispatch;
@@ -335,6 +337,31 @@ pub async fn federated_mix_message(
     Ok(false)
 }
 
+/// C4-04: an empty available presence from a remote resource is a probe reply.
+/// It refreshes the liveness of that resource's known presence and keeps its
+/// payload; without a known row it is an ordinary publication (returns false).
+async fn refresh_probe_liveness(
+    state: &Arc<impl MixHost>,
+    channel: &CanonicalJid,
+    actor_full: &str,
+) -> Result<bool> {
+    let Some(localpart) = channel.localpart() else {
+        return Ok(false);
+    };
+    let Some(channel) = state
+        .mix_service()
+        .mix_channel(channel.domainpart(), localpart)
+        .await?
+    else {
+        return Ok(false);
+    };
+    let source = RecoveryPresenceSource::parse(actor_full)?;
+    state
+        .mix_service()
+        .refresh_probe_presence_liveness(&MixChannelId::new(channel.id), &source)
+        .await
+}
+
 pub async fn federated_mix_presence(
     state: Arc<impl MixHost>,
     authenticated_domain: &str,
@@ -362,28 +389,24 @@ pub async fn federated_mix_presence(
             "forged federated MIX presence probe"
         );
         let target = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&to)?;
-        let Some(username) = target.localpart() else {
+        if target.localpart().is_none() {
             return Ok(false);
-        };
-        let Some(user) = state.mix_service().find_enabled_user(username).await? else {
-            return Ok(true);
-        };
-        if !state
-            .mix_service()
-            .pam_membership(user.id, &channel.to_string())
-            .await?
-            .is_some_and(|membership| pam_membership_receives(&membership, NODE_PRESENCE))
-            || state
-                .mix_service()
-                .is_blocked(user.id, &channel.to_string())
-                .await?
-        {
-            return Ok(true);
         }
-        for (full_jid, session) in state.session_entries_for(&to) {
-            if session.is_available()
-                && state.session_mix_capability(&full_jid) == MixSessionCapability::Supported
-            {
+        let channel = MixChannelAddress::parse(&from)?;
+        let recipient = MixRealJid::parse(&to)?;
+        let query = PamDeliveryQuery {
+            recipient: &recipient,
+            channel: &channel,
+        };
+        let Some(account_id) =
+            pam_ingress::pam_delivery_account(state.as_ref(), query, NODE_PRESENCE).await?
+        else {
+            return Ok(true);
+        };
+        for (full_jid, session) in
+            pam_ingress::reflection_routes(state.as_ref(), account_id, &target)
+        {
+            if session.is_available() {
                 let response = XmlElement::namespaced("presence", "jabber:client")
                     .attr("from", &full_jid)
                     .attr("to", channel.to_string())
@@ -407,7 +430,13 @@ pub async fn federated_mix_presence(
             return Ok(true);
         }
         let actor = authenticated_full_actor(&from, authenticated_domain)?;
-        let _ = presence_children(&raw)?;
+        let (children, unavailable) = presence_children(&raw)?;
+        if !unavailable
+            && children.is_empty()
+            && refresh_probe_liveness(&state, &to_jid, &actor).await?
+        {
+            return Ok(true);
+        }
         let actor_bare = northstar_xmpp_types::jid::CanonicalJid::parse(&actor)?.bare();
         if let Some(error) = process_channel_presence(&state, &actor_bare, &actor, &raw).await? {
             let _ = state

@@ -3,6 +3,7 @@
 pub(super) struct UnusedPorts;
 
 mod direct_invitation_stub;
+mod pam_delivery_repository;
 
 mod mix {
     use super::UnusedPorts;

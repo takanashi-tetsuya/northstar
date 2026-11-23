@@ -6,6 +6,8 @@ use northstar_time::{DateTime, Utc};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
+mod pam_delivery_repository;
+
 #[derive(Clone)]
 pub(super) struct MixStore {
     trace: Trace,

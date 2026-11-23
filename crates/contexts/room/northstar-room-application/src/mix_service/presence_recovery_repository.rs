@@ -68,11 +68,13 @@ pub trait MixPresenceRecoveryRepository {
     ) -> impl std::future::Future<Output = Result<PresenceOutcome>> + Send;
 
     /// An authenticated empty available probe reply may refresh an existing row only.
+    /// Returns whether that resource's known presence row was refreshed; nothing is
+    /// written otherwise.
     fn refresh_probe_presence_liveness(
         &self,
         channel: &MixChannelId,
         source: &RecoveryPresenceSource,
-    ) -> impl std::future::Future<Output = Result<PresenceOutcome>> + Send;
+    ) -> impl std::future::Future<Output = Result<bool>> + Send;
 
     fn expire_recovery_presence_page(
         &self,
@@ -102,7 +104,7 @@ impl<R: MixRepository> MixService<R> {
         &self,
         channel: &MixChannelId,
         source: &RecoveryPresenceSource,
-    ) -> Result<PresenceOutcome> {
+    ) -> Result<bool> {
         let _admission = self.delivery_admission_guard().await;
         self.repository
             .refresh_probe_presence_liveness(channel, source)

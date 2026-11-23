@@ -330,14 +330,16 @@ async fn liveness_refresh_keeps_the_explicit_payload() -> Result<()> {
     };
     let pending_before = delivery_count().await?;
     let epoch = repository.prepare_recovery().await?.epoch;
-    for source in [&source, &missing] {
-        assert!(matches!(
-            repository
-                .refresh_probe_presence_liveness(&channel, source)
-                .await?,
-            PresenceOutcome::Unchanged
-        ));
-    }
+    assert!(
+        repository
+            .refresh_probe_presence_liveness(&channel, &source)
+            .await?
+    );
+    assert!(
+        !repository
+            .refresh_probe_presence_liveness(&channel, &missing)
+            .await?
+    );
     let after = fixture.presence(&channel, &source).await?.unwrap();
     assert_eq!(
         (after.0, after.1, after.2),

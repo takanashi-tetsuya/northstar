@@ -19,6 +19,7 @@ mod delivery_repository;
 mod identity_policy;
 mod mam_read;
 mod operations;
+mod pam_delivery_repository;
 mod pam_repository;
 mod payloads;
 mod presence_recovery_repository;
@@ -50,6 +51,9 @@ pub use self::operations::{
     valid_join_nodes, valid_stable_participant_id, ArchiveBoundary, MamArchiveQuery, MamRsmPage,
     MixClusterRouteLookup, MixDiscoPage, MixEvent, MixEventPage, MixMamPage, MixMucMirror,
     MixPresenceItem, MixPresenceProbeTarget, MixReadOutcome,
+};
+pub use self::pam_delivery_repository::{
+    MixPamDeliveryRepository, PamDeliveryAuthority, PamDeliveryQuery,
 };
 pub use self::pam_repository::MixPamRepository;
 #[cfg(test)]

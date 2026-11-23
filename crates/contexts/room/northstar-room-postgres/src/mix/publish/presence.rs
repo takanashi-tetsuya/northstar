@@ -108,8 +108,8 @@ pub(crate) async fn refresh_probe_presence_liveness(
     channel: &MixChannelId,
     source: &RecoveryPresenceSource,
     payloads: &dyn MixEventPayloadRenderer,
-) -> Result<PresenceOutcome> {
-    write_mix_presence(
+) -> Result<bool> {
+    let outcome = write_mix_presence(
         pool,
         channel.as_uuid(),
         source.participant().as_str(),
@@ -118,7 +118,8 @@ pub(crate) async fn refresh_probe_presence_liveness(
         PresenceWrite::Probe,
         payloads,
     )
-    .await
+    .await?;
+    Ok(matches!(outcome, PresenceOutcome::Unchanged))
 }
 
 #[derive(Clone, Copy)]
@@ -153,7 +154,11 @@ async fn write_mix_presence(
         .await?;
     let Some(channel_row) = channel_row else {
         return match policy {
-            PresenceWrite::Ensure { epoch: Some(_), .. } | PresenceWrite::Probe => {
+            PresenceWrite::Probe => {
+                transaction.rollback().await?;
+                Ok(PresenceOutcome::NoKnownPresence)
+            }
+            PresenceWrite::Ensure { epoch: Some(_), .. } => {
                 transaction.rollback().await?;
                 Ok(PresenceOutcome::Unchanged)
             }
@@ -213,9 +218,13 @@ async fn write_mix_presence(
         .execute(&mut *transaction)
         .await?
         .rows_affected();
-        if existing != 0 || matches!(policy, PresenceWrite::Probe) {
+        if existing != 0 {
             transaction.commit().await?;
             return Ok(PresenceOutcome::Unchanged);
+        }
+        if matches!(policy, PresenceWrite::Probe) {
+            transaction.rollback().await?;
+            return Ok(PresenceOutcome::NoKnownPresence);
         }
     }
     let existing_item: Option<String> = sqlx::query_scalar(

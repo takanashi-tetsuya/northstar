@@ -2,6 +2,8 @@ use super::*;
 use northstar_delivery_core::{bosh_ownership, native_write, MixDelivery};
 use std::sync::Mutex as RecordingMutex;
 
+mod pam_delivery_repository;
+
 #[derive(Clone, Copy, Default)]
 pub(super) enum Reply {
     #[default]

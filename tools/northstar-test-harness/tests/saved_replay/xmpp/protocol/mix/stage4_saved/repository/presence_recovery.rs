@@ -24,7 +24,7 @@ impl MixPresenceRecoveryRepository for ControlledRepository {
         &self,
         _channel: &MixChannelId,
         _source: &RecoveryPresenceSource,
-    ) -> Result<PresenceOutcome> {
+    ) -> Result<bool> {
         Err(self.unused("refresh_probe_presence_liveness"))
     }
 

@@ -1003,6 +1003,8 @@ mod push_ports {
     }
 }
 
+mod pam_delivery_repository;
+
 mod mix_ports {
     use super::UnusedRepository;
     use anyhow::Result;

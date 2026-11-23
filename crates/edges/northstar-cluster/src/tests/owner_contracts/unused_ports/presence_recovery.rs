@@ -24,7 +24,7 @@ impl MixPresenceRecoveryRepository for UnusedPorts {
         &self,
         _channel: &MixChannelId,
         _source: &RecoveryPresenceSource,
-    ) -> Result<PresenceOutcome> {
+    ) -> Result<bool> {
         panic!("refresh_probe_presence_liveness")
     }
 

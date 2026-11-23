@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 mod delivery_impl;
 mod mam_read_impl;
+mod pam_delivery_impl;
 mod pam_impl;
 mod presence_recovery_impl;
 mod relay_profile_snapshot;
@@ -240,6 +241,8 @@ fn presence_outcome(outcome: crate::mix::PresenceOutcome) -> PresenceOutcome {
         crate::mix::PresenceOutcome::Unchanged => PresenceOutcome::Unchanged,
         crate::mix::PresenceOutcome::NotSharing => PresenceOutcome::NotSharing,
         crate::mix::PresenceOutcome::NotParticipant => PresenceOutcome::NotParticipant,
+        // Probe refreshes return a bool and never reach this mapping.
+        crate::mix::PresenceOutcome::NoKnownPresence => PresenceOutcome::Unchanged,
     }
 }
 

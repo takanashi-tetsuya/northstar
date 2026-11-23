@@ -17,6 +17,7 @@ use northstar_room_application::mix_service::{
     MixDeliveryRepository, MixPayloads, MixPublisherIdentity, MixReflectionKind,
     ReflectedMixArchiveOutcome, VerifiedMixReflection,
 };
+use northstar_room_core::mix::{MixChannelAddress, MixRealJid, MixStableParticipantId};
 use northstar_room_postgres::mix::{
     create_mix_channel, mix_channel_by_id, mix_participant, prune_empty_mix_delivery_events,
     prune_empty_mix_delivery_sequences, reconcile_mix_delivery_capacity_committed,
@@ -767,14 +768,14 @@ async fn admit_action(
     PostgresMixRepository::new(pool.clone())
         .archive_verified_mix_reflection(VerifiedMixReflection {
             personal_archive_id: Uuid::new_v4(),
-            owner_id: owner.id,
-            channel_jid: source,
+            channel: &MixChannelAddress::parse(source).unwrap(),
             authoritative_stanza_id: action,
             stanza: &action_xml(source, &owner.username, target, action, actor),
             encrypted: false,
             kind: MixReflectionKind::Retraction {
+                owner_id: owner.id,
                 target_id: target,
-                source_participant: actor,
+                source_participant: &MixStableParticipantId::parse(actor).unwrap(),
             },
         })
         .await
@@ -817,21 +818,30 @@ async fn verified_reflection_converges_action_before_original_and_rejects_rebind
     let input = original(source, target, &bob.username);
     let original_id = Uuid::new_v4();
     let owner = PostgresMixRepository::new(pool.clone());
+    let channel = MixChannelAddress::parse(source).unwrap();
+    super::mix_pam_ingress::join_with_subscription(pool, bob.id, &channel, NODE_MESSAGES)
+        .await
+        .unwrap();
+    let recipient = MixRealJid::parse(&format!("{}@example.test", bob.username)).unwrap();
     let original_request = VerifiedMixReflection {
         personal_archive_id: original_id,
-        owner_id: bob.id,
-        channel_jid: source,
+        channel: &channel,
         authoritative_stanza_id: target,
         stanza: &input,
         encrypted: true,
-        kind: MixReflectionKind::Original,
+        kind: MixReflectionKind::Original {
+            recipient: &recipient,
+        },
     };
     assert_eq!(
         owner
             .archive_verified_mix_reflection(original_request)
             .await
             .unwrap(),
-        ReflectedMixArchiveOutcome::Archived(SourceArchiveAdmission::Stored(original_id))
+        ReflectedMixArchiveOutcome::AdmittedOriginal {
+            account_id: bob.id,
+            archive: SourceArchiveAdmission::Stored(original_id),
+        }
     );
     let stored = raw_copy(pool, original_id).await;
     assert!(!stored.1);

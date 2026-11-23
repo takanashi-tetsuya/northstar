@@ -7,8 +7,8 @@ use northstar_archive_postgres::mix_source_retractions::{
 };
 use northstar_archive_postgres::personal_display::render_mix_source_tombstone;
 use northstar_room_application::mix_service::{
-    valid_stable_participant_id, MixReflectionKind, ReflectedMixArchiveOutcome,
-    VerifiedMixReflection,
+    MixReflectionKind, PamDeliveryQuery, ReflectedMixArchiveOutcome, VerifiedMixReflection,
+    NODE_MESSAGES,
 };
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -107,32 +107,46 @@ pub(super) async fn archive_verified_mix_reflection(
 ) -> Result<ReflectedMixArchiveOutcome> {
     let action = request.authoritative_stanza_id;
     let client_stanza_id = action.to_string();
-    let channel = request.channel_jid;
-    if let MixReflectionKind::Retraction {
-        target_id,
-        source_participant,
-    } = request.kind
-    {
+    let channel = request.channel.as_str();
+    if let MixReflectionKind::Retraction { target_id, .. } = request.kind {
         anyhow::ensure!(
-            target_id != action
-                && valid_stable_participant_id(source_participant)
-                && !request.encrypted,
+            target_id != action && !request.encrypted,
             "invalid verified MIX retraction identity or encryption"
         );
     }
+    let mut transaction = begin_source_archive(pool).await?;
+    let (owner_id, original) = match request.kind {
+        MixReflectionKind::Original { recipient } => {
+            lock_sources_in_tx(&mut transaction, channel, &[action], false).await?;
+            let authority = northstar_room_postgres::mix::pam_delivery_view(
+                &mut *transaction,
+                PamDeliveryQuery {
+                    recipient,
+                    channel: request.channel,
+                },
+            )
+            .await?;
+            let Some(owner_id) =
+                authority.and_then(|authority| authority.receiving_account(NODE_MESSAGES))
+            else {
+                transaction.rollback().await?;
+                return Ok(ReflectedMixArchiveOutcome::Denied);
+            };
+            (owner_id, true)
+        }
+        MixReflectionKind::Retraction { owner_id, .. } => (owner_id, false),
+    };
     let prepared = prepare_source_archive(SourceArchiveInput {
         personal_archive_id: request.personal_archive_id,
-        owner_id: request.owner_id,
+        owner_id,
         channel_jid: channel,
         authoritative_stanza_id: action,
         stanza: request.stanza,
         encrypted: request.encrypted,
         client_stanza_id: Some(&client_stanza_id),
     })?;
-    let mut transaction = begin_source_archive(pool).await?;
     let bound = match request.kind {
-        MixReflectionKind::Original => {
-            lock_sources_in_tx(&mut transaction, channel, &[action], false).await?;
+        MixReflectionKind::Original { .. } => {
             action_binding_in_tx(&mut transaction, channel, action)
                 .await?
                 .is_none()
@@ -140,6 +154,7 @@ pub(super) async fn archive_verified_mix_reflection(
         MixReflectionKind::Retraction {
             target_id,
             source_participant,
+            ..
         } => {
             lock_sources_in_tx(&mut transaction, channel, &[target_id, action], true).await?;
             record_locked_in_tx(
@@ -147,7 +162,7 @@ pub(super) async fn archive_verified_mix_reflection(
                 channel,
                 target_id,
                 action,
-                source_participant,
+                source_participant.as_str(),
             )
             .await?
         }
@@ -160,7 +175,14 @@ pub(super) async fn archive_verified_mix_reflection(
     match archive_mix_message_once_in_tx(&mut transaction, &prepared, primary.as_ref()).await {
         Ok(outcome) => {
             transaction.commit().await?;
-            Ok(ReflectedMixArchiveOutcome::Archived(outcome))
+            Ok(if original {
+                ReflectedMixArchiveOutcome::AdmittedOriginal {
+                    account_id: owner_id,
+                    archive: outcome,
+                }
+            } else {
+                ReflectedMixArchiveOutcome::Archived(outcome)
+            })
         }
         Err(MixArchiveError::Conflict) => {
             transaction.rollback().await?;

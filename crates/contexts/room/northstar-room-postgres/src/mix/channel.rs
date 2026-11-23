@@ -85,6 +85,9 @@ pub enum PresenceOutcome {
     Unchanged,
     NotSharing,
     NotParticipant,
+    /// Only a probe liveness refresh returns this: the channel or the resource's
+    /// presence row was absent, and nothing was written.
+    NoKnownPresence,
 }
 
 #[derive(Clone, Debug)]

@@ -807,7 +807,7 @@ struct Host {
     context: Arc<Context>,
     relay: MixIqRelayIndex,
 }
-pub(super) fn reflection_host(context: Arc<Context>) -> Arc<impl MixHost> {
+pub(crate) fn reflection_host(context: Arc<Context>) -> Arc<impl MixHost> {
     Arc::new(Host {
         context,
         relay: MixIqRelayIndex::new(),

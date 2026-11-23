@@ -218,10 +218,13 @@ pub enum SourceArchiveAdmission {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MixReflectionKind<'a> {
-    Original,
+    Original {
+        recipient: &'a northstar_room_core::mix::MixRealJid,
+    },
     Retraction {
+        owner_id: Uuid,
         target_id: Uuid,
-        source_participant: &'a str,
+        source_participant: &'a northstar_room_core::mix::MixStableParticipantId,
     },
 }
 
@@ -229,8 +232,7 @@ pub enum MixReflectionKind<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct VerifiedMixReflection<'a> {
     pub personal_archive_id: Uuid,
-    pub owner_id: Uuid,
-    pub channel_jid: &'a str,
+    pub channel: &'a northstar_room_core::mix::MixChannelAddress,
     pub authoritative_stanza_id: Uuid,
     pub stanza: &'a str,
     pub encrypted: bool,
@@ -240,6 +242,11 @@ pub struct VerifiedMixReflection<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReflectedMixArchiveOutcome {
     Archived(SourceArchiveAdmission),
+    AdmittedOriginal {
+        account_id: Uuid,
+        archive: SourceArchiveAdmission,
+    },
+    Denied,
     Conflict,
 }
 
@@ -521,7 +528,11 @@ pub struct MixAccessEntryUpdate<'a> {
 }
 
 pub trait MixRepository:
-    MixMamReadRepository + MixPamRepository + MixDeliveryRepository + MixPresenceRecoveryRepository
+    MixMamReadRepository
+    + MixPamRepository
+    + MixDeliveryRepository
+    + MixPresenceRecoveryRepository
+    + MixPamDeliveryRepository
 {
     fn link_local_muc_mirror(
         &self,

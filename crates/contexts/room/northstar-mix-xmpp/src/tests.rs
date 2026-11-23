@@ -11,9 +11,10 @@ use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 mod contracts;
-mod fixture;
+pub(crate) mod fixture;
 mod policy;
 
+pub(crate) use contracts::reflection_host;
 use contracts::*;
 use fixture::Context;
 use fixture::*;

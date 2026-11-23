@@ -4,6 +4,8 @@ use northstar_federation_core::{FederationOutboxAdmission, S2sOutboxPolicy};
 use northstar_room_application::mix_service::*;
 use northstar_time::{DateTime, Utc};
 
+mod pam_delivery_repository;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Call {
     Claim(mix_worker::ClaimCommand),
@@ -460,42 +462,7 @@ impl MixDeliveryRepository for Repository {
         &self,
         request: VerifiedMixReflection<'_>,
     ) -> Result<ReflectedMixArchiveOutcome> {
-        let action = request.authoritative_stanza_id;
-        if let MixReflectionKind::Retraction {
-            target_id,
-            source_participant,
-        } = request.kind
-        {
-            self.0.record(Call::ReflectedRetraction(
-                request.owner_id,
-                request.channel_jid.into(),
-                target_id,
-                action,
-                source_participant.into(),
-            ));
-            if self.0.reflection_conflict.load(Ordering::SeqCst) {
-                return Ok(ReflectedMixArchiveOutcome::Conflict);
-            }
-            if self.0.archive_replay.load(Ordering::SeqCst) {
-                return Ok(ReflectedMixArchiveOutcome::Archived(
-                    SourceArchiveAdmission::Replay(action),
-                ));
-            }
-            return Ok(ReflectedMixArchiveOutcome::Archived(
-                SourceArchiveAdmission::Stored(request.personal_archive_id),
-            ));
-        }
-        self.archive_mix_message_once(
-            request.personal_archive_id,
-            request.owner_id,
-            request.channel_jid,
-            action,
-            request.stanza,
-            request.encrypted,
-            Some(&action.to_string()),
-        )
-        .await
-        .map(ReflectedMixArchiveOutcome::Archived)
+        self.admit_archive_reflection(request).await
     }
 
     async fn claim_mix_deliveries_observed(

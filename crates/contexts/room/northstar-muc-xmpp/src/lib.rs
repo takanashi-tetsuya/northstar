@@ -4,7 +4,6 @@
 //! implements until the session, cluster, message and federation contexts own
 //! those capabilities.
 
-pub mod discovery;
 pub mod federated_muc;
 pub mod locked_room_expiry;
 pub mod muc;

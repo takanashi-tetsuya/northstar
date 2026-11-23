@@ -199,7 +199,7 @@ async fn assert_expiry_event(
     assert_eq!(operation.get::<String, _>("authorization_source"), "system");
     assert_eq!(
         operation.get::<Value, _>("details"),
-        json!({"reason":reason})
+        json!({"reason":reason,"render_policy":{"non_anonymous":true}})
     );
     assert_eq!(
         operation.get::<Value, _>("actor_authorization_snapshot"),
@@ -260,6 +260,7 @@ async fn assert_expiry_event(
                 "kind":"locked_expiry",
                 "event_id":effects.operation_id,
                 "event_sequence":operation.get::<i64, _>("event_sequence"),
+                "original_audience":ClusterMucAudienceSnapshot::from(occupant),
             })
             .to_string()
         );

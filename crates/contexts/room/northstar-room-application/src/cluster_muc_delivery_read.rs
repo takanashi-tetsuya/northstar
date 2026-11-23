@@ -6,6 +6,31 @@ use anyhow::Result;
 use std::future::Future;
 use uuid::Uuid;
 
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+pub struct EventRenderPolicy {
+    pub non_anonymous: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_nick: Option<String>,
+}
+
+impl EventRenderPolicy {
+    pub fn from_details(details: &serde_json::Value) -> Option<Self> {
+        serde_json::from_value(details.get("render_policy")?.clone()).ok()
+    }
+
+    pub fn discloses_real_jid(
+        committed: Option<&Self>,
+        committed_role: Option<&str>,
+        current_non_anonymous: bool,
+        current_role: Option<&str>,
+    ) -> bool {
+        committed.zip(committed_role).is_some_and(|(policy, role)| {
+            (policy.non_anonymous || role == "moderator")
+                && (current_non_anonymous || current_role.unwrap_or(role) == "moderator")
+        })
+    }
+}
+
 pub trait ClusterMucDeliveryReadRepository: Send + Sync {
     type Delivery;
     type EventContext;

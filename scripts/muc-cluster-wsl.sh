@@ -66,7 +66,9 @@ if grep -Fq -- "northstar.cluster_muc_resume_handoff" \
   exit 1
 fi
 require_module_literal "crates/contexts/room/northstar-room-postgres/src/cluster_muc.rs" \
-  'parent.claim_token=$4' "parent claim-token fence"
+  'WHERE parent.claim_token=$2' "locked parent claim-token fence"
+require_module_literal "crates/contexts/room/northstar-room-postgres/src/cluster_muc.rs" \
+  'FROM cluster_muc_event_outbox WHERE delivery_id=$1 FOR UPDATE' "parent claim lock before ordinal mutation"
 require_module_literal "crates/contexts/room/northstar-room-postgres/src/cluster_muc.rs" \
   'lease_until>clock_timestamp()' "lease ownership predicate"
 require_literal "$project_dir/migrations/0096_bosh_ack_ownership_bounds.sql" \

@@ -86,10 +86,11 @@ where
             .await
     }
 
-    /// Deliver one durable clustered policy event and wait until the endpoint
+    /// Deliver an item already reserved against its exact outbox claim and wait until the endpoint
     /// owns it recoverably (SM/BOSH/suspended storage) or its socket write has
     /// completed. A successful `try_send` alone is deliberately insufficient.
-    pub async fn deliver_to_muc_occupant_with_receipt(
+    /// A federation receipt confirms durable enqueue, not deduplication of a retry.
+    pub async fn deliver_reserved_muc_item_with_receipt(
         &self,
         occupant: &MucOccupant,
         stanza: String,

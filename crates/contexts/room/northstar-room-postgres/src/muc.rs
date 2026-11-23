@@ -751,6 +751,12 @@ pub async fn delete_expired_locked_muc_rooms(
     .fetch_all(&mut *tx)
     .await?;
     let mut destroyed = Vec::with_capacity(rows.len());
+    super::cluster_muc::lock_room_event_capacity(
+        &mut tx,
+        &rows.iter().map(|row| row.get("id")).collect::<Vec<Uuid>>(),
+        None,
+    )
+    .await?;
     for row in rows {
         let room_id: Uuid = row.get("id");
         if let Some(retirement) = super::cluster_muc::system_tombstone_cluster_muc_room_in_tx(

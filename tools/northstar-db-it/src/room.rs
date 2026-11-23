@@ -2,6 +2,7 @@
 
 mod cluster_conformance;
 mod cluster_muc;
+mod cluster_muc_render_capacity;
 mod discussion_conformance;
 mod foreground_conformance;
 mod mix_delivery_capacity;

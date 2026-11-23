@@ -2,7 +2,9 @@
 
 use crate::cluster_muc::ClusterMucOutboxDelivery;
 use anyhow::Result;
-use northstar_room_application::cluster_muc_delivery_item::ClusterMucDeliveryItemRepository;
+use northstar_room_application::cluster_muc_delivery_item::{
+    ClusterMucDeliveryItemRepository, ItemAdmission,
+};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -25,6 +27,18 @@ impl ClusterMucDeliveryItemRepository for PostgresClusterMucDeliveryItemReposito
             delivery_id,
             ordinal,
             stable_id,
+        )
+        .await
+    }
+
+    async fn reserve_item_exact(
+        &self,
+        delivery: &ClusterMucOutboxDelivery,
+        ordinal: i32,
+        stable_id: &str,
+    ) -> Result<ItemAdmission> {
+        crate::cluster_muc::reserve_cluster_muc_delivery_item(
+            &self.pool, delivery, ordinal, stable_id,
         )
         .await
     }

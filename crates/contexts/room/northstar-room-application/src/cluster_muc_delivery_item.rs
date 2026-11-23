@@ -1,10 +1,17 @@
 //! Progress for one stable clustered-MUC audience item.
-//! The caller owns database admission and the transport receipt between these
-//! two independent database operations; no transaction spans network I/O.
+//! The caller owns database admission and must obtain a transport receipt
+//! between reservation and completion; no transaction spans network I/O.
 
 use anyhow::Result;
 use std::future::Future;
 use uuid::Uuid;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ItemAdmission {
+    Ready,
+    Completed,
+    Stale,
+}
 
 pub trait ClusterMucDeliveryItemRepository: Send + Sync {
     type Delivery;
@@ -15,6 +22,13 @@ pub trait ClusterMucDeliveryItemRepository: Send + Sync {
         ordinal: i32,
         stable_id: &str,
     ) -> impl Future<Output = Result<bool>> + Send;
+
+    fn reserve_item_exact(
+        &self,
+        delivery: &Self::Delivery,
+        ordinal: i32,
+        stable_id: &str,
+    ) -> impl Future<Output = Result<ItemAdmission>> + Send;
 
     fn complete_exact(
         &self,
@@ -41,6 +55,17 @@ impl<R: ClusterMucDeliveryItemRepository> ClusterMucDeliveryItemService<R> {
     ) -> Result<bool> {
         self.repository
             .completed(delivery_id, ordinal, stable_id)
+            .await
+    }
+
+    pub async fn reserve_item_exact(
+        &self,
+        delivery: &R::Delivery,
+        ordinal: i32,
+        stable_id: &str,
+    ) -> Result<ItemAdmission> {
+        self.repository
+            .reserve_item_exact(delivery, ordinal, stable_id)
             .await
     }
 
@@ -90,6 +115,15 @@ mod tests {
                 stable_id.to_owned(),
             ));
             self.completed_result.map_err(anyhow::Error::msg)
+        }
+
+        async fn reserve_item_exact(
+            &self,
+            _delivery: &u32,
+            _ordinal: i32,
+            _stable_id: &str,
+        ) -> Result<ItemAdmission> {
+            Ok(ItemAdmission::Stale)
         }
 
         async fn complete_exact(

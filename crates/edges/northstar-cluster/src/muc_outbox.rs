@@ -1,6 +1,12 @@
 //! Cluster MUC outbox delivery: claim passes, policy snapshots, departure presence and event delivery.
 
 use super::*;
+use northstar_room_application::{
+    cluster_muc_delivery_item::ItemAdmission, cluster_muc_delivery_read::EventRenderPolicy,
+};
+
+mod render;
+use render::offline_affiliation_notice;
 
 pub(super) async fn run_muc_outbox_delivery<A: ClusterAdapters>(
     context: Arc<super::muc_outbox_worker::ClusterMucOutboxWorkerContext<A>>,
@@ -65,6 +71,7 @@ pub(super) async fn run_muc_outbox_delivery<A: ClusterAdapters>(
                         );
                         context.record_delivery();
                     }
+                    Err(error) if error.is::<LostItemClaim>() => {}
                     Err(error) => {
                         tracing::warn!(
                             ?error,
@@ -119,6 +126,7 @@ pub(super) struct ClusterMucPolicyRender<'a> {
     pub(super) event_id: &'a str,
     pub(super) change: &'a serde_json::Value,
     pub(super) configuration_change: bool,
+    pub(super) disclose_to_recipient: bool,
     pub(super) stanzas: &'a mut Vec<String>,
 }
 
@@ -247,6 +255,7 @@ pub(super) fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<
         event_id,
         change,
         configuration_change,
+        disclose_to_recipient,
         stanzas,
     } = render;
     let (_target, snapshot) = cluster_muc_policy_result(change)?;
@@ -270,7 +279,8 @@ pub(super) fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<
         sm_session_id: snapshot.sm_session_id,
         payload: String::new(),
     };
-    let subject_is_recipient = snapshot.full_jid == recipient.full_jid
+    let self_presence = snapshot.full_jid == recipient.full_jid;
+    let subject_is_recipient = self_presence
         && snapshot.occupant_incarnation == recipient.cluster_epoch
         && snapshot.connection_uuid == recipient.connection_id;
     let terminal = !matches!(snapshot.state.as_str(), "active" | "suspended");
@@ -291,10 +301,10 @@ pub(super) fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<
                 &subject,
                 &recipient.full_jid,
                 true,
-                snapshot.full_jid == recipient.full_jid,
+                self_presence,
                 false,
                 Some(event_id),
-                room_non_anonymous || subject_is_recipient || recipient.role == "moderator",
+                self_presence || disclose_to_recipient,
                 status,
                 None,
                 change["reason"].as_str(),
@@ -314,12 +324,10 @@ pub(super) fn append_cluster_muc_policy_snapshot(render: ClusterMucPolicyRender<
             &subject,
             &recipient.full_jid,
             false,
-            snapshot.full_jid == recipient.full_jid,
+            self_presence,
             false,
             Some(event_id),
-            room_non_anonymous
-                || snapshot.full_jid == recipient.full_jid
-                || recipient.role == "moderator",
+            self_presence || disclose_to_recipient,
         ));
     }
     Ok(())
@@ -329,7 +337,7 @@ pub(super) fn render_cluster_muc_departure_presence(
     target: &northstar_room_application::muc_service::SerializableMucOccupant,
     recipient: &northstar_room_application::muc_service::SerializableMucOccupant,
     event_id: &str,
-    room_non_anonymous: bool,
+    disclose_to_recipient: bool,
     operation_kind: &str,
     details: &serde_json::Value,
 ) -> Result<String> {
@@ -353,7 +361,7 @@ pub(super) fn render_cluster_muc_departure_presence(
             self_presence,
             false,
             Some(event_id),
-            room_non_anonymous || recipient.role == "moderator",
+            self_presence || disclose_to_recipient,
             status,
             None,
             None,
@@ -405,20 +413,17 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
         "cluster MUC operation contains an invalid actor affiliation"
     );
     let room_jid = format!("{}@conference.{}", context.room_localpart, worker.domain);
-    let Some(recipient_nick) = delivery.recipient_nick.as_deref() else {
+    if delivery.recipient_nick.is_none() {
         // node_pull rows are wake hints only; the worker has completed the
         // authoritative PostgreSQL pull by reaching this point.
         return Ok(());
-    };
-    let cached_recipient = endpoints.cached_recipient(&room_jid, recipient_nick);
-    let exact_cached = cached_recipient.as_ref().is_some_and(|recipient| {
-        delivery.recipient_full_jid.as_deref() == Some(&recipient.full_jid)
-            && delivery.recipient_occupant_incarnation == Some(recipient.cluster_epoch)
-            && delivery.recipient_connection_uuid == Some(recipient.connection_id)
-            && recipient.nick == recipient_nick
-    });
-    let mut recipient = if exact_cached {
-        cached_recipient.expect("exact cached MUC recipient was checked")
+    }
+    let cached_recipient = endpoints.exact_cached_recipient(&room_jid, delivery);
+    let current_role = cached_recipient
+        .as_ref()
+        .map(|recipient| recipient.role.clone());
+    let mut recipient = if let Some(recipient) = cached_recipient {
+        recipient
     } else {
         // A terminal transition revokes the PG lease before its notification
         // is written to the socket. Reconstruct only an endpoint from the
@@ -453,9 +458,8 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
             )
             .context("immutable MUC audience has no exact live, SM or federated endpoint")?
     };
-    if context.operation_kind == "admin_batch" {
-        // A later role change or SM handoff may alter the live endpoint, but
-        // neither may change the visibility rules of this committed event.
+    let committed = EventRenderPolicy::from_details(&context.details);
+    let original_role = if committed.is_some() || context.operation_kind == "admin_batch" {
         let original = if let Some(snapshot) = payload.get("original_audience") {
             serde_json::from_value::<northstar_room_core::ClusterMucAudienceSnapshot>(
                 snapshot.clone(),
@@ -486,9 +490,19 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
                 ),
             "cluster MUC batch original audience is not exactly bound"
         );
-        recipient.role = original.role;
-        recipient.affiliation = original.affiliation;
-    }
+        if context.operation_kind == "admin_batch" {
+            recipient.affiliation = original.affiliation;
+        }
+        Some(original.role)
+    } else {
+        None
+    };
+    let disclose_to_recipient = EventRenderPolicy::discloses_real_jid(
+        committed.as_ref(),
+        original_role.as_deref(),
+        context.room_non_anonymous,
+        current_role.as_deref(),
+    );
     let recipient_serializable =
         northstar_room_application::muc_service::SerializableMucOccupant::from(&recipient);
     let event_id = delivery.event_id.to_string();
@@ -536,7 +550,7 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
                 self_presence,
                 false,
                 Some(&event_id),
-                context.room_non_anonymous || self_presence || recipient.role == "moderator",
+                self_presence || disclose_to_recipient,
             ));
         }
         "rename" => {
@@ -549,9 +563,12 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
                 .context("MUC rename event has no new nickname")?;
             let mut old = target.clone();
             old.nick = old_nick.to_owned();
+            old.room_non_anonymous = disclose_to_recipient;
+            let mut rename_recipient = recipient_serializable.clone();
+            rename_recipient.role.clear();
             stanzas.push(northstar_room_core::stanza::muc_nickname_change_presence(
                 &old,
-                &recipient_serializable,
+                &rename_recipient,
                 new_nick,
                 Some(&event_id),
             ));
@@ -563,7 +580,7 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
                 self_presence,
                 false,
                 Some(&event_id),
-                context.room_non_anonymous || self_presence || recipient.role == "moderator",
+                self_presence || disclose_to_recipient,
             ));
         }
         "leave" | "expire" | "account_delete" => {
@@ -573,7 +590,7 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
                 &target,
                 &recipient_serializable,
                 &event_id,
-                context.room_non_anonymous,
+                disclose_to_recipient,
                 &context.operation_kind,
                 &context.details,
             )?);
@@ -596,10 +613,9 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
                     307
                 }));
             let reason = context.details["reason"].as_str();
-            let actor_nick = context
-                .actor_full_jid
-                .as_deref()
-                .and_then(|full| endpoints.actor_nick(&room_jid, full));
+            let actor_nick = committed
+                .as_ref()
+                .and_then(|policy| policy.actor_nick.as_deref());
             let self_presence = target.full_jid == recipient.full_jid;
             stanzas.push(
                 northstar_room_core::stanza::muc_presence_stanza_with_status(
@@ -609,9 +625,9 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
                     self_presence,
                     false,
                     Some(&event_id),
-                    true,
+                    self_presence || disclose_to_recipient,
                     status,
-                    actor_nick.as_deref(),
+                    actor_nick,
                     reason,
                 ),
             );
@@ -661,6 +677,7 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
                     event_id: &event_id,
                     change,
                     configuration_change,
+                    disclose_to_recipient,
                     stanzas: &mut stanzas,
                 })?;
             }
@@ -676,12 +693,13 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
                         .context("cluster MUC offline affiliation has no affiliation")?;
                     let nick = offline.get("nick").and_then(serde_json::Value::as_str);
                     let reason = offline.get("reason").and_then(serde_json::Value::as_str);
-                    let notice = northstar_xep_0045::notice::offline_affiliation_change_notice(
+                    let notice = offline_affiliation_notice(
                         &room_jid,
                         bare_jid,
                         affiliation,
                         nick,
                         reason,
+                        disclose_to_recipient,
                     );
                     let notice =
                         northstar_xml_builder::rewrite::set_to(&notice, &recipient.full_jid);
@@ -728,6 +746,7 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
                             event_id: &event_id,
                             change,
                             configuration_change: false,
+                            disclose_to_recipient,
                             stanzas: &mut stanzas,
                         })?;
                     }
@@ -737,12 +756,13 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
                             change["affiliation"].as_str().expect("batch was validated");
                         let nick = change["nick"].as_str();
                         let reason = change["reason"].as_str();
-                        let notice = northstar_xep_0045::notice::offline_affiliation_change_notice(
+                        let notice = offline_affiliation_notice(
                             &room_jid,
                             bare_jid,
                             affiliation,
                             nick,
                             reason,
+                            disclose_to_recipient,
                         );
                         let notice =
                             northstar_xml_builder::rewrite::set_to(&notice, &recipient.full_jid);
@@ -765,20 +785,20 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
         } else {
             stanza
         };
-        let completed = {
+        let admission = {
             let _database_turn = worker.database_turn().await;
             worker
                 .delivery_item
-                .completed(delivery.delivery_id, ordinal, &stable_item_id)
+                .reserve_item_exact(delivery, ordinal, &stable_item_id)
                 .await?
         };
-        if completed {
+        if !item_needs_transport(admission)? {
             continue;
         }
         anyhow::ensure!(
             worker
                 .delivery
-                .deliver_to_muc_occupant_with_receipt(&recipient, stanza, delivery,)
+                .deliver_reserved_muc_item_with_receipt(&recipient, stanza, delivery)
                 .await?,
             "exact MUC audience transport did not reach a durable ownership/write boundary"
         );
@@ -796,3 +816,25 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
     }
     Ok(())
 }
+
+#[derive(Debug)]
+struct LostItemClaim;
+
+impl std::fmt::Display for LostItemClaim {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("cluster MUC delivery item reservation lost its exact claim")
+    }
+}
+
+impl std::error::Error for LostItemClaim {}
+
+fn item_needs_transport(admission: ItemAdmission) -> Result<bool> {
+    match admission {
+        ItemAdmission::Ready => Ok(true),
+        ItemAdmission::Completed => Ok(false),
+        ItemAdmission::Stale => Err(LostItemClaim.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests;

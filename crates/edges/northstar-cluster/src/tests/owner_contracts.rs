@@ -65,6 +65,8 @@ struct Recording {
     ack: Mutex<std::result::Result<bool, &'static str>>,
     retry: Mutex<std::result::Result<bool, &'static str>>,
     complete: AtomicBool,
+    stale_reservation: AtomicBool,
+    render_items: i32,
     metrics: Arc<Metrics>,
 }
 
@@ -190,6 +192,12 @@ impl ClusterMucDeliveryItemRepository for Ports {
     type Delivery = ClusterMucOutboxDelivery;
 
     async fn completed(&self, id: Uuid, ordinal: i32, stable: &str) -> Result<bool> {
+        if self.0.render_items != 1 {
+            assert_eq!(id, self.0.row.delivery_id);
+            self.check_render_item(ordinal, stable);
+            self.database("completed").await;
+            return Ok(false);
+        }
         assert_eq!(
             (id, ordinal, stable),
             (
@@ -202,6 +210,24 @@ impl ClusterMucDeliveryItemRepository for Ports {
         Ok(false)
     }
 
+    async fn reserve_item_exact(
+        &self,
+        row: &Self::Delivery,
+        ordinal: i32,
+        stable: &str,
+    ) -> Result<northstar_room_application::cluster_muc_delivery_item::ItemAdmission> {
+        use northstar_room_application::cluster_muc_delivery_item::ItemAdmission;
+        self.exact(row);
+        let completed = self.completed(row.delivery_id, ordinal, stable).await?;
+        Ok(if self.0.stale_reservation.load(Ordering::Relaxed) {
+            ItemAdmission::Stale
+        } else if completed {
+            ItemAdmission::Completed
+        } else {
+            ItemAdmission::Ready
+        })
+    }
+
     async fn complete_exact(
         &self,
         row: &Self::Delivery,
@@ -209,10 +235,14 @@ impl ClusterMucDeliveryItemRepository for Ports {
         stable: &str,
     ) -> Result<bool> {
         self.exact(row);
-        assert_eq!(
-            (ordinal, stable),
-            (0, format!("{}:0", row.event_id).as_str())
-        );
+        if self.0.render_items == 1 {
+            assert_eq!(
+                (ordinal, stable),
+                (0, format!("{}:0", row.event_id).as_str())
+            );
+        } else {
+            self.check_render_item(ordinal, stable);
+        }
         self.database("complete").await;
         Ok(self.0.complete.load(Ordering::Relaxed))
     }
@@ -286,7 +316,14 @@ impl MucDeliveryRepository for Ports {
     ) -> Result<HashSet<String>> {
         assert_eq!(domain, "example.test");
         assert_eq!(recipients, ["alice@example.test/Phone"]);
-        assert_eq!(senders, ["room@conference.example.test"]);
+        if self.0.context.lock().unwrap().operation_kind == "subject" {
+            assert_eq!(senders, ["room@conference.example.test"]);
+        } else {
+            assert!(senders.iter().any(|sender| {
+                sender == "room@conference.example.test"
+                    || sender.starts_with("room@conference.example.test/")
+            }));
+        }
         assert_eq!(self.0.admission.available_permits(), 1);
         self.enter("blocking").await;
         Ok(HashSet::new())
@@ -304,8 +341,15 @@ impl MucDeliveryRepository for Ports {
             (user, connection, active),
             (Uuid::from_u128(10), Uuid::from_u128(11), None)
         );
-        assert_eq!(peer, "room@conference.example.test");
-        assert_eq!(kind, northstar_xep_0016::PrivacyStanzaKind::Message);
+        if self.0.context.lock().unwrap().operation_kind == "subject"
+            || peer == "room@conference.example.test"
+        {
+            assert_eq!(peer, "room@conference.example.test");
+            assert_eq!(kind, northstar_xep_0016::PrivacyStanzaKind::Message);
+        } else {
+            assert!(peer.starts_with("room@conference.example.test/"));
+            assert_eq!(kind, northstar_xep_0016::PrivacyStanzaKind::PresenceIn);
+        }
         self.enter("privacy").await;
         Ok(true)
     }
@@ -360,6 +404,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::for_render(1, "participant", false)
+    }
+
+    fn for_render(render_items: i32, committed_role: &str, record_original: bool) -> Self {
         let (live, output) = northstar_stream::local_routes::session::test_online_session(
             Uuid::from_u128(10),
             7,
@@ -382,7 +430,7 @@ impl Fixture {
             payload: String::new(),
         };
         let payload = serde_json::json!({"operation_id": Uuid::from_u128(1), "event_id": Uuid::from_u128(2), "event_sequence": 17}).to_string();
-        let row = ClusterMucOutboxDelivery {
+        let mut row = ClusterMucOutboxDelivery {
             delivery_id: Uuid::from_u128(3),
             operation_id: Uuid::from_u128(1),
             room_id: Uuid::from_u128(4),
@@ -418,9 +466,15 @@ impl Fixture {
             connection_uuid: recipient.connection_id,
             connection_epoch: 29,
             sm_session_id: None,
-            role: "participant".into(),
+            role: committed_role.into(),
             affiliation: "member".into(),
         };
+        if record_original {
+            let mut payload: serde_json::Value = serde_json::from_str(&row.payload).unwrap();
+            payload["original_audience"] = serde_json::to_value(&original).unwrap();
+            row.payload = payload.to_string();
+            row.payload_digest = sha2::Sha256::digest(row.payload.as_bytes()).to_vec();
+        }
         let ports = Ports(Arc::new(Recording {
             admission: DurableOutboxDatabaseAdmission::for_primary_pool(2),
             calls: Mutex::new(Vec::new()),
@@ -444,6 +498,8 @@ impl Fixture {
             ack: Mutex::new(Ok(true)),
             retry: Mutex::new(Ok(true)),
             complete: AtomicBool::new(true),
+            stale_reservation: AtomicBool::new(false),
+            render_items,
             metrics: Arc::default(),
         }));
         let sessions = Arc::new(dashmap::DashMap::new());
@@ -971,3 +1027,6 @@ async fn muc_retry_counts_only_after_durable_turn() {
 
 mod authority;
 mod roster;
+
+#[cfg(test)]
+mod muc_render_receipts;

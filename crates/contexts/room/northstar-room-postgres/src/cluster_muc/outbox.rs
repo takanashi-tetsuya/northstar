@@ -1,6 +1,9 @@
 //! Cluster MUC outbox claim, settlement, dead-letter and housekeeping persistence.
 
+use super::capacity::CapacityPlan;
 use super::*;
+use northstar_room_application::cluster_muc_delivery_item::ItemAdmission;
+use std::collections::BTreeMap;
 
 /// Claim a bounded ordered batch for this exact node.  A later event for a
 /// room cannot pass an earlier pending event, while equal-sequence audience
@@ -138,58 +141,97 @@ pub async fn renew_cluster_muc_outbox_claim(
         == 1)
 }
 
+fn validate_item_identity(ordinal: i32, stable_id: &str) -> Result<()> {
+    anyhow::ensure!((0..64).contains(&ordinal), "invalid MUC delivery ordinal");
+    anyhow::ensure!(
+        !stable_id.is_empty() && stable_id.len() <= 128,
+        "invalid MUC delivery item id"
+    );
+    Ok(())
+}
+
 pub async fn cluster_muc_delivery_item_completed(
     pool: &PgPool,
     delivery_id: Uuid,
     ordinal: i32,
     stable_id: &str,
 ) -> Result<bool> {
-    anyhow::ensure!((0..64).contains(&ordinal), "invalid MUC delivery ordinal");
-    anyhow::ensure!(
-        !stable_id.is_empty() && stable_id.len() <= 128,
-        "invalid MUC delivery item id"
-    );
-    let row = sqlx::query(
-        "INSERT INTO cluster_muc_event_delivery_items(delivery_id,ordinal,stable_id)
-         VALUES($1,$2,$3) ON CONFLICT(delivery_id,ordinal) DO UPDATE
-           SET stable_id=cluster_muc_event_delivery_items.stable_id
-         RETURNING stable_id,completed_at IS NOT NULL AS completed",
+    validate_item_identity(ordinal, stable_id)?;
+    let row: Option<(String, bool)> = sqlx::query_as(
+        "SELECT stable_id,completed_at IS NOT NULL FROM cluster_muc_event_delivery_items
+          WHERE delivery_id=$1 AND ordinal=$2",
     )
     .bind(delivery_id)
     .bind(ordinal)
-    .bind(stable_id)
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await?;
-    anyhow::ensure!(
-        row.get::<String, _>("stable_id") == stable_id,
-        "MUC delivery ordinal identity conflict"
-    );
-    Ok(row.get("completed"))
+    item_completed(row, stable_id)
 }
 
-pub async fn complete_cluster_muc_delivery_item(
+fn item_completed(row: Option<(String, bool)>, stable_id: &str) -> Result<bool> {
+    let Some((stored_id, completed)) = row else {
+        return Ok(false);
+    };
+    anyhow::ensure!(
+        stored_id == stable_id,
+        "MUC delivery ordinal identity conflict"
+    );
+    Ok(completed)
+}
+
+pub async fn reserve_cluster_muc_delivery_item(
     pool: &PgPool,
     delivery: &ClusterMucOutboxDelivery,
     ordinal: i32,
     stable_id: &str,
-) -> Result<bool> {
-    Ok(sqlx::query(
-        "UPDATE cluster_muc_event_delivery_items item
-            SET completed_at=COALESCE(item.completed_at,clock_timestamp())
-           FROM cluster_muc_event_outbox parent
-          WHERE item.delivery_id=$1 AND item.ordinal=$2 AND item.stable_id=$3
-            AND parent.delivery_id=item.delivery_id AND parent.claim_token=$4
-            AND parent.lease_until>clock_timestamp() AND parent.expires_at>clock_timestamp()
-            AND parent.room_id=$5 AND parent.room_epoch=$6 AND parent.target_node_id=$7
-            AND parent.recipient_occupant_incarnation IS NOT DISTINCT FROM $8
-            AND parent.recipient_connection_uuid IS NOT DISTINCT FROM $9
-            AND parent.recipient_connection_epoch IS NOT DISTINCT FROM $10
-            AND COALESCE((SELECT MAX(handoff_version) FROM cluster_muc_delivery_handoffs h
-                          WHERE h.delivery_id=parent.delivery_id),0)=$11",
+) -> Result<ItemAdmission> {
+    validate_item_identity(ordinal, stable_id)?;
+    let mut tx = pool.begin().await?;
+    if !lock_exact_item_claim(&mut tx, delivery).await? {
+        tx.rollback().await?;
+        return Ok(ItemAdmission::Stale);
+    }
+    let row: (String, bool) = sqlx::query_as(
+        "INSERT INTO cluster_muc_event_delivery_items(delivery_id,ordinal,stable_id)
+         VALUES($1,$2,$3) ON CONFLICT(delivery_id,ordinal) DO UPDATE
+           SET stable_id=cluster_muc_event_delivery_items.stable_id
+         RETURNING stable_id,completed_at IS NOT NULL",
     )
     .bind(delivery.delivery_id)
     .bind(ordinal)
     .bind(stable_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let completed = item_completed(Some(row), stable_id)?;
+    tx.commit().await?;
+    Ok(if completed {
+        ItemAdmission::Completed
+    } else {
+        ItemAdmission::Ready
+    })
+}
+
+async fn lock_exact_item_claim(
+    tx: &mut Transaction<'_, Postgres>,
+    delivery: &ClusterMucOutboxDelivery,
+) -> Result<bool> {
+    Ok(sqlx::query_scalar::<_, Uuid>(
+        "WITH locked_claim AS MATERIALIZED (
+             SELECT delivery_id,claim_token,lease_until,expires_at,room_id,room_epoch,target_node_id,
+                    recipient_occupant_incarnation,recipient_connection_uuid,recipient_connection_epoch
+               FROM cluster_muc_event_outbox WHERE delivery_id=$1 FOR UPDATE
+         )
+         SELECT parent.delivery_id FROM locked_claim parent
+          WHERE parent.claim_token=$2
+            AND parent.lease_until>clock_timestamp() AND parent.expires_at>clock_timestamp()
+            AND parent.room_id=$3 AND parent.room_epoch=$4 AND parent.target_node_id=$5
+            AND parent.recipient_occupant_incarnation IS NOT DISTINCT FROM $6
+            AND parent.recipient_connection_uuid IS NOT DISTINCT FROM $7
+            AND parent.recipient_connection_epoch IS NOT DISTINCT FROM $8
+            AND COALESCE((SELECT MAX(handoff_version) FROM cluster_muc_delivery_handoffs h
+                          WHERE h.delivery_id=parent.delivery_id),0)=$9",
+    )
+    .bind(delivery.delivery_id)
     .bind(delivery.claim_token)
     .bind(delivery.room_id)
     .bind(delivery.room_epoch)
@@ -198,10 +240,36 @@ pub async fn complete_cluster_muc_delivery_item(
     .bind(delivery.recipient_connection_uuid)
     .bind(delivery.recipient_connection_epoch)
     .bind(delivery.handoff_version)
-    .execute(pool)
+    .fetch_optional(&mut **tx)
+    .await?
+    .is_some())
+}
+
+pub async fn complete_cluster_muc_delivery_item(
+    pool: &PgPool,
+    delivery: &ClusterMucOutboxDelivery,
+    ordinal: i32,
+    stable_id: &str,
+) -> Result<bool> {
+    let mut tx = pool.begin().await?;
+    if !lock_exact_item_claim(&mut tx, delivery).await? {
+        tx.rollback().await?;
+        return Ok(false);
+    }
+    let completed = sqlx::query(
+        "UPDATE cluster_muc_event_delivery_items item
+            SET completed_at=COALESCE(item.completed_at,clock_timestamp())
+          WHERE item.delivery_id=$1 AND item.ordinal=$2 AND item.stable_id=$3",
+    )
+    .bind(delivery.delivery_id)
+    .bind(ordinal)
+    .bind(stable_id)
+    .execute(&mut *tx)
     .await?
     .rows_affected()
-        == 1)
+        == 1;
+    tx.commit().await?;
+    Ok(completed)
 }
 
 pub async fn retry_cluster_muc_outbox(
@@ -243,42 +311,43 @@ pub async fn dead_letter_cluster_muc_outbox(
 ) -> Result<bool> {
     let reason = bounded_error(reason);
     let mut tx = pool.begin().await?;
-    let moved = sqlx::query(
-        "WITH removed AS (
-             DELETE FROM cluster_muc_event_outbox
-              WHERE delivery_id=$1 AND claim_token=$2 RETURNING *
-         )
-         INSERT INTO cluster_muc_event_dead_letters(
-             delivery_id,operation_id,room_id,room_epoch,event_sequence,event_id,
-             target_node_id,recipient_occupant_incarnation,payload_digest,
-             capacity_shard,attempt_count,terminal_reason,created_at)
-         SELECT delivery_id,operation_id,room_id,room_epoch,event_sequence,event_id,
-                target_node_id,recipient_occupant_incarnation,payload_digest,
-                capacity_shard,attempt_count,$3,created_at FROM removed
-         ON CONFLICT(delivery_id) DO NOTHING",
+    let removed = remove_for_dead_letter(
+        &mut tx,
+        &[delivery.delivery_id],
+        Some(delivery.claim_token),
+        Some(&reason),
     )
-    .bind(delivery.delivery_id)
-    .bind(delivery.claim_token)
-    .bind(&reason)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected()
-        == 1;
+    .await?;
+    let moved = !removed.is_empty() && insert_dead_letters(&mut tx, removed).await? == 1;
     tx.commit().await?;
     Ok(moved)
 }
 
 pub async fn cleanup_cluster_muc_dead_letters(pool: &PgPool, limit: i64) -> Result<u64> {
-    Ok(sqlx::query(
-        "DELETE FROM cluster_muc_event_dead_letters WHERE delivery_id IN (
-             SELECT delivery_id FROM cluster_muc_event_dead_letters
-              WHERE purge_after<=clock_timestamp()
-              ORDER BY purge_after,delivery_id LIMIT $1)",
+    let mut tx = pool.begin().await?;
+    let victims: Vec<(Uuid, i16)> = sqlx::query_as(
+        "SELECT delivery_id,capacity_shard FROM cluster_muc_event_dead_letters
+          WHERE purge_after<=clock_timestamp()
+          ORDER BY purge_after,delivery_id FOR UPDATE LIMIT $1",
     )
     .bind(limit.clamp(1, 1000))
-    .execute(pool)
-    .await?
-    .rows_affected())
+    .fetch_all(&mut *tx)
+    .await?;
+    if victims.is_empty() {
+        tx.commit().await?;
+        return Ok(0);
+    }
+    CapacityPlan::new(victims.iter().map(|(_, shard)| *shard))
+        .lock_dead_letters_if_multiple(&mut tx)
+        .await?;
+    let removed =
+        sqlx::query("DELETE FROM cluster_muc_event_dead_letters WHERE delivery_id=ANY($1)")
+            .bind(victims.into_iter().map(|(id, _)| id).collect::<Vec<_>>())
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+    tx.commit().await?;
+    Ok(removed)
 }
 
 /// Remove MUC operation history and destroyed room incarnations after the
@@ -309,36 +378,78 @@ pub async fn cleanup_cluster_muc_history(
 }
 
 pub async fn dead_letter_expired_cluster_muc_outbox(pool: &PgPool, limit: i64) -> Result<u64> {
-    // PostgreSQL runs this single data-modifying statement in one implicit
-    // transaction. A failed dead-letter insert still rolls back every removal
-    // and its capacity triggers, without separate BEGIN/COMMIT round trips on
-    // each empty maintenance pass.
-    let moved = sqlx::query(
-        "WITH victims AS (
-             SELECT delivery_id FROM cluster_muc_event_outbox
-              WHERE expires_at<=clock_timestamp() OR attempt_count>=16
-              ORDER BY expires_at,delivery_id
-              FOR UPDATE SKIP LOCKED LIMIT $1
-         ), removed AS (
-             DELETE FROM cluster_muc_event_outbox current USING victims
-              WHERE current.delivery_id=victims.delivery_id RETURNING current.*
-         )
-         INSERT INTO cluster_muc_event_dead_letters(
+    let mut tx = pool.begin().await?;
+    let victims: Vec<(Uuid, Uuid, i16)> = sqlx::query_as(
+        "SELECT delivery_id,room_id,capacity_shard::smallint FROM cluster_muc_event_outbox
+          WHERE expires_at<=clock_timestamp() OR attempt_count>=16
+          ORDER BY expires_at,delivery_id FOR UPDATE SKIP LOCKED LIMIT $1",
+    )
+    .bind(limit.clamp(1, 1000))
+    .fetch_all(&mut *tx)
+    .await?;
+    if victims.is_empty() {
+        tx.commit().await?;
+        return Ok(0);
+    }
+    let plan = CapacityPlan::new(victims.iter().map(|(_, _, shard)| *shard));
+    plan.lock_outbox_if_multiple(&mut tx).await?;
+    let mut rooms = BTreeMap::<Uuid, Vec<Uuid>>::new();
+    for (delivery_id, room_id, _) in victims {
+        rooms.entry(room_id).or_default().push(delivery_id);
+    }
+    let mut removed = Vec::<Value>::new();
+    for delivery_ids in rooms.into_values() {
+        removed.extend(remove_for_dead_letter(&mut tx, &delivery_ids, None, None).await?);
+    }
+    plan.lock_dead_letters_if_multiple(&mut tx).await?;
+    let moved = insert_dead_letters(&mut tx, removed).await?;
+    tx.commit().await?;
+    Ok(moved)
+}
+
+async fn remove_for_dead_letter(
+    tx: &mut Transaction<'_, Postgres>,
+    delivery_ids: &[Uuid],
+    claim_token: Option<Uuid>,
+    reason: Option<&str>,
+) -> Result<Vec<Value>> {
+    Ok(sqlx::query_scalar(
+        "WITH removed AS (
+             DELETE FROM cluster_muc_event_outbox
+              WHERE delivery_id=ANY($1) AND ($2::uuid IS NULL OR claim_token=$2)
+             RETURNING delivery_id,operation_id,room_id,room_epoch,event_sequence,event_id,
+                       target_node_id,recipient_occupant_incarnation,payload_digest,
+                       capacity_shard,attempt_count,
+                       COALESCE($3::text,CASE WHEN expires_at<=clock_timestamp() THEN 'expired'
+                            ELSE 'attempt_limit' END) AS terminal_reason,created_at
+         ) SELECT to_jsonb(removed) FROM removed",
+    )
+    .bind(delivery_ids)
+    .bind(claim_token)
+    .bind(reason)
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
+async fn insert_dead_letters(
+    tx: &mut Transaction<'_, Postgres>,
+    removed: Vec<Value>,
+) -> Result<u64> {
+    Ok(sqlx::query(
+        "INSERT INTO cluster_muc_event_dead_letters(
              delivery_id,operation_id,room_id,room_epoch,event_sequence,event_id,
              target_node_id,recipient_occupant_incarnation,payload_digest,
              capacity_shard,attempt_count,terminal_reason,created_at)
          SELECT delivery_id,operation_id,room_id,room_epoch,event_sequence,event_id,
                 target_node_id,recipient_occupant_incarnation,payload_digest,
-                capacity_shard,attempt_count,
-                CASE WHEN expires_at<=clock_timestamp() THEN 'expired' ELSE 'attempt_limit' END,
-                created_at FROM removed
+                capacity_shard,attempt_count,terminal_reason,created_at
+           FROM jsonb_populate_recordset(NULL::cluster_muc_event_dead_letters,$1)
          ON CONFLICT(delivery_id) DO NOTHING",
     )
-    .bind(limit.clamp(1, 1000))
-    .execute(pool)
+    .bind(Value::Array(removed))
+    .execute(&mut **tx)
     .await?
-    .rows_affected();
-    Ok(moved)
+    .rows_affected())
 }
 
 pub async fn cluster_muc_outbox_snapshot(pool: &PgPool) -> Result<ClusterMucOutboxSnapshot> {

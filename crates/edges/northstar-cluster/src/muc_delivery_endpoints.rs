@@ -2,7 +2,9 @@
 
 use dashmap::DashMap;
 use northstar_room_application::muc_service::{LocalMucOccupantIdentity, SerializableMucOccupant};
-use northstar_room_core::ClusterMucAudienceSnapshot;
+use northstar_room_core::{
+    occupancy::MucOccupantRoute, ClusterMucAudienceSnapshot, ClusterMucOutboxDelivery,
+};
 use northstar_stream::local_routes::muc::{MucOccupant, MucOccupantEndpoint, SuspendedMucEndpoint};
 use northstar_stream::local_routes::muc_table::{
     remove_local_muc_occupant_exact_from, with_local_muc_occupant_exact,
@@ -89,13 +91,26 @@ impl ClusterMucDeliveryEndpoints {
         })
     }
 
-    pub fn actor_nick(&self, room_jid: &str, actor_full_jid: &str) -> Option<String> {
-        let room_jid = northstar_xmpp_types::jid::canonicalize_bare(room_jid).ok()?;
-        self.occupants.iter().find_map(|entry| {
-            let actor = entry.value();
-            (actor.room_jid == room_jid && actor.full_jid == actor_full_jid)
-                .then(|| actor.nick.clone())
-        })
+    pub(super) fn exact_cached_recipient(
+        &self,
+        room_jid: &str,
+        delivery: &ClusterMucOutboxDelivery,
+    ) -> Option<MucOccupant> {
+        let route = MucOccupantRoute {
+            nick: delivery.recipient_nick.clone()?,
+            full_jid: delivery.recipient_full_jid.clone()?,
+            connection_id: delivery.recipient_connection_uuid?,
+            cluster_epoch: delivery.recipient_occupant_incarnation?,
+        };
+        if !route.is_exact() {
+            return None;
+        }
+        let recipient = self.cached_recipient(room_jid, &route.nick)?;
+        (recipient.nick == route.nick
+            && recipient.full_jid == route.full_jid
+            && recipient.connection_id == route.connection_id
+            && recipient.cluster_epoch == route.cluster_epoch)
+            .then_some(recipient)
     }
 
     pub fn apply_role_projection_exact(&self, snapshot: &SerializableMucOccupant) -> bool {

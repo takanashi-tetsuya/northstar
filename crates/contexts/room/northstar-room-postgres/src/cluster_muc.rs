@@ -17,16 +17,19 @@ use uuid::Uuid;
 
 mod admin_batch;
 mod affiliation;
+mod capacity;
 mod moderation;
 mod occupancy;
 mod outbox;
 mod query;
+mod render_facts;
 mod room;
 #[cfg(test)]
 mod tests;
 
 pub use self::admin_batch::*;
 pub use self::affiliation::*;
+pub(crate) use self::capacity::lock_room_event_capacity;
 pub use self::moderation::*;
 pub use self::occupancy::*;
 pub use self::outbox::*;
@@ -413,6 +416,9 @@ pub async fn expire_due_in_room(tx: &mut Transaction<'_, Postgres>, room_id: Uui
     // All already-expired leases are excluded by active_audience. Each
     // observer receives every departure with its own stable event ID.
     let audience = active_audience(tx, room_id).await?;
+    if !audience.is_empty() {
+        capacity::CapacityPlan::all().lock_outbox(tx).await?;
+    }
     let mut expired = 0_u64;
     for row in rows {
         let occupancy = occupancy_from_row(&row);
@@ -584,8 +590,9 @@ async fn insert_operation_and_outbox(
         serde_json::to_vec(record.authorization_snapshot)?.len() <= MAX_PAYLOAD_BYTES,
         "MUC authorization snapshot is oversized"
     );
+    let details = render_facts::operation_render_details(tx, &record).await?;
     anyhow::ensure!(
-        serde_json::to_vec(record.details)?.len() <= MAX_OPERATION_SNAPSHOT_BYTES,
+        serde_json::to_vec(details.as_ref())?.len() <= MAX_OPERATION_SNAPSHOT_BYTES,
         "MUC operation result snapshot is oversized"
     );
     let target = record.target;
@@ -641,7 +648,7 @@ async fn insert_operation_and_outbox(
     .bind(record.event_sequence)
     .bind(record.event_id)
     .bind(&audience_json)
-    .bind(record.details)
+    .bind(details.as_ref())
     .execute(&mut **tx)
     .await?;
 
@@ -667,12 +674,12 @@ async fn insert_operation_and_outbox(
             (capacity_shard(delivery_id), delivery_id, recipient)
         })
         .collect::<Vec<_>>();
-    // Capacity rows are acquired in a total shard/UUID order in every MUC
-    // mutation transaction.  Dead-letter moves acquire the outbox row first,
-    // then the same capacity shard, then the dead-letter shard.
     deliveries.sort_by_key(|(shard, delivery_id, _)| (*shard, *delivery_id));
+    capacity::CapacityPlan::new(deliveries.iter().map(|(shard, _, _)| *shard))
+        .lock_outbox_if_multiple(tx)
+        .await?;
     for (shard, delivery_id, recipient) in deliveries {
-        let payload = if record.kind == "admin_batch" {
+        let payload = if details.get("render_policy").is_some() {
             let mut recipient_payload = immutable.clone();
             recipient_payload["original_audience"] = serde_json::to_value(recipient)?;
             serde_json::to_string(&recipient_payload)?
@@ -808,10 +815,12 @@ pub const MODULE_SOURCE: &[(&str, &str)] = &[
     ("cluster_muc", include_str!("cluster_muc.rs")),
     ("admin_batch", include_str!("cluster_muc/admin_batch.rs")),
     ("affiliation", include_str!("cluster_muc/affiliation.rs")),
+    ("capacity", include_str!("cluster_muc/capacity.rs")),
     ("moderation", include_str!("cluster_muc/moderation.rs")),
     ("occupancy", include_str!("cluster_muc/occupancy.rs")),
     ("outbox", include_str!("cluster_muc/outbox.rs")),
     ("query", include_str!("cluster_muc/query.rs")),
+    ("render_facts", include_str!("cluster_muc/render_facts.rs")),
     ("room", include_str!("cluster_muc/room.rs")),
 ];
 
@@ -867,9 +876,10 @@ mod delivery_handoff_schema_tests {
             "earlier.recipient_occupant_incarnation=current.recipient_occupant_incarnation"
         ));
         for claim_fence in [
-            "parent.claim_token=$4",
+            "FROM cluster_muc_event_outbox WHERE delivery_id=$1 FOR UPDATE",
+            "WHERE parent.claim_token=$2",
             "parent.lease_until>clock_timestamp()",
-            "parent.recipient_connection_uuid IS NOT DISTINCT FROM $9",
+            "parent.recipient_connection_uuid IS NOT DISTINCT FROM $7",
             "MAX(handoff_version)",
             "AND lease_until>clock_timestamp() AND expires_at>clock_timestamp()",
         ] {

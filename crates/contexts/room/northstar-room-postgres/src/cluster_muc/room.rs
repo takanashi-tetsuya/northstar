@@ -850,6 +850,7 @@ pub async fn revoke_cluster_muc_account_in_tx(
     .fetch_all(&mut **tx)
     .await?;
     let mut revoked = 0_u64;
+    lock_room_event_capacity(tx, &room_ids, Some(user_id)).await?;
     for room_id in room_ids {
         let Some(room) = lock_room(tx, room_id).await? else {
             continue;

@@ -162,12 +162,7 @@ pub fn mix_presence_item_id(
 }
 
 pub fn canonical_user_bare(jid: &str) -> Result<String> {
-    let jid = northstar_xmpp_types::jid::CanonicalJid::parse(jid)?;
-    anyhow::ensure!(
-        jid.localpart().is_some(),
-        "MIX participants require a user bare JID"
-    );
-    Ok(jid.bare())
+    northstar_room_core::mix::MixRealJid::parse(jid).map(|jid| jid.as_str().to_owned())
 }
 
 pub async fn pam_account_matches_actor_tx(
@@ -190,13 +185,11 @@ pub async fn pam_account_matches_actor_tx(
 }
 
 pub fn canonical_service_domain(domain: &str) -> Result<String> {
-    northstar_xmpp_types::jid::prepare_domainpart(domain)
+    northstar_room_core::mix::MixChannelAddress::prepare_service_domain(domain)
 }
 
 pub fn canonical_channel_localpart(localpart: &str) -> Result<String> {
-    let value = northstar_xmpp_types::jid::prepare_localpart(localpart)?;
-    anyhow::ensure!(value.len() <= 1023, "MIX channel localpart is too large");
-    Ok(value)
+    northstar_room_core::mix::MixChannelAddress::prepare_channel_localpart(localpart)
 }
 
 pub fn channel_from_row(row: &sqlx::postgres::PgRow) -> MixChannel {

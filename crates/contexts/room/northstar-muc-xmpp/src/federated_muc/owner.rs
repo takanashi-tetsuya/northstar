@@ -264,14 +264,15 @@ pub async fn federated_muc_owner<H: MucHost>(
     stanza: &FederatedStanza,
     room: &MucRoom,
     requester: &Occupant<H>,
+    mut configuration_expired: bool,
 ) -> Result<Option<String>> {
     let mut guarded_room = None;
     let mut guarded_requester = None;
     let _local_room_guard = if !state.federated_muc_pg_authority_enabled() {
         let guard = state.muc_service().lock_local_room_mutation(room.id).await;
-        let Some(refreshed_room) = state
+        let Some(refreshed) = state
             .muc_service()
-            .federated_room_snapshot(&room.localpart)
+            .room_for_command(&room.localpart)
             .await?
         else {
             return Ok(federated_error(
@@ -281,6 +282,8 @@ pub async fn federated_muc_owner<H: MucHost>(
                 "item-not-found",
             ));
         };
+        configuration_expired = refreshed.configuration_expired;
+        let refreshed_room = refreshed.room;
         if refreshed_room.room_epoch != room.room_epoch {
             return Ok(federated_error(
                 stanza,
@@ -317,7 +320,7 @@ pub async fn federated_muc_owner<H: MucHost>(
     if requester.affiliation != "owner" {
         return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"));
     }
-    if room.configuration_is_expired(northstar_time::Utc::now()) {
+    if configuration_expired {
         let _ = state
             .muc_service()
             .delete_expired_locked_room(room.id)
@@ -330,7 +333,7 @@ pub async fn federated_muc_owner<H: MucHost>(
         ));
     }
     if room.is_locked()
-        && !room.can_configure_locked_room(&requester.full_jid, northstar_time::Utc::now())
+        && room.configuration_owner_jid.as_deref() != Some(requester.full_jid.as_str())
     {
         return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"));
     }
@@ -380,7 +383,7 @@ pub async fn federated_muc_owner<H: MucHost>(
                 else {
                     return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"));
                 };
-                let operation_id = uuid::Uuid::new_v4();
+                let operation_id = state.muc_time_sources().new_uuid();
                 match state
                     .muc_service()
                     .destroy_local_cluster_room(
@@ -480,7 +483,7 @@ pub async fn federated_muc_owner<H: MucHost>(
                 else {
                     return Ok(federated_error(stanza, &stanza.from, "auth", "forbidden"));
                 };
-                let operation_id = uuid::Uuid::new_v4();
+                let operation_id = state.muc_time_sources().new_uuid();
                 let clustered = state
                     .muc_service()
                     .update_local_cluster_config(

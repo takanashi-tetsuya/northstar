@@ -87,10 +87,12 @@ impl RoomModule {
             durable_outbox_database_admission,
             sm_authority_schema,
         } = parts;
+        let muc_time_sources = northstar_room_core::MucTimeSources::default();
         Ok(Self {
             sm_teardown_muc_service: northstar_room_application::sm_teardown_muc::SmTeardownMucService::new(
-                northstar_workflows::sm_teardown_muc_repository::PostgresSmTeardownMucRepository::new(
+                northstar_workflows::sm_teardown_muc_repository::PostgresSmTeardownMucRepository::new_with_time_sources(
                     pool.clone(),
+                    muc_time_sources.clone(),
                 ),
             ),
             cluster_muc_occupancy_maintenance_service: northstar_room_application::muc_service::ClusterMucOccupancyMaintenanceService::new(
@@ -98,9 +100,10 @@ impl RoomModule {
                     pool.clone(),
                 ),
             ),
-            muc_service: northstar_room_application::muc_service::MucService::new(
+            muc_service: northstar_room_application::muc_service::MucService::new_with_time_sources(
                 northstar_workflows::room_effects::PostgresMucRepository::new(pool.clone()),
                 config.domain.clone(),
+                muc_time_sources.clone(),
             ),
             // The MIX wake broker validates the same schema identity that the
             // dedicated PostgreSQL listener attests.  It never trusts a
@@ -120,8 +123,9 @@ impl RoomModule {
             pending_mix_iq: Arc::new(northstar_room_core::mix_iq_relay::MixIqRelayIndex::new()),
             locked_muc_expiry_service:
                 northstar_room_application::locked_muc_expiry::LockedMucExpiryService::new(
-                    northstar_room_postgres::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository::new(
+                    northstar_room_postgres::locked_muc_expiry_repository::PostgresLockedMucExpiryRepository::new_with_time_sources(
                         pool.clone(),
+                        muc_time_sources,
                     ),
                 ),
             locked_muc_expiry_context: std::sync::OnceLock::new(),

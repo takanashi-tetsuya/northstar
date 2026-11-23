@@ -19,6 +19,7 @@ pub(super) async fn publish_join<S: MucSession>(
         full_jid,
         room_jid,
         nick,
+        ..
     } = *request;
     let CommittedJoin {
         occupant,

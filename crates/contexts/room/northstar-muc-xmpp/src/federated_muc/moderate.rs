@@ -1,16 +1,18 @@
 //! Federated MUC moderation handling.
 
 use super::*;
+use northstar_room_core::MucRequestFacts;
 
 pub async fn federated_muc_moderate<H: MucHost>(
     state: &H,
-    stanza: &FederatedStanza,
+    command: (&FederatedStanza, MucRequestFacts),
     room: &MucRoom,
     moderator: &Occupant<H>,
     target: Option<String>,
     reason: Option<String>,
     has_retract: bool,
 ) -> Result<Option<String>> {
+    let (stanza, facts) = command;
     let authenticated_domain = match &moderator.endpoint {
         MucOccupantEndpoint::Federated {
             authenticated_domain,
@@ -165,16 +167,14 @@ pub async fn federated_muc_moderate<H: MucHost>(
     };
     let moderator_occupant = format!("{}/{}", moderator.room_jid, moderator.nick);
     let author_occupant_id = muc_occupant_id(&room.occupant_id_secret, &original.sender_jid);
-    let stamp = northstar_time::Utc::now();
     let moderated = XmlElement::namespaced("moderated", "urn:xmpp:message-moderate:1")
         .attr("by", &moderator_occupant)
         .child(
             XmlElement::namespaced("occupant-id", "urn:xmpp:occupant-id:0")
                 .attr("id", &moderator.occupant_id),
         );
-    let mut retracted = XmlElement::namespaced("retracted", "urn:xmpp:message-retract:1")
-        .attr("stamp", stamp.format("%Y-%m-%dT%H:%M:%SZ"))
-        .child(moderated.clone());
+    let mut retracted =
+        crate::muc::request_facts::moderated_retraction(facts, None, moderated.clone());
     if let Some(reason) = reason {
         retracted.push_child(XmlElement::new("reason").text(reason.to_owned()));
     }
@@ -194,7 +194,7 @@ pub async fn federated_muc_moderate<H: MucHost>(
         )
         .child(retracted)
         .finish();
-    let action_id = uuid::Uuid::new_v4();
+    let action_id = facts.id;
     let mut retract = XmlElement::namespaced("retract", "urn:xmpp:message-retract:1")
         .attr("id", target_id)
         .child(moderated);

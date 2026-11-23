@@ -303,14 +303,15 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
         } else {
             Some(host.muc_service().lock_local_join(initial_room.id).await)
         };
-        let Ok(Some(room)) = host
+        let Ok(Some(view)) = host
             .muc_service()
-            .local_room_snapshot(localpart(&room_jid))
+            .room_for_command(localpart(&room_jid))
             .await
         else {
             failures.push(membership.clone());
             continue;
         };
+        let room = view.room;
         if room.id != initial_room.id
             || room.room_epoch != initial_room.room_epoch
             || room.config_version != initial_room.config_version
@@ -359,7 +360,7 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
         // From here through the final Entry publication the single-node
         // room gate remains held, so the exact room policy, nickname and
         // capacity decision cannot be invalidated by join/rename/config.
-        if room.configuration_is_expired(northstar_time::Utc::now()) {
+        if view.configuration_expired {
             failures.push(membership.clone());
             continue;
         };
@@ -563,7 +564,7 @@ pub async fn restore_local_muc_occupants<H: MucResumeHost>(
             cluster_epoch: cluster_authority
                 .as_ref()
                 .map(|authority| authority.occupant_incarnation)
-                .unwrap_or_else(Uuid::new_v4),
+                .unwrap_or_else(|| host.muc_time_sources().new_uuid()),
             connection_id,
             sm_session_id: Some(sm_session_id),
             payload: cluster_authority
@@ -708,7 +709,7 @@ async fn commit_resume_authority<H: MucResumeHost>(
     connection_id: Uuid,
     sm_session_id: Uuid,
 ) -> Result<ClusterMucOccupancy> {
-    let operation_id = Uuid::new_v4();
+    let operation_id = host.muc_time_sources().new_uuid();
     let committed = host
         .muc_service()
         .resume_muc_authority(SmMucResume {
@@ -789,7 +790,7 @@ pub(crate) async fn compensate_resumed_muc_target<H: MucResumeHost>(
     if !host.muc_pg_authority() {
         return;
     }
-    let operation_id = Uuid::new_v4();
+    let operation_id = host.muc_time_sources().new_uuid();
     match host
         .muc_service()
         .transition_local_cluster_occupancy(

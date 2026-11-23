@@ -219,7 +219,12 @@ impl<R: MucRepository> MucService<R> {
         &self,
         room_id: Uuid,
     ) -> Result<Option<CommittedRoomRetirement>> {
-        self.repository.expire_locked_room_exact(room_id).await
+        self.repository
+            .commit_retirement(
+                self.time_sources().new_uuid(),
+                MucRetirement::Expire(room_id),
+            )
+            .await
     }
 
     pub async fn departed_room(
@@ -237,7 +242,13 @@ impl<R: MucRepository> MucService<R> {
         room: MucRoomIncarnation,
     ) -> Result<Option<CommittedRoomRetirement>> {
         self.repository
-            .retire_empty_temporary_room(room, None)
+            .commit_retirement(
+                self.time_sources().new_uuid(),
+                MucRetirement::Temporary {
+                    room,
+                    config_version: None,
+                },
+            )
             .await
     }
 
@@ -248,12 +259,15 @@ impl<R: MucRepository> MucService<R> {
         config_version: i64,
     ) -> Result<Option<CommittedRoomRetirement>> {
         self.repository
-            .retire_empty_temporary_room(
-                MucRoomIncarnation {
-                    room_id,
-                    room_epoch,
+            .commit_retirement(
+                self.time_sources().new_uuid(),
+                MucRetirement::Temporary {
+                    room: MucRoomIncarnation {
+                        room_id,
+                        room_epoch,
+                    },
+                    config_version: Some(config_version),
                 },
-                Some(config_version),
             )
             .await
     }
@@ -303,9 +317,14 @@ impl<R: MucRepository> MucService<R> {
         localpart: &str,
         creator_id: Uuid,
         creator_full_jid: &str,
-    ) -> Result<(MucRoom, bool)> {
+    ) -> Result<(MucRoomRead, bool)> {
         self.repository
-            .get_or_create_local_room(localpart, creator_id, creator_full_jid)
+            .reserve_local_room(
+                self.time_sources().new_uuid(),
+                localpart,
+                creator_id,
+                creator_full_jid,
+            )
             .await
     }
 
@@ -313,9 +332,9 @@ impl<R: MucRepository> MucService<R> {
         &self,
         localpart: &str,
         creator_full_jid: &str,
-    ) -> Result<(MucRoom, bool)> {
+    ) -> Result<(MucRoomRead, bool)> {
         self.repository
-            .get_or_create_federated_room(localpart, creator_full_jid)
+            .reserve_federated_room(self.time_sources().new_uuid(), localpart, creator_full_jid)
             .await
     }
 
@@ -470,12 +489,24 @@ impl<R: MucRepository> MucService<R> {
         actor_full_jid: &str,
     ) -> Result<Option<CommittedRoomRetirement>> {
         self.repository
-            .cancel_locked_room_exact(room_id, actor_full_jid)
+            .commit_retirement(
+                self.time_sources().new_uuid(),
+                MucRetirement::Cancel {
+                    room_id,
+                    actor_full_jid,
+                },
+            )
             .await
     }
 
     pub async fn delete_room(&self, room_id: Uuid) -> Result<()> {
-        self.repository.retire_room(room_id).await.map(|_| ())
+        self.repository
+            .commit_retirement(
+                self.time_sources().new_uuid(),
+                MucRetirement::Destroy(room_id),
+            )
+            .await
+            .map(|_| ())
     }
 
     pub async fn set_local_legacy_affiliations_batch(

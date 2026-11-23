@@ -548,15 +548,14 @@ fn time<'a, H: IqRouteHost>(
     session: &'a mut ProtocolSession<H>,
     request: IqRequest<'a>,
 ) -> HandlerFuture<'a, Action> {
-    let _ = session;
     Box::pin(async move {
         if northstar_xep_0202::parse_time_request_element(request.payload).is_err() {
             return Ok(Action::Send(iq_error(request.id, "bad-request")));
         }
-        let now = northstar_time::Utc::now();
+        let facts = session.host().muc_time_sources().prepare_request();
         match northstar_xep_0202::build_response_from_parts(
             northstar_xep_0202::DEFAULT_TZO,
-            &now.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            &facts.at.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         ) {
             Ok(payload) => Ok(Action::Send(iq_result(request.id, &payload))),
             Err(error) => {
@@ -760,7 +759,7 @@ fn muc_unique<'a, H: IqRouteHost>(
             request.stanza.attribute("to").unwrap_or(&muc_domain),
             &format!(
                 "<unique xmlns='http://jabber.org/protocol/muc#unique'>{}</unique>",
-                uuid::Uuid::new_v4()
+                session.host().muc_time_sources().new_uuid()
             ),
         )))
     })

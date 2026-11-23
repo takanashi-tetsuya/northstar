@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+mod clock;
 pub mod cluster_muc;
 pub mod mix;
 pub mod mix_iq_relay;
@@ -10,6 +11,7 @@ pub mod occupancy;
 pub mod stanza;
 pub mod telemetry;
 
+pub use clock::*;
 pub use cluster_muc::*;
 
 use northstar_xmpp_types::{prepare_domainpart, CanonicalJid};

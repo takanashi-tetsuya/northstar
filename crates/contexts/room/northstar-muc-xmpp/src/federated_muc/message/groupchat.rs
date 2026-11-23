@@ -239,7 +239,7 @@ pub(super) fn prepare_groupchat<'a, S: MucHost>(
             "forbidden",
         )));
     }
-    let stable_id = uuid::Uuid::new_v4();
+    let stable_id = address.facts.id;
     let reflected = set_muc_occupant_id(
         &add_stanza_id(
             &set_to(
@@ -362,7 +362,7 @@ pub(super) async fn admit_groupchat<S: MucHost>(
                 "not-acceptable",
             )));
         }
-        let stamp = northstar_time::Utc::now();
+        let stamp = address.facts.at;
         let tombstone = XmlElement::namespaced("message", "jabber:client")
             .attr("from", original_root.attribute("from").unwrap_or(room_jid))
             .attr("to", room_jid)

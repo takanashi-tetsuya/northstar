@@ -6,6 +6,8 @@ mod lifecycle_repository;
 mod read_repository;
 
 pub use self::read_repository::*;
+pub use self::retirement_identity_repository::{MucRetirement, MucRetirementIdentityRepository};
+pub use self::room_creation_repository::MucRoomDeadlineRepository;
 pub use lifecycle_repository::{
     CommittedRoomRetirement, MucLifecycleRepository, MucRoomIncarnation, RetiredMucOccupant,
 };
@@ -43,6 +45,8 @@ mod cluster_operations;
 mod invitation_admission_repository;
 mod join_continuity_repository;
 mod live_audience_repository;
+mod retirement_identity_repository;
+mod room_creation_repository;
 mod room_operations;
 pub use live_audience_repository::{
     DiscussionCommit, LiveAudience, MucLiveAudienceRepository, RetractionCommit,
@@ -438,6 +442,8 @@ pub trait MucRepository:
     + MucReadRepository
     + MucAddressedDeliveryRepository
     + MucInvitationAdmissionRepository
+    + MucRoomDeadlineRepository
+    + MucRetirementIdentityRepository
     + Clone
     + Send
     + Sync
@@ -913,10 +919,19 @@ pub struct MucService<R> {
     discussion_application: RoomApplication<R>,
     configured_domain: Arc<str>,
     local_join_gates: Arc<[Arc<tokio::sync::Mutex<()>>]>,
+    time_sources: northstar_room_core::MucTimeSources,
 }
 
 impl<R: MucRepository> MucService<R> {
     pub fn new(repository: R, configured_domain: impl AsRef<str>) -> Self {
+        Self::new_with_time_sources(repository, configured_domain, Default::default())
+    }
+
+    pub fn new_with_time_sources(
+        repository: R,
+        configured_domain: impl AsRef<str>,
+        time_sources: northstar_room_core::MucTimeSources,
+    ) -> Self {
         let configured_domain: Arc<str> = Arc::from(configured_domain.as_ref());
         let local_join_gates: Arc<[Arc<tokio::sync::Mutex<()>>]> = (0..LOCAL_JOIN_GATE_SHARDS)
             .map(|_| Arc::new(tokio::sync::Mutex::new(())))
@@ -930,8 +945,13 @@ impl<R: MucRepository> MucService<R> {
             repository,
             configured_domain,
             local_join_gates,
+            time_sources,
         }
     }
+    pub fn time_sources(&self) -> &northstar_room_core::MucTimeSources {
+        &self.time_sources
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn local_join_gate_count(&self) -> usize {
         self.local_join_gates.len()

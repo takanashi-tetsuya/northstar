@@ -9,6 +9,7 @@ mod occupant_iq;
 pub mod owner;
 pub mod presence;
 pub mod register;
+pub(crate) mod request_facts;
 
 use self::admin_batch::{
     classify_muc_admin_items, is_exact_muc_removal_target, parse_muc_admin_batch, MucAdminChange,
@@ -92,7 +93,7 @@ pub async fn compensate_unpublished_cluster_muc_join<H: MucHost>(
         .await
     {
         Ok(Some(target)) => {
-            let operation_id = uuid::Uuid::new_v4();
+            let operation_id = state.muc_time_sources().new_uuid();
             match state
                 .muc_service()
                 .transition_local_cluster_occupancy(
@@ -360,11 +361,16 @@ async fn run_muc_cluster_occupant_refresh(
     run_muc_cluster_effects(state, room, plan).await;
 }
 
-pub fn muc_voice_request(room_jid: &str, full_jid: &str, nick: &str) -> String {
+pub fn muc_voice_request(
+    room_jid: &str,
+    full_jid: &str,
+    nick: &str,
+    stanza_id: uuid::Uuid,
+) -> String {
     XmlElement::new("message")
         .attr("from", room_jid)
         .attr("type", "normal")
-        .attr("id", uuid::Uuid::new_v4())
+        .attr("id", stanza_id)
         .child(
             XmlElement::namespaced("x", "jabber:x:data")
                 .attr("type", "form")

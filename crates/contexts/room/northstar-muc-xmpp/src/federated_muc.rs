@@ -267,10 +267,15 @@ struct FederatedPresenceRequest {
     payload: String,
     history_request: std::result::Result<super::muc::MucHistoryRequest, MalformedMucStanza>,
     muc_join: bool,
+    facts: northstar_room_core::MucRequestFacts,
 }
 
 impl FederatedPresenceRequest {
-    pub fn from_node(root: Node<'_, '_>, raw: &str) -> Self {
+    pub fn from_node(
+        root: Node<'_, '_>,
+        raw: &str,
+        facts: northstar_room_core::MucRequestFacts,
+    ) -> Self {
         let password = root
             .children()
             .find(|node| {
@@ -293,10 +298,8 @@ impl FederatedPresenceRequest {
             stanza: FederatedStanza::from_node(root, raw),
             password,
             payload,
-            history_request: super::muc::parse_muc_history_request(
-                root,
-                northstar_time::Utc::now(),
-            ),
+            history_request: super::muc::parse_muc_history_request(root, facts.at),
+            facts,
             muc_join: root.children().any(|node| {
                 node.is_element()
                     && node.tag_name().name() == "x"
@@ -724,7 +727,7 @@ async fn unregister_remote_occupant<H: MucHost>(
             .local_cluster_occupancy_target(room.id, departed.cluster_epoch, departed.connection_id)
             .await?
             .context("federated MUC leave lost its exact PG occupancy")?;
-        let operation_id = uuid::Uuid::new_v4();
+        let operation_id = state.muc_time_sources().new_uuid();
         let outcome = if removal_status == Some(333) {
             state
                 .muc_service()

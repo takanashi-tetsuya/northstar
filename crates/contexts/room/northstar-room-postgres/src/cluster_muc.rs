@@ -357,14 +357,19 @@ async fn lock_room(
     tx: &mut Transaction<'_, Postgres>,
     room_id: Uuid,
 ) -> Result<Option<RoomAuthority>> {
+    // Evaluate the volatile deadline after any wait for the room row.
     let row = sqlx::query(
-        "SELECT room_epoch,config_version,configuration_state,configuration_owner_jid,
+        "WITH locked_room AS MATERIALIZED (
+             SELECT room_epoch,config_version,configuration_state,configuration_owner_jid,
+                    configuration_expires_at,destroyed_at,members_only,moderated,
+                    non_anonymous,allow_registration,allow_invites,allow_subject_change,
+                    logging_enabled,max_occupants
+               FROM muc_rooms WHERE id=$1 FOR UPDATE
+         )
+         SELECT *, destroyed_at IS NOT NULL AS destroyed,
                 COALESCE(configuration_expires_at<=clock_timestamp(),FALSE)
-                    AS configuration_expired,
-                destroyed_at IS NOT NULL AS destroyed,members_only,moderated,
-                non_anonymous,allow_registration,allow_invites,allow_subject_change,
-                logging_enabled,max_occupants
-           FROM muc_rooms WHERE id=$1 FOR UPDATE",
+                    AS configuration_expired
+           FROM locked_room",
     )
     .bind(room_id)
     .fetch_optional(&mut **tx)

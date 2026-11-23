@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::ports::Occupant;
+use northstar_room_core::MucRequestFacts;
 use northstar_xmpp_types::jid::CanonicalJid;
 
 pub(crate) mod archive_eligibility;
@@ -24,6 +25,7 @@ struct MessageAddress<'a> {
     actor_bare_jid: String,
     to_jid: CanonicalJid,
     room_jid: String,
+    facts: MucRequestFacts,
 }
 
 struct RoomOccupancy<S: MucHost> {
@@ -41,10 +43,12 @@ pub fn federated_muc_message<'a>(
     raw: &str,
 ) -> impl std::future::Future<Output = Result<Option<String>>> + Send + 'a {
     let authenticated_domain = authenticated_domain.to_owned();
+    let facts = state.muc_time_sources().prepare_request();
     let request =
         FederatedMessageRequest::from_node(root, raw, state.validate_routed_message(root));
     async move {
-        federated_muc_message_owned(state, &authenticated_domain, connection_id, request).await
+        federated_muc_message_owned(state, &authenticated_domain, connection_id, request, facts)
+            .await
     }
 }
 
@@ -53,8 +57,9 @@ async fn federated_muc_message_owned(
     authenticated_domain: &str,
     connection_id: uuid::Uuid,
     request: FederatedMessageRequest,
+    facts: MucRequestFacts,
 ) -> Result<Option<String>> {
-    let address = match validate::validate_message(state, authenticated_domain, &request)? {
+    let address = match validate::validate_message(state, authenticated_domain, &request, facts)? {
         MessageStep::Next(address) => address,
         MessageStep::Done(value) => return Ok(value),
     };

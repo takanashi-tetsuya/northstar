@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use northstar_room_application::muc_service::{CommittedRoomRetirement, MucRoomIncarnation};
+use northstar_room_application::muc_service::{
+    CommittedRoomRetirement, MucOccupantIdSecretState, MucRoomIncarnation, MucRoomRead,
+};
+use northstar_room_core::{MucIdSource, MucTimeSources, RandomMucIds};
 use northstar_time::{DateTime, Utc};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -252,11 +255,28 @@ pub async fn get_or_create_muc_room(
     creator_id: Uuid,
     creator_full_jid: &str,
 ) -> Result<(MucRoom, bool)> {
+    let (room, created) = reserve_local_muc_room(
+        pool,
+        RandomMucIds.new_uuid(),
+        localpart,
+        creator_id,
+        creator_full_jid,
+    )
+    .await?;
+    Ok((muc_room_from_row(&room), created))
+}
+
+pub(crate) async fn reserve_local_muc_room(
+    pool: &PgPool,
+    room_id: Uuid,
+    localpart: &str,
+    creator_id: Uuid,
+    creator_full_jid: &str,
+) -> Result<(sqlx::postgres::PgRow, bool)> {
     let creator_full_jid = northstar_xmpp_types::jid::canonicalize(creator_full_jid)?;
     let mut transaction = pool.begin().await?;
-    let room_id = Uuid::new_v4();
     let mut room_secret = vec![0_u8; 32];
-    rand::thread_rng().fill_bytes(&mut room_secret);
+    rand::rngs::OsRng.fill_bytes(&mut room_secret);
     let inserted = sqlx::query(
         "INSERT INTO muc_rooms (
              id, localpart, owner_id, occupant_id_secret,
@@ -283,11 +303,10 @@ pub async fn get_or_create_muc_room(
         .execute(&mut *transaction)
         .await?;
     }
-    let mut row =
-        sqlx::query("SELECT * FROM muc_rooms WHERE localpart = $1 AND destroyed_at IS NULL")
-            .bind(localpart)
-            .fetch_one(&mut *transaction)
-            .await?;
+    let mut row = sqlx::query(LIVE_MUC_ROOM)
+        .bind(localpart)
+        .fetch_one(&mut *transaction)
+        .await?;
     if row
         .get::<Option<Vec<u8>>, _>("occupant_id_secret")
         .is_none()
@@ -297,13 +316,13 @@ pub async fn get_or_create_muc_room(
             .bind(&room_secret)
             .execute(&mut *transaction)
             .await?;
-        row = sqlx::query("SELECT * FROM muc_rooms WHERE localpart = $1 AND destroyed_at IS NULL")
+        row = sqlx::query(LIVE_MUC_ROOM)
             .bind(localpart)
             .fetch_one(&mut *transaction)
             .await?;
     }
     transaction.commit().await?;
-    Ok((muc_room_from_row(&row), inserted))
+    Ok((row, inserted))
 }
 
 pub async fn get_or_create_federated_muc_room(
@@ -311,6 +330,18 @@ pub async fn get_or_create_federated_muc_room(
     localpart: &str,
     creator_full_jid: &str,
 ) -> Result<(MucRoom, bool)> {
+    let (room, created) =
+        reserve_federated_muc_room(pool, RandomMucIds.new_uuid(), localpart, creator_full_jid)
+            .await?;
+    Ok((muc_room_from_row(&room), created))
+}
+
+pub(crate) async fn reserve_federated_muc_room(
+    pool: &PgPool,
+    room_id: Uuid,
+    localpart: &str,
+    creator_full_jid: &str,
+) -> Result<(sqlx::postgres::PgRow, bool)> {
     let creator = northstar_xmpp_types::jid::CanonicalJid::parse(creator_full_jid)?;
     anyhow::ensure!(
         creator.localpart().is_some(),
@@ -323,9 +354,8 @@ pub async fn get_or_create_federated_muc_room(
     let creator_full_jid = creator.to_string();
     let creator_bare_jid = creator.bare();
     let mut transaction = pool.begin().await?;
-    let room_id = Uuid::new_v4();
     let mut room_secret = vec![0_u8; 32];
-    rand::thread_rng().fill_bytes(&mut room_secret);
+    rand::rngs::OsRng.fill_bytes(&mut room_secret);
     let inserted = sqlx::query(
         "INSERT INTO muc_rooms (
              id, localpart, owner_id, occupant_id_secret,
@@ -351,11 +381,10 @@ pub async fn get_or_create_federated_muc_room(
         .execute(&mut *transaction)
         .await?;
     }
-    let mut row =
-        sqlx::query("SELECT * FROM muc_rooms WHERE localpart = $1 AND destroyed_at IS NULL")
-            .bind(localpart)
-            .fetch_one(&mut *transaction)
-            .await?;
+    let mut row = sqlx::query(LIVE_MUC_ROOM)
+        .bind(localpart)
+        .fetch_one(&mut *transaction)
+        .await?;
     if row
         .get::<Option<Vec<u8>>, _>("occupant_id_secret")
         .is_none()
@@ -365,29 +394,31 @@ pub async fn get_or_create_federated_muc_room(
             .bind(&room_secret)
             .execute(&mut *transaction)
             .await?;
-        row = sqlx::query("SELECT * FROM muc_rooms WHERE localpart = $1 AND destroyed_at IS NULL")
+        row = sqlx::query(LIVE_MUC_ROOM)
             .bind(localpart)
             .fetch_one(&mut *transaction)
             .await?;
     }
     transaction.commit().await?;
-    Ok((muc_room_from_row(&row), inserted))
+    Ok((row, inserted))
 }
 
-pub(crate) const LIVE_MUC_ROOM: &str = "SELECT *, coalesce(configuration_expires_at <= transaction_timestamp(), false) AS configuration_expired
+pub(crate) const LIVE_MUC_ROOM: &str = "SELECT *, coalesce(configuration_expires_at <= clock_timestamp(), false) AS configuration_expired
     FROM muc_rooms WHERE localpart = $1 AND destroyed_at IS NULL";
 
 pub(crate) async fn read_muc_room<'connection>(
     executor: impl sqlx::PgExecutor<'connection>,
     localpart: &str,
-) -> Result<Option<northstar_room_application::muc_service::MucRoomRead>> {
-    use northstar_room_application::muc_service::{MucOccupantIdSecretState, MucRoomRead};
-
+) -> Result<Option<MucRoomRead>> {
     let row = sqlx::query(LIVE_MUC_ROOM)
         .bind(localpart)
         .fetch_optional(executor)
         .await?;
-    Ok(row.as_ref().map(|row| MucRoomRead {
+    Ok(row.as_ref().map(muc_room_read_from_row))
+}
+
+pub(crate) fn muc_room_read_from_row(row: &sqlx::postgres::PgRow) -> MucRoomRead {
+    MucRoomRead {
         room: muc_room_from_row(row).into(),
         occupant_id_secret_state: if row
             .get::<Option<Vec<u8>>, _>("occupant_id_secret")
@@ -398,10 +429,20 @@ pub(crate) async fn read_muc_room<'connection>(
             MucOccupantIdSecretState::AbsentLegacy
         },
         configuration_expired: row.get("configuration_expired"),
-    }))
+    }
 }
 
 pub async fn muc_room(pool: &PgPool, localpart: &str) -> Result<Option<MucRoom>> {
+    Ok(load_muc_room_for_command(pool, localpart)
+        .await?
+        .as_ref()
+        .map(muc_room_from_row))
+}
+
+pub(crate) async fn load_muc_room_for_command(
+    pool: &PgPool,
+    localpart: &str,
+) -> Result<Option<sqlx::postgres::PgRow>> {
     let mut row = sqlx::query(LIVE_MUC_ROOM)
         .bind(localpart)
         .fetch_optional(pool)
@@ -412,7 +453,7 @@ pub async fn muc_room(pool: &PgPool, localpart: &str) -> Result<Option<MucRoom>>
             .is_none()
         {
             let mut room_secret = vec![0_u8; 32];
-            rand::thread_rng().fill_bytes(&mut room_secret);
+            rand::rngs::OsRng.fill_bytes(&mut room_secret);
             sqlx::query("UPDATE muc_rooms SET occupant_id_secret = $2 WHERE id = $1 AND occupant_id_secret IS NULL")
                 .bind(existing.get::<Uuid, _>("id"))
                 .bind(room_secret)
@@ -424,7 +465,7 @@ pub async fn muc_room(pool: &PgPool, localpart: &str) -> Result<Option<MucRoom>>
                 .await?;
         }
     }
-    Ok(row.as_ref().map(muc_room_from_row))
+    Ok(row)
 }
 
 #[derive(Clone, Debug)]
@@ -612,7 +653,17 @@ pub async fn update_muc_config(
 ) -> Result<MucConfigurationOutcome> {
     let actor_full_jid = northstar_xmpp_types::jid::canonicalize(actor_full_jid)?;
     let updated = sqlx::query(
-        "UPDATE muc_rooms SET
+        "WITH locked_room AS MATERIALIZED (
+             SELECT id, configuration_state, configuration_expires_at
+               FROM muc_rooms
+              WHERE id = $1 AND destroyed_at IS NULL
+                AND (configuration_state = 'active'
+                     OR (configuration_state = 'locked'
+                         AND configuration_owner_jid = $16
+                         AND configuration_expires_at > clock_timestamp()))
+              FOR UPDATE
+         )
+         UPDATE muc_rooms SET
              title = $2, persistent = $3, members_only = $4, public = $5,
              moderated = $6, non_anonymous = $7, max_occupants = $8,
              password_hash = $9, description = $10, allow_subject_change = $11,
@@ -620,15 +671,11 @@ pub async fn update_muc_config(
              logging_enabled = $14, allow_registration = $15,
              configuration_state = 'active', configuration_owner_jid = NULL,
              configuration_expires_at = NULL
-         WHERE id = $1 AND destroyed_at IS NULL
-           AND (
-             configuration_state = 'active'
-             OR (
-               configuration_state = 'locked'
-               AND configuration_owner_jid = $16
-               AND configuration_expires_at > NOW()
-             )
-           )",
+         WHERE id = (
+             SELECT id FROM locked_room
+              WHERE configuration_state = 'active'
+                 OR configuration_expires_at > clock_timestamp()
+         )",
     )
     .bind(room_id)
     .bind(config.title)
@@ -654,7 +701,7 @@ pub async fn update_muc_config(
     }
     let state = sqlx::query(
         "SELECT configuration_state, configuration_owner_jid,
-                configuration_expires_at <= NOW() AS expired
+                configuration_expires_at <= clock_timestamp() AS expired
            FROM muc_rooms WHERE id = $1",
     )
     .bind(room_id)
@@ -688,6 +735,15 @@ pub async fn cancel_locked_muc_room(
     room_id: Uuid,
     actor_full_jid: &str,
 ) -> Result<Option<CommittedRoomRetirement>> {
+    cancel_locked_muc_room_with_id(pool, room_id, actor_full_jid, RandomMucIds.new_uuid()).await
+}
+
+pub(crate) async fn cancel_locked_muc_room_with_id(
+    pool: &PgPool,
+    room_id: Uuid,
+    actor_full_jid: &str,
+    operation_id: Uuid,
+) -> Result<Option<CommittedRoomRetirement>> {
     let actor_full_jid = northstar_xmpp_types::jid::canonicalize(actor_full_jid)?;
     let mut tx = pool.begin().await?;
     let matched = sqlx::query(
@@ -707,7 +763,7 @@ pub async fn cancel_locked_muc_room(
     }
     let changed = super::cluster_muc::system_tombstone_cluster_muc_room_in_tx(
         &mut tx,
-        Uuid::new_v4(),
+        operation_id,
         room_id,
         "destroy",
         &serde_json::json!({
@@ -727,6 +783,14 @@ pub async fn delete_expired_locked_muc_room(
     pool: &PgPool,
     room_id: Uuid,
 ) -> Result<Option<CommittedRoomRetirement>> {
+    expire_locked_muc_room_with_id(pool, room_id, RandomMucIds.new_uuid()).await
+}
+
+pub(crate) async fn expire_locked_muc_room_with_id(
+    pool: &PgPool,
+    room_id: Uuid,
+    operation_id: Uuid,
+) -> Result<Option<CommittedRoomRetirement>> {
     let mut tx = pool.begin().await?;
     let matched = sqlx::query(
         "SELECT id FROM muc_rooms
@@ -745,7 +809,7 @@ pub async fn delete_expired_locked_muc_room(
     }
     let changed = super::cluster_muc::system_tombstone_cluster_muc_room_in_tx(
         &mut tx,
-        Uuid::new_v4(),
+        operation_id,
         room_id,
         "locked_expiry",
         &serde_json::json!({"lifecycle":"locked_room_lease_expired","clock":"postgresql"}),
@@ -762,6 +826,14 @@ pub async fn delete_expired_locked_muc_room(
 pub async fn delete_expired_locked_muc_rooms(
     pool: &PgPool,
     limit: i64,
+) -> Result<Vec<CommittedRoomRetirement>> {
+    expire_locked_muc_rooms_with_ids(pool, limit, &MucTimeSources::default()).await
+}
+
+pub(crate) async fn expire_locked_muc_rooms_with_ids(
+    pool: &PgPool,
+    limit: i64,
+    time_sources: &MucTimeSources,
 ) -> Result<Vec<CommittedRoomRetirement>> {
     let mut tx = pool.begin().await?;
     let rows = sqlx::query(
@@ -785,7 +857,7 @@ pub async fn delete_expired_locked_muc_rooms(
         let room_id: Uuid = row.get("id");
         if let Some(retirement) = super::cluster_muc::system_tombstone_cluster_muc_room_in_tx(
             &mut tx,
-            Uuid::new_v4(),
+            time_sources.new_uuid(),
             room_id,
             "locked_expiry",
             &serde_json::json!({"lifecycle":"locked_room_lease_expired","clock":"postgresql"}),
@@ -804,6 +876,14 @@ pub async fn delete_muc_room(
     pool: &PgPool,
     room_id: Uuid,
 ) -> Result<Option<CommittedRoomRetirement>> {
+    delete_muc_room_with_id(pool, room_id, RandomMucIds.new_uuid()).await
+}
+
+pub(crate) async fn delete_muc_room_with_id(
+    pool: &PgPool,
+    room_id: Uuid,
+    operation_id: Uuid,
+) -> Result<Option<CommittedRoomRetirement>> {
     let mut tx = pool.begin().await?;
     let locked =
         sqlx::query("SELECT id FROM muc_rooms WHERE id=$1 AND destroyed_at IS NULL FOR UPDATE")
@@ -814,7 +894,7 @@ pub async fn delete_muc_room(
     let retirement = if locked {
         super::cluster_muc::system_tombstone_cluster_muc_room_in_tx(
             &mut tx,
-            Uuid::new_v4(),
+            operation_id,
             room_id,
             "destroy",
             &serde_json::json!({"lifecycle":"protocol_destroy"}),
@@ -832,6 +912,16 @@ pub async fn delete_temporary_muc_room(
     pool: &PgPool,
     room: MucRoomIncarnation,
     expected_config_version: Option<i64>,
+) -> Result<Option<CommittedRoomRetirement>> {
+    delete_temporary_muc_room_with_id(pool, room, expected_config_version, RandomMucIds.new_uuid())
+        .await
+}
+
+pub(crate) async fn delete_temporary_muc_room_with_id(
+    pool: &PgPool,
+    room: MucRoomIncarnation,
+    expected_config_version: Option<i64>,
+    operation_id: Uuid,
 ) -> Result<Option<CommittedRoomRetirement>> {
     let mut tx = pool.begin().await?;
     let locked = sqlx::query(
@@ -866,7 +956,7 @@ pub async fn delete_temporary_muc_room(
     }
     let retirement = super::cluster_muc::system_tombstone_cluster_muc_room_in_tx(
         &mut tx,
-        Uuid::new_v4(),
+        operation_id,
         room.room_id,
         "destroy",
         &serde_json::json!({"lifecycle":"temporary_room_empty"}),

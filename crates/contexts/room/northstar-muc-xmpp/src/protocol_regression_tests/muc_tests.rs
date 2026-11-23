@@ -152,6 +152,7 @@ fn voice_request_preserves_room_and_occupant_fields() {
         "room@conference.example.test",
         "alice@example.test/phone",
         "Alice<&",
+        uuid::Uuid::from_u128(1),
     );
     let document = roxmltree::Document::parse(&xml).unwrap();
     let root = document.root_element();

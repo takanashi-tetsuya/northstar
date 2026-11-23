@@ -1,8 +1,10 @@
+use super::request_facts::offline_delay;
 use super::*;
 use northstar_room_application::muc_service::{
     LocalMediatedInvitation, LocalMediatedInvitationOutcome, MucAddressedOutcome,
     MucAddressedRequest,
 };
+use northstar_room_core::MucRequestFacts;
 
 pub(crate) mod addressed;
 pub(crate) mod voice_routes;
@@ -12,10 +14,11 @@ pub async fn handle_muc_invitation_decline(
     root: Node<'_, '_>,
     raw: &str,
     from: &str,
-    room_jid: String,
     to_jid: &CanonicalJid,
     decline: (String, Option<String>),
+    facts: MucRequestFacts,
 ) -> Result<MucAction> {
+    let room_jid = to_jid.bare();
     let (target_raw, reason) = decline;
     if to_jid.resourcepart().is_some() || !matches!(root.attribute("type"), None | Some("normal")) {
         return Ok(MucAction::Send(muc_stanza_error(
@@ -134,7 +137,7 @@ pub async fn handle_muc_invitation_decline(
                 .is_some();
         }
         if !delivered && temporary_storage {
-            let delayed = add_delay_from(&forwarded, northstar_time::Utc::now(), Some(&room_jid));
+            let delayed = offline_delay(&forwarded, &room_jid, facts);
             let outcome = session
                 .host()
                 .muc_service()
@@ -439,6 +442,7 @@ pub async fn handle_muc_private_message<S: MucSession>(
     from: &str,
     room_jid: String,
     to_jid: &CanonicalJid,
+    stanza_id: uuid::Uuid,
 ) -> Result<MucAction> {
     let Some(actor) = addressed::local_actor(session, &room_jid, from) else {
         return Ok(MucAction::Send(muc_stanza_error(
@@ -502,7 +506,7 @@ pub async fn handle_muc_private_message<S: MucSession>(
                 &target.full_jid,
             ),
             &room_jid,
-            uuid::Uuid::new_v4(),
+            stanza_id,
         ),
         &sender_occupant_id,
     );
@@ -581,6 +585,7 @@ pub async fn handle_muc_invitation<S: MucSession>(
     from: &str,
     room_jid: String,
     own: &Occupant<S::Host>,
+    facts: MucRequestFacts,
 ) -> Result<MucAction> {
     let mut has_invites = false;
     if let Some(room) = session
@@ -672,7 +677,7 @@ pub async fn handle_muc_invitation<S: MucSession>(
                                 .validated_fragment(&hints)?
                                 .finish(),
                             &room_jid,
-                            uuid::Uuid::new_v4(),
+                            session.host().muc_time_sources().new_uuid(),
                         ),
                         &own.occupant_id,
                     );
@@ -702,13 +707,7 @@ pub async fn handle_muc_invitation<S: MucSession>(
                         // upgrades fail safe without weakening identity.
                         let granted_forwarded = add_stanza_id(&forwarded, &invitee_bare, id);
                         let (durable_invite, affiliation_changed) = {
-                            let delay = || {
-                                add_delay_from(
-                                    &granted_forwarded,
-                                    northstar_time::Utc::now(),
-                                    Some(&room_jid),
-                                )
-                            };
+                            let delay = || offline_delay(&granted_forwarded, &room_jid, facts);
                             let cluster_authority = {
                                 let Some(actor_target) = session
                                     .host()
@@ -1014,11 +1013,7 @@ pub async fn handle_muc_invitation<S: MucSession>(
                                 .await;
                         }
                         if !delivered && durable_invite.is_none() && temporary_storage {
-                            let delayed = add_delay_from(
-                                &forwarded,
-                                northstar_time::Utc::now(),
-                                Some(&room_jid),
-                            );
+                            let delayed = offline_delay(&forwarded, &room_jid, facts);
                             let offline_outcome = session
                                 .host()
                                 .muc_service()

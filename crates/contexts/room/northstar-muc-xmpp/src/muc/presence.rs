@@ -97,7 +97,7 @@ pub async fn handle_muc_unavailable_presence(
                     room_id: target.room_id,
                     room_epoch: target.room_epoch,
                 });
-                let cluster_operation_id = uuid::Uuid::new_v4();
+                let cluster_operation_id = session.host().muc_time_sources().new_uuid();
                 match session
                     .host()
                     .muc_service()

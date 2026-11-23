@@ -79,6 +79,9 @@ EXPECTED_TESTS = {
         'room::muc_addressed_delivery::invitations_commit_per_invitee_after_a_later_failure',
         'room::muc_addressed_delivery::federated_mediated_invitation_grants_only_on_the_locked_members_only_revision',
         'room::muc_addressed_delivery::direct_invitation_mode_follows_the_locked_room_revision',
+        'room::muc_time_sources::locked_room_join_uses_the_database_deadline_under_clock_skew',
+        'room::muc_time_sources::owner_configuration_uses_the_database_deadline_under_clock_skew',
+        'room::muc_time_sources::legacy_owner_configuration_checks_deadline_after_the_room_row_wait',
     ),
     'mix': (
         'room::mix_pam_durability::pam_restart_and_result_claims_preserve_authority_and_token_fencing',

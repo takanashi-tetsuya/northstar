@@ -9,9 +9,10 @@ impl ServerNode {
     pub(in crate::node) fn sm_teardown_muc_projection(
         &self,
     ) -> SmTeardownMucProjection<PostgresSmTeardownMucRepository> {
-        SmTeardownMucProjection::new(
+        SmTeardownMucProjection::new_with_time_sources(
             self.room.sm_teardown_muc_service().clone(),
             Arc::clone(&self.room.muc_occupants),
+            self.room.muc_service().time_sources().clone(),
         )
     }
 }

@@ -2,6 +2,7 @@
 
 mod admission;
 mod commit;
+pub(crate) mod identity;
 mod nickname;
 pub(crate) mod projection;
 mod publish;
@@ -14,6 +15,7 @@ use self::nickname::PreparedNicknameChange;
 use self::rejoin::JoinedPresence;
 use self::validate::JoinAddress;
 use super::*;
+use northstar_room_core::MucRequestFacts;
 
 enum JoinStep<T> {
     Next(T),
@@ -26,6 +28,7 @@ struct JoinRequest<'a, 'input> {
     full_jid: &'a String,
     room_jid: &'a String,
     nick: &'a str,
+    facts: MucRequestFacts,
 }
 
 // Keep the live-session admission bound equal to the durable XEP-0198
@@ -78,6 +81,7 @@ pub async fn muc_presence(
     root: Node<'_, '_>,
     raw: &str,
 ) -> Result<MucAction> {
+    let facts = session.host().muc_time_sources().prepare_request();
     let JoinAddress {
         user,
         full_jid,
@@ -98,6 +102,7 @@ pub async fn muc_presence(
         full_jid: &full_jid,
         room_jid: &room_jid,
         nick,
+        facts,
     };
 
     let joined_presence = match rejoin::prepare_joined_presence(session, &request, raw).await? {

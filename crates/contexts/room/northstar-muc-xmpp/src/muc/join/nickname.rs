@@ -20,6 +20,7 @@ pub(super) async fn prepare_nickname_change<S: MucSession>(
         full_jid,
         room_jid,
         nick,
+        ..
     } = *request;
     let Some(room) = session
         .host()
@@ -192,7 +193,7 @@ pub(super) async fn apply_nickname_change<S: MucSession>(
                 "not-acceptable",
             ))));
         };
-        let cluster_operation_id = uuid::Uuid::new_v4();
+        let cluster_operation_id = request.facts.id;
         match session
             .host()
             .muc_service()

@@ -11,6 +11,7 @@ pub async fn muc_message(
     root: Node<'_, '_>,
     raw: &str,
 ) -> Result<MucAction> {
+    let facts = session.host().muc_time_sources().prepare_request();
     session.enter_frame_stage(MucFrameStage::Policy);
     let Some(from) = session.full_jid() else {
         return Ok(MucAction::Send(stanza_error(
@@ -54,7 +55,6 @@ pub async fn muc_message(
             "jid-malformed",
         )));
     }
-    let room_jid = to_jid.bare();
     let decline = match parse_muc_invitation_decline(root) {
         Ok(decline) => decline,
         Err(MalformedMucStanza) => {
@@ -67,9 +67,10 @@ pub async fn muc_message(
         }
     };
     if let Some(decline) = decline {
-        return handle_muc_invitation_decline(session, root, raw, from, room_jid, &to_jid, decline)
+        return handle_muc_invitation_decline(session, root, raw, from, &to_jid, decline, facts)
             .await;
     }
+    let room_jid = to_jid.bare();
     let voice_form = parse_muc_voice_form(root);
     match &voice_form {
         Ok(Some(MucVoiceForm::Request)) => {
@@ -79,7 +80,10 @@ pub async fn muc_message(
             .await;
         }
         Ok(None) if to.contains('/') => {
-            return handle_muc_private_message(session, root, raw, from, room_jid, &to_jid).await;
+            return handle_muc_private_message(
+                session, root, raw, from, room_jid, &to_jid, facts.id,
+            )
+            .await;
         }
         _ => {}
     }
@@ -144,7 +148,7 @@ pub async fn muc_message(
     }
 
     if root.attribute("type") != Some("groupchat") {
-        return handle_muc_invitation(session, root, raw, from, room_jid, &own).await;
+        return handle_muc_invitation(session, root, raw, from, room_jid, &own, facts).await;
     }
     let Some(initial_room) = session
         .host()
@@ -303,7 +307,7 @@ pub async fn muc_message(
         )));
     }
     let room_from = format!("{room_jid}/{}", own.nick);
-    let stable_id = uuid::Uuid::new_v4();
+    let stable_id = facts.id;
     let mut rewritten = set_muc_occupant_id(
         &add_stanza_id(
             &set_to(&set_from(raw, &room_from), &room_jid),
@@ -381,7 +385,7 @@ pub async fn muc_message(
                 "not-acceptable",
             )));
         }
-        let stamp = northstar_time::Utc::now();
+        let stamp = facts.at;
         let retraction_message_id = root
             .attribute("id")
             .map(str::to_owned)

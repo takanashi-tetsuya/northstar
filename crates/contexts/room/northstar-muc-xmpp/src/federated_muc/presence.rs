@@ -14,7 +14,8 @@ pub fn federated_muc_presence<'a>(
     raw: &str,
 ) -> impl std::future::Future<Output = Result<Option<String>>> + Send + 'a {
     let authenticated_domain = authenticated_domain.to_owned();
-    let request = FederatedPresenceRequest::from_node(root, raw);
+    let facts = state.muc_time_sources().prepare_request();
+    let request = FederatedPresenceRequest::from_node(root, raw, facts);
     async move {
         federated_muc_presence_owned(state, &authenticated_domain, connection_id, request).await
     }
@@ -213,7 +214,7 @@ async fn federated_muc_presence_owned(
                 else {
                     return Ok(federated_error(&request.stanza, from, "cancel", "conflict"));
                 };
-                let operation_id = uuid::Uuid::new_v4();
+                let operation_id = state.muc_time_sources().new_uuid();
                 match state
                     .muc_service()
                     .rebind_federated_cluster_occupancy(
@@ -350,7 +351,7 @@ async fn federated_muc_presence_owned(
                     )
                     .await?
                     .context("federated MUC rename lost its exact PG occupancy")?;
-                let operation_id = uuid::Uuid::new_v4();
+                let operation_id = state.muc_time_sources().new_uuid();
                 match state
                     .muc_service()
                     .rename_local_cluster_occupancy(
@@ -759,7 +760,7 @@ async fn federated_muc_presence_owned(
         return Ok(None);
     }
 
-    let (room, created) = match state
+    let (view, created) = match state
         .muc_service()
         .get_or_create_federated_room(localpart(&room_jid), &actor_full_jid)
         .await
@@ -776,12 +777,12 @@ async fn federated_muc_presence_owned(
         }
         Err(error) => return Err(error),
     };
-    if !created && room.configuration_is_expired(northstar_time::Utc::now()) {
+    if !created && view.configuration_expired {
         // PostgreSQL records the tombstone and terminal audience outbox in
         // one transaction. Redis is not an executable control plane.
         let _ = state
             .muc_service()
-            .delete_expired_locked_room(room.id)
+            .delete_expired_locked_room(view.room.id)
             .await?;
         return Ok(federated_error(
             &request.stanza,
@@ -790,10 +791,7 @@ async fn federated_muc_presence_owned(
             "item-not-found",
         ));
     }
-    if !created
-        && room.is_locked()
-        && !room.can_configure_locked_room(&actor_full_jid, northstar_time::Utc::now())
-    {
+    if !created && view.room.is_locked() && !view.can_configure_locked_room(&actor_full_jid) {
         return Ok(federated_error(
             &request.stanza,
             from,
@@ -801,6 +799,7 @@ async fn federated_muc_presence_owned(
             "item-not-found",
         ));
     }
+    let room = view.room;
     if created {
         let _ = northstar_room_application::mix_muc::maybe_link_local_mirror(
             state.mix_muc_mirror_enabled(),
@@ -861,9 +860,9 @@ async fn federated_muc_presence_owned(
         Some(state.muc_service().lock_local_room_mutation(room.id).await)
     };
     let (mut room, affiliation) = if local_join_guard.is_some() {
-        let Some(refreshed_room) = state
+        let Some(view) = state
             .muc_service()
-            .federated_room_snapshot(localpart(&room_jid))
+            .room_for_command(localpart(&room_jid))
             .await?
         else {
             return Ok(federated_error(
@@ -873,6 +872,7 @@ async fn federated_muc_presence_owned(
                 "item-not-found",
             ));
         };
+        let refreshed_room = &view.room;
         if refreshed_room.room_epoch == room.room_epoch
             && refreshed_room.password_hash != room.password_hash
         {
@@ -902,10 +902,8 @@ async fn federated_muc_presence_owned(
                 ));
             }
         }
-        if refreshed_room.configuration_is_expired(northstar_time::Utc::now())
-            || (refreshed_room.is_locked()
-                && !refreshed_room
-                    .can_configure_locked_room(&actor_full_jid, northstar_time::Utc::now()))
+        if view.configuration_expired
+            || (refreshed_room.is_locked() && !view.can_configure_locked_room(&actor_full_jid))
         {
             return Ok(federated_error(
                 &request.stanza,
@@ -918,7 +916,7 @@ async fn federated_muc_presence_owned(
             .muc_service()
             .federated_affiliation(refreshed_room.id, &actor_bare_jid)
             .await?;
-        (refreshed_room, refreshed_affiliation)
+        (view.room, refreshed_affiliation)
     } else {
         (room, affiliation)
     };
@@ -984,6 +982,8 @@ async fn federated_muc_presence_owned(
         "participant"
     }
     .to_owned();
+    let (incarnation, cluster_operation_id) =
+        crate::muc::join::identity::prepare_join_ids(request.facts, state.muc_time_sources());
     let mut occupant = MucOccupant {
         full_jid: actor_full_jid.clone(),
         room_jid: room_jid.clone(),
@@ -996,7 +996,7 @@ async fn federated_muc_presence_owned(
         role,
         room_non_anonymous: room.non_anonymous,
         occupant_id: muc_occupant_id(&room.occupant_id_secret, &actor_bare_jid),
-        cluster_epoch: uuid::Uuid::new_v4(),
+        cluster_epoch: incarnation,
         connection_id,
         sm_session_id: None,
         payload: request.payload.clone(),
@@ -1009,7 +1009,6 @@ async fn federated_muc_presence_owned(
             bare_jid: actor_bare_jid.clone(),
             authenticated_domain: canonical_authenticated_domain(authenticated_domain),
         };
-        let cluster_operation_id = uuid::Uuid::new_v4();
         let committed = match state
             .muc_service()
             .commit_muc_join(

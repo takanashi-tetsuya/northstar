@@ -10,12 +10,14 @@ use uuid::Uuid;
 
 pub mod addressed_delivery;
 mod conversions;
+mod creation;
 mod invitation_admission;
 mod join_continuity;
 mod lifecycle;
 mod live_audience;
 mod occupancy;
 pub(crate) mod read_snapshot;
+pub mod retirement_identity;
 
 use self::conversions::{
     actor_authority_to_db, cluster_join_into_db, config_update_into_db, map_admin_snapshot,

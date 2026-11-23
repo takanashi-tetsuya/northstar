@@ -112,7 +112,11 @@ impl Session {
             delivery_pending: AtomicBool::new(false),
             counters: std::array::from_fn(|_| AtomicU64::new(0)),
         });
-        let service = MucService::new(repository::Repository(Arc::clone(&state)), "local.test");
+        let service = MucService::new_with_time_sources(
+            repository::Repository(Arc::clone(&state)),
+            "local.test",
+            time_sources::test_sources(),
+        );
         let rooms = DashMap::new();
         rooms.insert(
             ROOM_JID.to_owned(),
@@ -1026,3 +1030,4 @@ fn message_stages_preserve_authority_through_fanout() {
 #[cfg(test)]
 mod addressed_delivery;
 mod read_snapshots;
+mod time_sources;

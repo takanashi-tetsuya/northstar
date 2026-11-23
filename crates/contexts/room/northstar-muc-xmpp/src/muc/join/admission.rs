@@ -20,6 +20,7 @@ pub(super) async fn check_join_admission<S: MucSession>(
         full_jid,
         room_jid,
         nick,
+        ..
     } = *request;
     if session.joined_rooms().len() >= MAX_JOINED_ROOMS_PER_SESSION {
         return Ok(JoinStep::Done(MucAction::Send(muc_stanza_error(
@@ -29,7 +30,7 @@ pub(super) async fn check_join_admission<S: MucSession>(
             "resource-constraint",
         ))));
     }
-    let history_request = match parse_muc_history_request(root, northstar_time::Utc::now()) {
+    let history_request = match parse_muc_history_request(root, request.facts.at) {
         Ok(request) => request,
         Err(MalformedMucStanza) => {
             return Ok(JoinStep::Done(MucAction::Send(muc_stanza_error(
@@ -50,7 +51,7 @@ pub(super) async fn check_join_admission<S: MucSession>(
             root, full_jid, "cancel", "conflict",
         ))));
     }
-    let (room, created) = match session
+    let (view, created) = match session
         .host()
         .muc_service()
         .get_or_create_local_room(localpart(room_jid), user.id, full_jid)
@@ -68,11 +69,11 @@ pub(super) async fn check_join_admission<S: MucSession>(
         }
         Err(error) => return Err(error),
     };
-    if !created && room.configuration_is_expired(northstar_time::Utc::now()) {
+    if !created && view.configuration_expired {
         let _ = session
             .host()
             .muc_service()
-            .delete_expired_locked_room(room.id)
+            .delete_expired_locked_room(view.room.id)
             .await?;
         return Ok(JoinStep::Done(MucAction::Send(muc_stanza_error(
             root,
@@ -81,10 +82,7 @@ pub(super) async fn check_join_admission<S: MucSession>(
             "item-not-found",
         ))));
     }
-    if !created
-        && room.is_locked()
-        && !room.can_configure_locked_room(full_jid, northstar_time::Utc::now())
-    {
+    if !created && view.room.is_locked() && !view.can_configure_locked_room(full_jid) {
         return Ok(JoinStep::Done(MucAction::Send(muc_stanza_error(
             root,
             full_jid,
@@ -92,6 +90,7 @@ pub(super) async fn check_join_admission<S: MucSession>(
             "item-not-found",
         ))));
     }
+    let room = view.room;
     if created {
         let actor_bare = format!("{}@{}", user.username, session.host().local_domain());
         let _ = northstar_room_application::mix_muc::maybe_link_local_mirror(
@@ -201,6 +200,7 @@ pub(super) async fn recheck_join_admission<S: MucSession>(
         full_jid,
         room_jid,
         nick,
+        ..
     } = *request;
     let local_join_guard = if session.host().muc_pg_authority_enabled() {
         None
@@ -213,10 +213,10 @@ pub(super) async fn recheck_join_admission<S: MucSession>(
                 .await,
         )
     };
-    let Some(refreshed_room) = session
+    let Some(view) = session
         .host()
         .muc_service()
-        .local_room_snapshot(localpart(room_jid))
+        .room_for_command(localpart(room_jid))
         .await?
     else {
         return Ok(JoinStep::Done(MucAction::Send(muc_stanza_error(
@@ -226,6 +226,7 @@ pub(super) async fn recheck_join_admission<S: MucSession>(
             "item-not-found",
         ))));
     };
+    let refreshed_room = &view.room;
     if refreshed_room.room_epoch == room.room_epoch
         && refreshed_room.password_hash != room.password_hash
     {
@@ -255,10 +256,8 @@ pub(super) async fn recheck_join_admission<S: MucSession>(
             ))));
         }
     }
-    let room = refreshed_room;
-    if room.configuration_is_expired(northstar_time::Utc::now())
-        || (room.is_locked()
-            && !room.can_configure_locked_room(full_jid, northstar_time::Utc::now()))
+    if view.configuration_expired
+        || (refreshed_room.is_locked() && !view.can_configure_locked_room(full_jid))
     {
         return Ok(JoinStep::Done(MucAction::Send(muc_stanza_error(
             root,
@@ -267,6 +266,7 @@ pub(super) async fn recheck_join_admission<S: MucSession>(
             "item-not-found",
         ))));
     }
+    let room = view.room;
     let affiliation = session
         .host()
         .muc_service()

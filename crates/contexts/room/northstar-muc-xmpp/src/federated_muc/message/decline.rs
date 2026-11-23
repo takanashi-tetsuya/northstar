@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::muc::message::addressed::{self, AddressedDeliveryKind};
+use crate::muc::request_facts::offline_delay;
 use northstar_room_application::muc_service::{MucAddressedOutcome, MucAddressedRequest};
 
 pub(super) async fn handle_invitation_decline<S: MucHost>(
@@ -150,8 +151,7 @@ pub(super) async fn handle_invitation_decline<S: MucHost>(
                     .is_some();
             }
             if !delivered && request.temporary_storage {
-                let delayed =
-                    add_delay_from(&forwarded, northstar_time::Utc::now(), Some(room_jid));
+                let delayed = offline_delay(&forwarded, room_jid, address.facts);
                 let outcome = state
                     .muc_service()
                     .store_federated_muc_offline(

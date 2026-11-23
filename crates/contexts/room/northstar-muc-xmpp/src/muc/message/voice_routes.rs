@@ -8,7 +8,9 @@ pub(crate) async fn deliver_voice_request(
     moderators: Vec<MucOccupantRoute>,
     federated: bool,
 ) {
-    let request = crate::muc::muc_voice_request(room, &requester.full_jid, &requester.nick);
+    let stanza_id = host.muc_time_sources().new_uuid();
+    let request =
+        crate::muc::muc_voice_request(room, &requester.full_jid, &requester.nick, stanza_id);
     let mut local = Vec::new();
     let mut endpoints = Vec::new();
     for route in moderators {

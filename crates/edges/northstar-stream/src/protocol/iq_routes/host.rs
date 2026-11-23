@@ -10,6 +10,7 @@ use std::future::Future;
 /// The context adapters the route table cannot call directly because those
 /// adapters depend on stream. Routing decisions stay in this crate.
 pub trait IqRouteHost: DiscoveryHost {
+    fn muc_time_sources(&self) -> &northstar_room_core::MucTimeSources;
     fn xmpp_version_includes_os(&self) -> bool;
     fn server_version(&self) -> &str;
     fn is_local_muc_room(value: &str, expected_domain: &str) -> bool;

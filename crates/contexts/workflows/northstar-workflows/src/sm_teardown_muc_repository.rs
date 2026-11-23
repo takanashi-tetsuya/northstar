@@ -1,9 +1,11 @@
 //! PostgreSQL adapter for SM-owned MUC teardown projections and exact cleanup.
 
 use anyhow::Result;
-use northstar_room_application::muc_service::{CommittedRoomRetirement, MucRoomIncarnation};
+use northstar_room_application::muc_service::{
+    CommittedRoomRetirement, MucRetirement, MucRoomIncarnation,
+};
 use northstar_room_application::sm_teardown_muc::*;
-use northstar_room_core::occupancy::MucOccupantRoute;
+use northstar_room_core::{occupancy::MucOccupantRoute, MucTimeSources};
 use sqlx::PgPool;
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -11,11 +13,16 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct PostgresSmTeardownMucRepository {
     pool: PgPool,
+    time_sources: MucTimeSources,
 }
 
 impl PostgresSmTeardownMucRepository {
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self::new_with_time_sources(pool, MucTimeSources::default())
+    }
+
+    pub fn new_with_time_sources(pool: PgPool, time_sources: MucTimeSources) -> Self {
+        Self { pool, time_sources }
     }
 }
 
@@ -57,7 +64,15 @@ impl SmTeardownMucRepository for PostgresSmTeardownMucRepository {
         &self,
         room: MucRoomIncarnation,
     ) -> Result<Option<CommittedRoomRetirement>> {
-        northstar_room_postgres::muc::delete_temporary_muc_room(&self.pool, room, None).await
+        northstar_room_postgres::room::retirement_identity::commit_muc_retirement(
+            &self.pool,
+            self.time_sources.new_uuid(),
+            MucRetirement::Temporary {
+                room,
+                config_version: None,
+            },
+        )
+        .await
     }
 
     async fn departed_room(

@@ -23,13 +23,13 @@ pub(super) async fn prepare_joined_presence<S: MucSession>(
         full_jid,
         room_jid,
         nick,
+        ..
     } = *request;
     let same_nick = session
         .joined_rooms()
         .get(room_jid)
         .is_some_and(|joined| joined.nick == nick);
-    let history_request = match preflight_rejoin_history(root, same_nick, northstar_time::Utc::now)
-    {
+    let history_request = match preflight_rejoin_history(root, same_nick, || request.facts.at) {
         Ok(history) => history,
         Err(MalformedMucStanza) => {
             return Ok(JoinStep::Done(MucAction::Send(muc_stanza_error(
@@ -277,6 +277,7 @@ pub(super) async fn broadcast_presence_refresh<S: MucSession>(
         full_jid,
         room_jid,
         nick,
+        ..
     } = *request;
     let serializable =
         northstar_room_application::muc_service::SerializableMucOccupant::from(occupant);
@@ -456,3 +457,6 @@ pub(super) async fn broadcast_presence_refresh<S: MucSession>(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod clock_tests;

@@ -27,8 +27,11 @@ pub(super) async fn commit_join<S: MucSession>(
         full_jid,
         room_jid,
         nick,
+        facts,
     } = *request;
     let payload = muc_presence_payload(root, raw);
+    let (incarnation, cluster_operation_id) =
+        identity::prepare_join_ids(facts, session.host().muc_time_sources());
 
     let mut occupant = MucOccupant {
         full_jid: full_jid.clone(),
@@ -41,7 +44,7 @@ pub(super) async fn commit_join<S: MucSession>(
         role,
         room_non_anonymous: room.non_anonymous,
         occupant_id: muc_occupant_id(&room.occupant_id_secret, bare_jid(full_jid)),
-        cluster_epoch: uuid::Uuid::new_v4(),
+        cluster_epoch: incarnation,
         connection_id: session.connection_id(),
         sm_session_id: session.sm_db_id(),
         payload,
@@ -56,7 +59,6 @@ pub(super) async fn commit_join<S: MucSession>(
             user_id: user.id,
             bare_jid: bare_jid(full_jid).to_owned(),
         };
-        let cluster_operation_id = uuid::Uuid::new_v4();
         let committed = match session
             .host()
             .muc_service()

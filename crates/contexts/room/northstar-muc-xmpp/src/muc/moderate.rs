@@ -78,6 +78,7 @@ pub async fn muc_moderate(
     iq: Node<'_, '_>,
     moderate: Node<'_, '_>,
 ) -> Result<MucAction> {
+    let facts = session.host().muc_time_sources().prepare_request();
     let Some(user) = session.user() else {
         return Ok(MucAction::Send(iq_error(id, "not-authorized")));
     };
@@ -218,8 +219,7 @@ pub async fn muc_moderate(
 
     let moderator_occupant = format!("{room_jid}/{}", moderator.nick);
     let author_occupant_id = muc_occupant_id(&room.occupant_id_secret, &original.sender_jid);
-    let stamp = northstar_time::Utc::now();
-    let action_id = uuid::Uuid::new_v4();
+    let action_id = facts.id;
     let target_text = target_id.to_string();
     let moderated = XmlElement::namespaced("moderated", "urn:xmpp:message-moderate:1")
         .attr("by", &moderator_occupant)
@@ -227,10 +227,8 @@ pub async fn muc_moderate(
             XmlElement::namespaced("occupant-id", "urn:xmpp:occupant-id:0")
                 .attr("id", &moderator.occupant_id),
         );
-    let mut retracted = XmlElement::namespaced("retracted", "urn:xmpp:message-retract:1")
-        .attr("id", action_id)
-        .attr("stamp", stamp.format("%Y-%m-%dT%H:%M:%SZ"))
-        .child(moderated.clone());
+    let mut retracted =
+        super::request_facts::moderated_retraction(facts, Some(action_id), moderated.clone());
     if let Some(reason) = reason {
         retracted.push_child(XmlElement::new("reason").text(reason.to_owned()));
     }

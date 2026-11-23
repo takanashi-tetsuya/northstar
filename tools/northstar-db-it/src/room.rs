@@ -24,6 +24,7 @@ mod muc_live_audience;
 mod muc_logging_admission;
 mod muc_read_snapshots;
 mod muc_service;
+mod muc_time_sources;
 mod pam_conformance;
 mod producer_conformance;
 mod relay_profile_snapshot;

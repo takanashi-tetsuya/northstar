@@ -1,6 +1,7 @@
 //! Handle non-groupchat messages and route mediated invitations.
 
 use super::*;
+use crate::muc::request_facts::offline_delay;
 use northstar_room_application::muc_service::{
     LocalMediatedInvitation, LocalMediatedInvitationOutcome,
 };
@@ -110,7 +111,7 @@ pub(super) async fn handle_non_groupchat<S: MucHost>(
                         .validated_fragment(&request.hints)?
                         .finish(),
                     room_jid,
-                    uuid::Uuid::new_v4(),
+                    state.muc_time_sources().new_uuid(),
                 ),
                 &own.occupant_id,
             );
@@ -228,7 +229,7 @@ pub(super) async fn admit_local_invitation<S: MucHost>(
     let mut live_claim_id = None;
     let granted_wire = add_stanza_id(invitation, invitee_bare, local_durable_invite_id);
     let durable_invite = {
-        let delay = || add_delay_from(&granted_wire, northstar_time::Utc::now(), Some(room_jid));
+        let delay = || offline_delay(&granted_wire, room_jid, address.facts);
         let cluster_authority = {
             let Some(actor_target) = state
                 .muc_service()
@@ -456,7 +457,7 @@ pub(super) async fn deliver_local_invitation<S: MucHost>(
                 .await;
         }
     } else if durable_invite.is_none() && request.temporary_storage {
-        let delayed = add_delay_from(invitation, northstar_time::Utc::now(), Some(room_jid));
+        let delayed = offline_delay(invitation, room_jid, address.facts);
         let offline_outcome = state
             .muc_service()
             .store_federated_muc_offline(

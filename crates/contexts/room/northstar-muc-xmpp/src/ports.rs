@@ -90,6 +90,9 @@ pub trait MucHost: Send + Sync + 'static {
     type Session: MucLocalSession<Outbound = Self::Outbound>;
 
     fn muc_service(&self) -> &MucService<Self::Repository>;
+    fn muc_time_sources(&self) -> &northstar_room_core::MucTimeSources {
+        self.muc_service().time_sources()
+    }
     fn mix_service(&self) -> &MixService<Self::MixRepository>;
     fn session_entries_for(&self, jid: &str) -> Vec<(String, Self::Session)>;
 

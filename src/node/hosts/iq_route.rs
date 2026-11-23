@@ -19,6 +19,10 @@ pub(in crate::node) static IQ_ROUTES: LazyLock<IqRouter<ClientIqRoute<ServerNode
     LazyLock::new(build_routes::<ServerNode>);
 
 impl IqRouteHost for ServerNode {
+    fn muc_time_sources(&self) -> &northstar_room_core::MucTimeSources {
+        northstar_muc_xmpp::ports::MucHost::muc_time_sources(self)
+    }
+
     fn xmpp_version_includes_os(&self) -> bool {
         self.config.xep_0092_include_os
     }

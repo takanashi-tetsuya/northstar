@@ -786,7 +786,9 @@ async fn transition_cluster_muc_occupancy_with_status(
         tx.rollback().await?;
         return Ok((ClusterMucTransitionOutcome::Destroyed, None));
     }
-    if room.room_epoch != target.room_epoch {
+    if room.room_epoch != target.room_epoch
+        || (transition == "resume" && room.configuration_expired)
+    {
         tx.rollback().await?;
         return Ok((ClusterMucTransitionOutcome::Stale, None));
     }

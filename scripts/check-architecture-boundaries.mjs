@@ -1377,7 +1377,8 @@ const federatedActorCheck = federatedIqHandler.indexOf('authenticated_remote_act
 const federatedFullActor = federatedIqHandler.indexOf('let actor_full_jid = northstar_xmpp_types::jid::canonicalize(from)');
 const federatedBareActor = federatedIqHandler.indexOf('let actor_bare_jid = northstar_xmpp_types::jid::canonical_bare_key(&actor_full_jid)?;');
 const federatedMamDispatch = federatedIqHandler.indexOf('federated_muc_mam_iq(');
-const federatedRoomLookup = federatedIqHandler.indexOf('.federated_room_snapshot(');
+const federatedRoomRead = /\.(?:federated_room_snapshot|read_room|room_for_command|room_view)\s*\(/;
+const federatedRoomLookup = federatedIqHandler.search(federatedRoomRead);
 const federatedMetadataCommand = federatedMamHandler.indexOf('FederatedMamMetadataCommand::from_authenticated_actor(');
 const federatedMetadataCall = federatedMamHandler.indexOf('.execute_federated_mam_metadata(command)');
 if (federatedActorCheck < 0
@@ -1385,7 +1386,7 @@ if (federatedActorCheck < 0
   || federatedBareActor <= federatedFullActor
   || federatedMamDispatch <= federatedBareActor
   || federatedRoomLookup <= federatedMamDispatch
-  || !/return federated_muc_mam_iq\(\s*state,\s*authenticated_domain,\s*&request,\s*&room_jid,\s*&actor_full_jid,\s*\)/.test(federatedIqHandler)
+  || !/return federated_muc_mam_iq\(\s*state,\s*authenticated_domain,\s*&request,\s*&room_jid,\s*&actor_full_jid,\s*facts\.id,\s*\)/.test(federatedIqHandler)
   || federatedMetadataCommand < 0
   || federatedMetadataCall <= federatedMetadataCommand
   || !/let room_localpart = localpart\(room_jid\);/.test(federatedMamHandler)
@@ -1393,7 +1394,7 @@ if (federatedActorCheck < 0
     federatedMamHandler.slice(0, federatedMetadataCommand))
   || !/room_localpart\.to_owned\(\),\s*authenticated_domain,\s*actor_full_jid,\s*occupancy,/.test(
     federatedMamHandler.slice(federatedMetadataCommand, federatedMetadataCall))
-  || federatedMamHandler.includes('.federated_room_snapshot(')
+  || federatedRoomRead.test(federatedMamHandler)
   || federatedMucSource.includes('.authorized_federated_room_boundaries(')) {
   throw new Error('federated MAM metadata must use an authenticated actor and typed archive command');
 }

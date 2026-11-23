@@ -176,7 +176,7 @@ pub async fn muc_register_set(
                     "not-authorized",
                 )));
             };
-            let operation_id = uuid::Uuid::new_v4();
+            let operation_id = session.host().muc_time_sources().new_uuid();
             let outcome = session
                 .host()
                 .muc_service()
@@ -322,7 +322,7 @@ pub async fn muc_register_set(
                 "not-authorized",
             )));
         };
-        let operation_id = uuid::Uuid::new_v4();
+        let operation_id = session.host().muc_time_sources().new_uuid();
         let outcome = session
             .host()
             .muc_service()

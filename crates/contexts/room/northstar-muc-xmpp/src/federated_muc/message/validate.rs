@@ -29,6 +29,7 @@ pub(super) fn validate_message<'a, S: MucHost>(
     state: &S,
     authenticated_domain: &str,
     request: &'a FederatedMessageRequest,
+    facts: MucRequestFacts,
 ) -> Result<MessageStep<MessageAddress<'a>>> {
     let from = request.stanza.from.as_str();
     let to = request.stanza.to.as_str();
@@ -86,6 +87,7 @@ pub(super) fn validate_message<'a, S: MucHost>(
         actor_bare_jid,
         to_jid,
         room_jid,
+        facts,
     }))
 }
 

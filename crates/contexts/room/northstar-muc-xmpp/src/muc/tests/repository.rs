@@ -395,3 +395,8 @@ mod join_continuity;
 mod lifecycle;
 mod live_audience;
 mod read_snapshots;
+
+#[cfg(test)]
+mod retirement_identity;
+#[cfg(test)]
+mod room_creation;

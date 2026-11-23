@@ -79,7 +79,7 @@ pub(super) async fn handle_private_message<S: MucHost>(
                 &target.full_jid,
             ),
             room_jid,
-            uuid::Uuid::new_v4(),
+            address.facts.id,
         ),
         &sender_occupant_id,
     );

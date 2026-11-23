@@ -16,6 +16,7 @@ use northstar_room_application::muc_service::{
     MucManagementViewer, MucOccupancyProof, MucReadPrincipal, MucRoomView, MucRoomViewKind,
     MucRoomViewer,
 };
+use northstar_room_core::MucRequestFacts;
 
 mod authorized;
 use self::authorized::{
@@ -34,8 +35,11 @@ pub fn federated_muc_iq<'a>(
     raw: &str,
 ) -> impl std::future::Future<Output = Result<Option<String>>> + Send + 'a {
     let authenticated_domain = authenticated_domain.to_owned();
+    let facts = state.muc_time_sources().prepare_request();
     let request = FederatedIqRequest::from_node(root, raw);
-    async move { federated_muc_iq_owned(state, &authenticated_domain, connection_id, request).await }
+    async move {
+        federated_muc_iq_owned(state, &authenticated_domain, connection_id, request, facts).await
+    }
 }
 
 async fn federated_muc_iq_owned(
@@ -43,6 +47,7 @@ async fn federated_muc_iq_owned(
     authenticated_domain: &str,
     connection_id: uuid::Uuid,
     request: FederatedIqRequest,
+    facts: MucRequestFacts,
 ) -> Result<Option<String>> {
     let from = request.stanza.from.as_str();
     let to = request.stanza.to.as_str();
@@ -201,7 +206,7 @@ async fn federated_muc_iq_owned(
             }
             FederatedIqPayload::Unique => {
                 XmlElement::namespaced("unique", "http://jabber.org/protocol/muc#unique")
-                    .text(uuid::Uuid::new_v4().simple().to_string())
+                    .text(facts.id.simple().to_string())
                     .finish()
             }
             _ => {
@@ -242,6 +247,7 @@ async fn federated_muc_iq_owned(
             &request,
             &room_jid,
             &actor_full_jid,
+            facts.id,
         )
         .await;
     }
@@ -336,12 +342,8 @@ async fn federated_muc_iq_owned(
             | FederatedIqPayload::OwnerSet
             | FederatedIqPayload::Moderate { .. }
     );
-    let (room, reserved_nick, nicks) = if command {
-        let Some(room) = state
-            .muc_service()
-            .federated_room_snapshot(room_localpart)
-            .await?
-        else {
+    let (room, configuration_expired, reserved_nick, nicks) = if command {
+        let Some(view) = state.muc_service().room_for_command(room_localpart).await? else {
             return Ok(federated_error(
                 &request.stanza,
                 from,
@@ -349,9 +351,7 @@ async fn federated_muc_iq_owned(
                 "item-not-found",
             ));
         };
-        if room.is_locked()
-            && !room.can_configure_locked_room(&actor_full_jid, northstar_time::Utc::now())
-        {
+        if view.room.is_locked() && !view.can_configure_locked_room(&actor_full_jid) {
             return Ok(federated_error(
                 &request.stanza,
                 from,
@@ -359,7 +359,7 @@ async fn federated_muc_iq_owned(
                 "item-not-found",
             ));
         }
-        (room, None, Vec::new())
+        (view.room, view.configuration_expired, None, Vec::new())
     } else {
         match state
             .muc_service()
@@ -380,7 +380,7 @@ async fn federated_muc_iq_owned(
                 reserved_nick,
                 nicks,
                 ..
-            } => (room.room, reserved_nick, nicks),
+            } => (room.room, room.configuration_expired, reserved_nick, nicks),
             MucRoomView::Missing => {
                 return Ok(federated_error(
                     &request.stanza,
@@ -519,17 +519,6 @@ async fn federated_muc_iq_owned(
         &request.payload,
         FederatedIqPayload::RegisterGet | FederatedIqPayload::RegisterSet
     ) {
-        if command
-            && room.is_locked()
-            && !room.can_configure_locked_room(&actor_full_jid, northstar_time::Utc::now())
-        {
-            return Ok(federated_error(
-                &request.stanza,
-                from,
-                "cancel",
-                "item-not-found",
-            ));
-        }
         if !room.allow_registration {
             return Ok(federated_error(
                 &request.stanza,
@@ -626,7 +615,7 @@ async fn federated_muc_iq_owned(
             FederatedRegistrationAction::Remove => {
                 if state.federated_muc_pg_authority_enabled() {
                     state.federated_muc_admit_mutation()?;
-                    let operation_id = uuid::Uuid::new_v4();
+                    let operation_id = facts.id;
                     let outcome = state
                         .muc_service()
                         .mutate_local_cluster_registration(
@@ -679,7 +668,7 @@ async fn federated_muc_iq_owned(
             FederatedRegistrationAction::Register(nick) => {
                 if state.federated_muc_pg_authority_enabled() {
                     state.federated_muc_admit_mutation()?;
-                    let operation_id = uuid::Uuid::new_v4();
+                    let operation_id = facts.id;
                     let outcome = state
                         .muc_service()
                         .mutate_local_cluster_registration(
@@ -921,6 +910,7 @@ async fn federated_muc_iq_owned(
                 &request.stanza,
                 &room,
                 own.as_ref().expect("owner set has an actor"),
+                configuration_expired,
             )
             .await
         }
@@ -949,7 +939,7 @@ async fn federated_muc_iq_owned(
         } => {
             federated_muc_moderate(
                 state,
-                &request.stanza,
+                (&request.stanza, facts),
                 &room,
                 own.as_ref().expect("moderation has an actor"),
                 target,
@@ -986,6 +976,7 @@ async fn federated_muc_mam_iq(
     request: &FederatedIqRequest,
     room_jid: &str,
     actor_full_jid: &str,
+    result_id_seed: uuid::Uuid,
 ) -> Result<Option<String>> {
     let from = request.stanza.from.as_str();
     let room_localpart = localpart(room_jid);
@@ -1131,6 +1122,7 @@ async fn federated_muc_mam_iq(
                 (room_localpart, &authority),
                 (room_jid, actor_full_jid),
                 query.clone(),
+                result_id_seed,
             )
             .await
         }
@@ -1145,10 +1137,10 @@ async fn federated_muc_mam(
     authorization: (&str, &MamRoomReadAuthority),
     delivery: (&str, &str),
     query: FederatedMamQuery,
+    result_id_seed: uuid::Uuid,
 ) -> Result<Option<String>> {
     let (room_localpart, authority) = authorization;
     let (room_jid, recipient) = delivery;
-    let result_id_seed = uuid::Uuid::new_v4();
     let outcome = state
         .admit_federated_room_stream(
             northstar_archive_core::FederatedMamStreamRequest::new(

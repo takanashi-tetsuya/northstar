@@ -3,6 +3,7 @@
 use dashmap::DashMap;
 use northstar_room_application::sm_teardown_muc::{SmTeardownMucRepository, SmTeardownMucService};
 use northstar_room_core::occupancy::{MucOccupantEndpoint, SerializableMucOccupant};
+use northstar_room_core::MucTimeSources;
 use northstar_stream::local_routes::muc::MucOccupant;
 use northstar_xmpp_types::jid_text::{bare_jid, localpart};
 use std::sync::Arc;
@@ -11,6 +12,7 @@ use uuid::Uuid;
 pub struct SmTeardownMucProjection<R> {
     service: SmTeardownMucService<R>,
     occupants: Arc<DashMap<String, MucOccupant>>,
+    time_sources: MucTimeSources,
 }
 
 impl<R: SmTeardownMucRepository> SmTeardownMucProjection<R> {
@@ -18,7 +20,19 @@ impl<R: SmTeardownMucRepository> SmTeardownMucProjection<R> {
         service: SmTeardownMucService<R>,
         occupants: Arc<DashMap<String, MucOccupant>>,
     ) -> Self {
-        Self { service, occupants }
+        Self::new_with_time_sources(service, occupants, MucTimeSources::default())
+    }
+
+    pub fn new_with_time_sources(
+        service: SmTeardownMucService<R>,
+        occupants: Arc<DashMap<String, MucOccupant>>,
+        time_sources: MucTimeSources,
+    ) -> Self {
+        Self {
+            service,
+            occupants,
+            time_sources,
+        }
     }
 
     pub async fn occupant(
@@ -46,7 +60,7 @@ impl<R: SmTeardownMucRepository> SmTeardownMucProjection<R> {
             role: projection.role.to_owned(),
             room_non_anonymous: projection.room_non_anonymous,
             occupant_id: projection.occupant_id,
-            cluster_epoch: Uuid::new_v4(),
+            cluster_epoch: self.time_sources.new_uuid(),
             connection_id: Uuid::nil(),
             federated_domain: None,
             sm_session_id: Some(sm_session_id),

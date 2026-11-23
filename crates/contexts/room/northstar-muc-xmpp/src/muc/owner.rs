@@ -206,10 +206,10 @@ pub async fn muc_owner_set(
                 .await,
         )
     };
-    let Some(room) = session
+    let Some(view) = session
         .host()
         .muc_service()
-        .local_room_snapshot(&room_localpart)
+        .room_for_command(&room_localpart)
         .await?
     else {
         return Ok(MucAction::Send(iq_error_from(
@@ -218,6 +218,7 @@ pub async fn muc_owner_set(
             "item-not-found",
         )));
     };
+    let room = &view.room;
     if room.id != gated_room_id || room.room_epoch != gated_room_epoch {
         return Ok(MucAction::Send(iq_error_from(
             id,
@@ -225,7 +226,7 @@ pub async fn muc_owner_set(
             "item-not-found",
         )));
     }
-    if room.configuration_is_expired(northstar_time::Utc::now()) {
+    if view.configuration_expired {
         let _ = session
             .host()
             .muc_service()
@@ -237,7 +238,7 @@ pub async fn muc_owner_set(
             "item-not-found",
         )));
     }
-    if room.is_locked() && !room.can_configure_locked_room(full_jid, northstar_time::Utc::now()) {
+    if room.is_locked() && !view.can_configure_locked_room(full_jid) {
         return Ok(MucAction::Send(iq_error_from(id, room_jid, "forbidden")));
     }
     if session
@@ -292,7 +293,7 @@ pub async fn muc_owner_set(
             else {
                 return Ok(MucAction::Send(iq_error_from(id, room_jid, "forbidden")));
             };
-            let operation_id = uuid::Uuid::new_v4();
+            let operation_id = session.host().muc_time_sources().new_uuid();
             match session
                 .host()
                 .muc_service()
@@ -587,7 +588,7 @@ pub async fn muc_owner_set(
             else {
                 return Ok(MucAction::Send(iq_error_from(id, room_jid, "forbidden")));
             };
-            let operation_id = uuid::Uuid::new_v4();
+            let operation_id = session.host().muc_time_sources().new_uuid();
             let outcome = session
                 .host()
                 .muc_service()

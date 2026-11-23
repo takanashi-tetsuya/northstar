@@ -31,6 +31,10 @@ impl MucHost for ServerNode {
         self.room.muc_service()
     }
 
+    fn muc_time_sources(&self) -> &northstar_room_core::MucTimeSources {
+        self.room.muc_service().time_sources()
+    }
+
     fn mix_service(&self) -> &MixService<PostgresMixRepository> {
         self.room.mix_service()
     }

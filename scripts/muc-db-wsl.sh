@@ -311,3 +311,12 @@ cargo test --locked --offline -p northstar-db-it \
 cargo test --locked --offline -p northstar-db-it \
   room::muc_addressed_delivery::direct_invitation_mode_follows_the_locked_room_revision \
   -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_time_sources::locked_room_join_uses_the_database_deadline_under_clock_skew \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_time_sources::owner_configuration_uses_the_database_deadline_under_clock_skew \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_time_sources::legacy_owner_configuration_checks_deadline_after_the_room_row_wait \
+  -- --ignored --exact --nocapture

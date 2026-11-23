@@ -3,6 +3,8 @@ use northstar_room_application::muc_service::*;
 use northstar_time::{DateTime, Utc};
 use std::time::Duration;
 
+mod addressed_delivery;
+
 // Unrelated ports fail loudly if a handler unexpectedly reaches them.
 macro_rules! unused_async {
     ($(fn $name:ident(&self $(, $arg:ident: $ty:ty)*) -> $out:ty;)+) => {

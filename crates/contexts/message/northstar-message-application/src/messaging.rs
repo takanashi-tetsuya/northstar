@@ -494,12 +494,15 @@ pub struct LocalMucInviteAdmission<'a> {
     pub cluster_authority: Option<&'a ClusterMucInviteAuthority>,
 }
 
+pub mod invitation_admission;
+
 /// Each admission commits all requested history, delivery and affiliation
 /// changes atomically. An error after requesting COMMIT can leave its outcome
 /// unknown; it is not evidence that an atomic admission rolled back.
 pub trait MessageRepository:
     PersonalMessageCommitRepository<Error = anyhow::Error>
     + DirectCommitRepository<Error = anyhow::Error>
+    + invitation_admission::DirectInvitationRepository
     + Clone
     + Send
     + Sync

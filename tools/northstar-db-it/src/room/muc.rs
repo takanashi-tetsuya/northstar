@@ -431,7 +431,7 @@ async fn locked_room_configuration_is_atomic_restart_safe_and_bounded() {
 
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "requires TEST_DATABASE_URL; uses and removes a random isolated schema"]
-async fn durable_invitation_admission_is_atomic_under_injected_failures() {
+pub(crate) async fn durable_invitation_admission_is_atomic_under_injected_failures() {
     let _ = tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default();
     let url = std::env::var("TEST_DATABASE_URL")
         .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");

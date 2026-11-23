@@ -1,4 +1,11 @@
 use super::*;
+use northstar_room_application::muc_service::{
+    LocalMediatedInvitation, LocalMediatedInvitationOutcome, MucAddressedOutcome,
+    MucAddressedRequest,
+};
+
+pub(crate) mod addressed;
+pub(crate) mod voice_routes;
 
 pub async fn handle_muc_invitation_decline(
     session: &impl MucSession,
@@ -18,22 +25,23 @@ pub async fn handle_muc_invitation_decline(
             "bad-request",
         )));
     }
-    if session
+    let target = CanonicalJid::parse(&target_raw)
+        .map_err(|error| anyhow::anyhow!("validated MUC decline target became invalid: {error}"))?;
+    let occupant_target = target.bare() == room_jid && target.resourcepart().is_some();
+    let nick = target.resourcepart().filter(|_| occupant_target);
+    let MucAddressedOutcome::Decline { target: route } = session
         .host()
         .muc_service()
-        .local_room_snapshot(localpart(&room_jid))
+        .muc_addressed_authority(localpart(&room_jid), MucAddressedRequest::Decline { nick })
         .await?
-        .is_none()
-    {
+    else {
         return Ok(MucAction::Send(muc_stanza_error(
             root,
             from,
             "cancel",
             "item-not-found",
         )));
-    }
-    let target = CanonicalJid::parse(&target_raw)
-        .map_err(|error| anyhow::anyhow!("validated MUC decline target became invalid: {error}"))?;
+    };
     let mut decline = XmlElement::new("decline").attr("from", bare_jid(from));
     if let Some(reason) = reason.as_deref() {
         decline.push_child(XmlElement::new("reason").text(reason.to_owned()));
@@ -55,23 +63,19 @@ pub async fn handle_muc_invitation_decline(
         .child(extension)
         .validated_fragment(&hints)?
         .finish();
-    if target.domainpart() == muc_domain(session)
-        && target.bare() == room_jid
-        && target.resourcepart().is_some()
-    {
-        let nick = target
-            .resourcepart()
-            .expect("decline occupant resource checked");
-        if let Some(recipient) = session.host().local_muc_occupant_by_nick(&room_jid, nick) {
-            let _ = session
-                .host()
-                .deliver_to_muc_occupant(&recipient, forwarded.clone())
-                .await;
-        }
-        session
-            .host()
-            .publish_muc_cluster_private_message(&room_jid, nick, &forwarded, from)
+    if occupant_target {
+        if let Some(route) = route {
+            addressed::send_addressed(
+                session.host(),
+                &room_jid,
+                &route,
+                forwarded,
+                from,
+                addressed::AddressedDeliveryKind::Decline,
+                false,
+            )
             .await?;
+        }
         return Ok(MucAction::None);
     }
     if target.domainpart() == session.host().local_domain() {
@@ -190,6 +194,9 @@ pub async fn handle_muc_voice_form<S: MucSession>(
     own: &Occupant<S::Host>,
     voice_form: MucVoiceForm,
 ) -> Result<MucAction> {
+    if matches!(voice_form, MucVoiceForm::Request) {
+        return handle_local_voice_request(session, root, from, to_jid, &room_jid).await;
+    }
     if to_jid.resourcepart().is_some() || !matches!(root.attribute("type"), None | Some("normal")) {
         return Ok(MucAction::Send(muc_stanza_error(
             root,
@@ -232,41 +239,7 @@ pub async fn handle_muc_voice_form<S: MucSession>(
         );
     }
     match voice_form {
-        MucVoiceForm::Request => {
-            if !room.moderated || own.role != "visitor" {
-                return Ok(MucAction::Send(muc_stanza_error(
-                    root,
-                    from,
-                    "auth",
-                    "forbidden",
-                )));
-            }
-            let request = muc_voice_request(&room_jid, &own.full_jid, &own.nick);
-            for moderator in occupants
-                .values()
-                .filter(|occupant| occupant.role == "moderator")
-            {
-                if let Some(local) = session
-                    .host()
-                    .local_muc_occupant_by_nick(&room_jid, &moderator.nick)
-                {
-                    let _ = session
-                        .host()
-                        .deliver_to_muc_occupant(&local, set_to(&request, &local.full_jid))
-                        .await;
-                }
-                session
-                    .host()
-                    .publish_muc_cluster_private_message(
-                        &room_jid,
-                        &moderator.nick,
-                        &request,
-                        &own.full_jid,
-                    )
-                    .await?;
-            }
-            Ok(MucAction::None)
-        }
+        MucVoiceForm::Request => unreachable!("voice requests use addressed authority"),
         MucVoiceForm::Approval { jid, nick, allow } => {
             if own.role != "moderator" {
                 return Ok(MucAction::Send(muc_stanza_error(
@@ -466,29 +439,42 @@ pub async fn handle_muc_private_message<S: MucSession>(
     from: &str,
     room_jid: String,
     to_jid: &CanonicalJid,
-    own: &Occupant<S::Host>,
 ) -> Result<MucAction> {
-    let Some(room) = session
-        .host()
-        .muc_service()
-        .local_room_snapshot(localpart(&room_jid))
-        .await?
-    else {
-        return Ok(MucAction::Send(muc_stanza_error(
-            root,
-            from,
-            "cancel",
-            "item-not-found",
-        )));
-    };
-    if !room.allow_private_messages {
+    let Some(actor) = addressed::local_actor(session, &room_jid, from) else {
         return Ok(MucAction::Send(muc_stanza_error(
             root,
             from,
             "auth",
-            "forbidden",
+            "not-acceptable",
         )));
-    }
+    };
+    let Some(nick) = to_jid.resourcepart() else {
+        return Ok(MucAction::Send(muc_stanza_error(
+            root,
+            from,
+            "modify",
+            "jid-malformed",
+        )));
+    };
+    let outcome = session
+        .host()
+        .muc_service()
+        .muc_addressed_authority(
+            localpart(&room_jid),
+            MucAddressedRequest::Private { actor, nick },
+        )
+        .await?;
+    let MucAddressedOutcome::Private {
+        sender_nick,
+        sender_occupant_id,
+        target,
+    } = outcome
+    else {
+        let (error_type, condition) = addressed::rejection(&outcome);
+        return Ok(MucAction::Send(muc_stanza_error(
+            root, from, error_type, condition,
+        )));
+    };
     if !matches!(
         root.attribute("type").unwrap_or("normal"),
         "chat" | "normal"
@@ -500,76 +486,91 @@ pub async fn handle_muc_private_message<S: MucSession>(
             "bad-request",
         )));
     }
-    let Some(target_nick) = to_jid.resourcepart() else {
+    let Some(target) = target else {
         return Ok(MucAction::Send(muc_stanza_error(
             root,
             from,
-            "modify",
-            "jid-malformed",
+            "cancel",
+            "item-not-found",
         )));
-    };
-    let local_target = session
-        .host()
-        .local_muc_occupant_by_nick(&room_jid, target_nick);
-    let (target_full_jid, route_via_cluster) = if let Some(target) = &local_target {
-        (target.full_jid.clone(), false)
-    } else {
-        let occupants = session
-            .host()
-            .cached_muc_cluster_occupants(&room_jid)
-            .await
-            .unwrap_or_default();
-        let Some(target) = occupants.get(target_nick).and_then(|json| {
-            serde_json::from_str::<
-                    northstar_room_application::muc_service::SerializableMucOccupant,
-                >(json)
-                .ok()
-        }) else {
-            return Ok(MucAction::Send(muc_stanza_error(
-                root,
-                from,
-                "cancel",
-                "item-not-found",
-            )));
-        };
-        (target.full_jid, true)
     };
 
     let rewritten = set_muc_occupant_id(
         &add_stanza_id(
             &set_to(
-                &set_from(raw, &format!("{room_jid}/{}", own.nick)),
-                &target_full_jid,
+                &set_from(raw, &format!("{room_jid}/{sender_nick}")),
+                &target.full_jid,
             ),
             &room_jid,
             uuid::Uuid::new_v4(),
         ),
-        &own.occupant_id,
+        &sender_occupant_id,
     );
+    addressed::send_addressed(
+        session.host(),
+        &room_jid,
+        &target,
+        rewritten,
+        from,
+        addressed::AddressedDeliveryKind::Private {
+            sender_nick: &sender_nick,
+        },
+        false,
+    )
+    .await?;
+    Ok(MucAction::None)
+}
 
-    if route_via_cluster {
-        session
-            .host()
-            .publish_muc_cluster_private_message(&room_jid, target_nick, &rewritten, from)
-            .await?;
-    } else if let Some(target) = local_target {
-        let blocked = session
-            .host()
-            .blocked_muc_recipient_accounts(
-                std::slice::from_ref(&target),
-                &[format!("{room_jid}/{}", own.nick), from.to_owned()],
-            )
-            .await;
-        if northstar_xmpp_types::jid::canonical_bare_key(&target.full_jid)
-            .is_ok_and(|owner| blocked.contains(&owner))
-        {
-            return Ok(MucAction::None);
-        }
-        let _ = session
-            .host()
-            .deliver_to_muc_occupant_unchecked(&target, rewritten)
-            .await;
+pub(super) async fn handle_local_voice_request(
+    session: &impl MucSession,
+    root: Node<'_, '_>,
+    from: &str,
+    to_jid: &CanonicalJid,
+    room: &str,
+) -> Result<MucAction> {
+    let Some(actor) = addressed::local_actor(session, room, from) else {
+        return Ok(MucAction::Send(muc_stanza_error(
+            root,
+            from,
+            "auth",
+            "not-acceptable",
+        )));
+    };
+    let outcome = session
+        .host()
+        .muc_service()
+        .muc_addressed_authority(localpart(room), MucAddressedRequest::Voice { actor })
+        .await?;
+    if matches!(
+        outcome,
+        MucAddressedOutcome::NotJoined
+            | MucAddressedOutcome::MissingRoom
+            | MucAddressedOutcome::NotAuthorized
+    ) {
+        let (error_type, condition) = addressed::rejection(&outcome);
+        return Ok(MucAction::Send(muc_stanza_error(
+            root, from, error_type, condition,
+        )));
     }
+    if to_jid.resourcepart().is_some() || !matches!(root.attribute("type"), None | Some("normal")) {
+        return Ok(MucAction::Send(muc_stanza_error(
+            root,
+            from,
+            "modify",
+            "bad-request",
+        )));
+    }
+    let MucAddressedOutcome::Voice {
+        requester,
+        moderators,
+    } = outcome
+    else {
+        let (error_type, condition) = addressed::rejection(&outcome);
+        return Ok(MucAction::Send(muc_stanza_error(
+            root, from, error_type, condition,
+        )));
+    };
+    voice_routes::deliver_voice_request(session.host(), room, &requester, moderators, false).await;
     Ok(MucAction::None)
 }
 
@@ -618,33 +619,16 @@ pub async fn handle_muc_invitation<S: MucSession>(
                     let invitee_jid = invitee.to_string();
                     let invitee_bare = invitee.bare();
                     let invitee_domain = invitee.domainpart();
-                    if invitee_domain == session.host().local_domain() {
-                        if let Some(invitee_user) = session
-                            .host()
-                            .muc_service()
-                            .enabled_local_account(invitee_localpart)
-                            .await?
-                        {
-                            let blocked_room = session
-                                .host()
-                                .muc_service()
-                                .is_blocked_for_account(invitee_user.id, &invitee_bare, &room_jid)
-                                .await?;
-                            let blocked_inviter = session
-                                .host()
-                                .muc_service()
-                                .is_blocked_for_account(invitee_user.id, &invitee_bare, from)
-                                .await?;
-                            if blocked_room || blocked_inviter {
-                                continue;
-                            }
-                        }
-                    }
                     // XEP-0045 roomconfig_allowinvites grants members
                     // an additional privilege; it never restricts an
                     // owner or administrator's inherent privilege.
                     let privileged_inviter = matches!(own.affiliation.as_str(), "owner" | "admin");
-                    if !privileged_inviter && (own.role == "visitor" || !room.allow_invites) {
+                    let cached_denial =
+                        !privileged_inviter && (own.role == "visitor" || !room.allow_invites);
+                    if !session.host().muc_pg_authority_enabled()
+                        && invitee_domain != session.host().local_domain()
+                        && cached_denial
+                    {
                         return Ok(MucAction::Send(muc_stanza_error(
                             root,
                             from,
@@ -660,18 +644,18 @@ pub async fn handle_muc_invitation<S: MucSession>(
                     let hints = processing_hints_fragment(root, raw);
                     let temporary_storage = offline_storage_permitted(root);
 
-                    let local_durable_invite_id =
-                        if room.members_only && invitee_domain == session.host().local_domain() {
-                            Some(northstar_room_application::muc_service::operation_id(
-                                &serde_json::json!({
-                                    "kind":"muc_invitation","stream":session.connection_id(),
-                                    "stanza_id":root.attribute("id"),"room":room_jid,
-                                    "actor":from,"invitee":invitee_bare,"reason":reason,
-                                }),
-                            )?)
-                        } else {
-                            None
-                        };
+                    let local_durable_invite_id = if invitee_domain == session.host().local_domain()
+                    {
+                        Some(northstar_room_application::muc_service::operation_id(
+                            &serde_json::json!({
+                                "kind":"muc_invitation","stream":session.connection_id(),
+                                "stanza_id":root.attribute("id"),"room":room_jid,
+                                "actor":from,"invitee":invitee_bare,"reason":reason,
+                            }),
+                        )?)
+                    } else {
+                        None
+                    };
                     let forwarded = set_muc_occupant_id(
                         &add_stanza_id(
                             &XmlElement::new("message")
@@ -692,15 +676,6 @@ pub async fn handle_muc_invitation<S: MucSession>(
                         ),
                         &own.occupant_id,
                     );
-                    // Cluster protocol v6 can infer a durable delivery
-                    // only when the recipient-authoritative stanza-id
-                    // is the exact spool key. Protocol v7 also carries
-                    // the explicit fence, so keeping both makes rolling
-                    // upgrades fail safe without weakening identity.
-                    let forwarded = local_durable_invite_id.map_or(forwarded.clone(), |id| {
-                        add_stanza_id(&forwarded, &invitee_bare, id)
-                    });
-
                     if invitee_domain == session.host().local_domain() {
                         let Some(recipient) = session
                             .host()
@@ -708,30 +683,33 @@ pub async fn handle_muc_invitation<S: MucSession>(
                             .enabled_local_account(invitee_localpart)
                             .await?
                         else {
+                            let (kind, condition) = if cached_denial {
+                                ("auth", "forbidden")
+                            } else {
+                                ("cancel", "service-unavailable")
+                            };
                             return Ok(MucAction::Send(muc_stanza_error(
-                                root,
-                                from,
-                                "cancel",
-                                "service-unavailable",
+                                root, from, kind, condition,
                             )));
                         };
-                        if room.members_only && !temporary_storage {
-                            return Ok(MucAction::Send(muc_stanza_error(
-                                root,
-                                from,
-                                "wait",
-                                "service-unavailable",
-                            )));
-                        }
                         let mut live_claim_id = None;
-                        let (durable_invite, affiliation_changed) = if room.members_only {
-                            let delayed = add_delay_from(
-                                &forwarded,
-                                northstar_time::Utc::now(),
-                                Some(&room_jid),
-                            );
-                            let cluster_authority = if session.host().muc_pg_authority_enabled() {
-                                session.host().admit_muc_pg_mutation()?;
+                        let id =
+                            local_durable_invite_id.expect("local invitation allocates a fence");
+                        // Cluster protocol v6 can infer a durable delivery
+                        // only when the recipient-authoritative stanza-id
+                        // is the exact spool key. Protocol v7 also carries
+                        // the explicit fence, so keeping both makes rolling
+                        // upgrades fail safe without weakening identity.
+                        let granted_forwarded = add_stanza_id(&forwarded, &invitee_bare, id);
+                        let (durable_invite, affiliation_changed) = {
+                            let delay = || {
+                                add_delay_from(
+                                    &granted_forwarded,
+                                    northstar_time::Utc::now(),
+                                    Some(&room_jid),
+                                )
+                            };
+                            let cluster_authority = {
                                 let Some(actor_target) = session
                                     .host()
                                     .muc_service()
@@ -751,9 +729,8 @@ pub async fn handle_muc_invitation<S: MucSession>(
                                 };
                                 let actor_user =
                                     session.user().expect("MUC message actor is authenticated");
-                                Some(ClusterMucInviteAuthority {
-                                    operation_id: local_durable_invite_id
-                                        .expect("local members-only invite allocates a fence"),
+                                ClusterMucInviteAuthority {
+                                    operation_id: id,
                                     expected_room_epoch: room.room_epoch,
                                     expected_config_version: room.config_version,
                                     actor: ClusterMucPrincipal::Local {
@@ -767,54 +744,64 @@ pub async fn handle_muc_invitation<S: MucSession>(
                                         bare_jid: invitee_bare.clone(),
                                     },
                                     reason: reason.map(str::to_owned),
-                                })
-                            } else {
-                                None
+                                }
                             };
-                            match session
+                            let grant = session.host().admit_muc_pg_mutation();
+                            let outcome = session
                                 .host()
                                 .muc_service()
-                                .admit_local_invite_command(
-                                    local_durable_invite_id
-                                        .expect("local members-only invite allocates a fence"),
-                                    room.id,
-                                    recipient.id,
-                                    &room_jid,
-                                    &delayed,
-                                    false,
-                                    temporary_muc_offline_policy(session.host()),
-                                    cluster_authority.as_ref(),
-                                )
-                                .await?
-                            {
-                                DurableMucInviteOutcome::Stored {
-                                    id,
-                                    affiliation_changed,
-                                    live_claim_id: admitted_claim_id,
-                                } => {
+                                .admit_local_mediated_invitation(LocalMediatedInvitation {
+                                    room_id: room.id,
+                                    recipient_id: recipient.id,
+                                    recipient_bare_jid: &invitee_bare,
+                                    room_jid: &room_jid,
+                                    grant_stanza: &granted_forwarded,
+                                    delay_grant_stanza: &delay,
+                                    storage_permitted: temporary_storage,
+                                    grant_available: grant.is_ok(),
+                                    policy: temporary_muc_offline_policy(session.host()),
+                                    authority: &cluster_authority,
+                                })
+                                .await?;
+                            match outcome {
+                                LocalMediatedInvitationOutcome::Open => (None, false),
+                                LocalMediatedInvitationOutcome::Blocked => continue,
+                                LocalMediatedInvitationOutcome::StorageRequired => {
+                                    return Ok(MucAction::Send(muc_stanza_error(
+                                        root,
+                                        from,
+                                        "wait",
+                                        "service-unavailable",
+                                    )));
+                                }
+                                LocalMediatedInvitationOutcome::GrantUnavailable => {
+                                    return Err(grant.expect_err("an available grant was refused"));
+                                }
+                                LocalMediatedInvitationOutcome::Durable(
+                                    DurableMucInviteOutcome::Stored {
+                                        id,
+                                        affiliation_changed,
+                                        live_claim_id: admitted_claim_id,
+                                    },
+                                ) => {
                                     live_claim_id = admitted_claim_id;
-                                    if let Some(authority) = &cluster_authority {
-                                        if let Err(error) = session
-                                            .host()
-                                            .wake_committed_muc_operation(authority.operation_id)
-                                            .await
-                                        {
-                                            tracing::warn!(?error, operation_id = %authority.operation_id,
-                                                    "committed local MUC invitation wake failed");
-                                        }
+                                    if let Err(error) =
+                                        session.host().wake_committed_muc_operation(id).await
+                                    {
+                                        tracing::warn!(?error, operation_id = %id,
+                                                "committed local MUC invitation wake failed");
                                     }
                                     (Some(id), affiliation_changed)
                                 }
-                                DurableMucInviteOutcome::Replay { id: _ } => {
-                                    if let Some(authority) = &cluster_authority {
-                                        session
-                                            .host()
-                                            .wake_committed_muc_operation(authority.operation_id)
-                                            .await?;
-                                    }
+                                LocalMediatedInvitationOutcome::Durable(
+                                    DurableMucInviteOutcome::Replay { id },
+                                ) => {
+                                    session.host().wake_committed_muc_operation(id).await?;
                                     return Ok(MucAction::None);
                                 }
-                                DurableMucInviteOutcome::QuotaExceeded => {
+                                LocalMediatedInvitationOutcome::Durable(
+                                    DurableMucInviteOutcome::QuotaExceeded,
+                                ) => {
                                     return Ok(MucAction::Send(muc_stanza_error(
                                         root,
                                         from,
@@ -822,10 +809,15 @@ pub async fn handle_muc_invitation<S: MucSession>(
                                         "resource-constraint",
                                     )));
                                 }
-                                DurableMucInviteOutcome::RecipientUnavailable => {
+                                LocalMediatedInvitationOutcome::Durable(
+                                    DurableMucInviteOutcome::RecipientUnavailable,
+                                ) => {
                                     continue;
                                 }
-                                DurableMucInviteOutcome::Outcast => {
+                                LocalMediatedInvitationOutcome::Durable(
+                                    DurableMucInviteOutcome::Outcast
+                                    | DurableMucInviteOutcome::AuthorityRejected,
+                                ) => {
                                     return Ok(MucAction::Send(muc_stanza_error(
                                         root,
                                         from,
@@ -833,15 +825,9 @@ pub async fn handle_muc_invitation<S: MucSession>(
                                         "forbidden",
                                     )));
                                 }
-                                DurableMucInviteOutcome::AuthorityRejected => {
-                                    return Ok(MucAction::Send(muc_stanza_error(
-                                        root,
-                                        from,
-                                        "auth",
-                                        "forbidden",
-                                    )));
-                                }
-                                DurableMucInviteOutcome::Stale => {
+                                LocalMediatedInvitationOutcome::Durable(
+                                    DurableMucInviteOutcome::Stale,
+                                ) => {
                                     return Ok(MucAction::Send(muc_stanza_error(
                                         root,
                                         from,
@@ -850,8 +836,11 @@ pub async fn handle_muc_invitation<S: MucSession>(
                                     )));
                                 }
                             }
+                        };
+                        let forwarded = if durable_invite.is_some() {
+                            granted_forwarded
                         } else {
-                            (None, false)
+                            forwarded
                         };
                         if affiliation_changed && !session.host().muc_pg_authority_enabled() {
                             let locally_present =
@@ -1066,7 +1055,11 @@ pub async fn handle_muc_invitation<S: MucSession>(
                                 tracing::warn!(?error, recipient_id = %recipient.id, %room_jid, "accepted offline mediated MUC invitation could not trigger push notification");
                             }
                         }
-                    } else if room.members_only {
+                    } else if session.host().muc_pg_authority_enabled() {
+                        use northstar_room_application::muc_service::{
+                            FederatedMediatedInvitation,
+                            FederatedMediatedInvitationOutcome as Outcome,
+                        };
                         let operation_id = northstar_room_application::muc_service::operation_id(
                             &serde_json::json!({
                                 "kind":"muc_invitation","stream":session.connection_id(),
@@ -1074,8 +1067,7 @@ pub async fn handle_muc_invitation<S: MucSession>(
                                 "actor":from,"invitee":invitee_bare,"reason":reason,
                             }),
                         )?;
-                        let cluster_authority = if session.host().muc_pg_authority_enabled() {
-                            session.host().admit_muc_pg_mutation()?;
+                        let cluster_authority = {
                             let Some(actor_target) = session
                                 .host()
                                 .muc_service()
@@ -1095,7 +1087,7 @@ pub async fn handle_muc_invitation<S: MucSession>(
                             };
                             let actor_user =
                                 session.user().expect("MUC message actor is authenticated");
-                            Some(ClusterMucInviteAuthority {
+                            ClusterMucInviteAuthority {
                                 operation_id,
                                 expected_room_epoch: room.room_epoch,
                                 expected_config_version: room.config_version,
@@ -1109,10 +1101,77 @@ pub async fn handle_muc_invitation<S: MucSession>(
                                     bare_jid: invitee_bare.clone(),
                                 },
                                 reason: reason.map(str::to_owned),
-                            })
-                        } else {
-                            None
+                            }
                         };
+                        let grant = session.host().admit_muc_pg_mutation();
+                        match session
+                            .host()
+                            .muc_service()
+                            .admit_federated_mediated_invitation(FederatedMediatedInvitation {
+                                room_id: room.id,
+                                invitee_bare_jid: &invitee_bare,
+                                target_domain: invitee_domain,
+                                stanza: &forwarded,
+                                bounce_to: &room_jid,
+                                grant_available: grant.is_ok(),
+                                policy: session.host().federation_outbox_policy(),
+                                authority: &cluster_authority,
+                            })
+                            .await
+                        {
+                            Ok(Outcome::Granted) => {
+                                session.host().wake_federation_outbox();
+                                session
+                                    .host()
+                                    .wake_committed_muc_operation(operation_id)
+                                    .await?;
+                            }
+                            Ok(Outcome::Open) => {
+                                if !session
+                                    .host()
+                                    .send_federated(
+                                        invitee_domain,
+                                        forwarded,
+                                        Some(room_jid.clone()),
+                                    )
+                                    .await
+                                {
+                                    return Ok(MucAction::Send(muc_stanza_error(
+                                        root,
+                                        from,
+                                        "wait",
+                                        "remote-server-timeout",
+                                    )));
+                                }
+                            }
+                            Ok(Outcome::GrantUnavailable) => grant?,
+                            Ok(Outcome::Rejected) => {
+                                return Ok(MucAction::Send(muc_stanza_error(
+                                    root,
+                                    from,
+                                    "auth",
+                                    "forbidden",
+                                )));
+                            }
+                            Ok(Outcome::Stale) => {
+                                return Ok(MucAction::Send(muc_stanza_error(
+                                    root,
+                                    from,
+                                    "wait",
+                                    "resource-constraint",
+                                )));
+                            }
+                            Err(error) => {
+                                tracing::warn!(?error, %invitee_bare, %room_jid, "federated mediated MUC invite admission failed atomically");
+                                return Ok(MucAction::Send(muc_stanza_error(
+                                    root,
+                                    from,
+                                    "wait",
+                                    "resource-constraint",
+                                )));
+                            }
+                        }
+                    } else if room.members_only {
                         match session
                             .host()
                             .muc_service()
@@ -1123,26 +1182,18 @@ pub async fn handle_muc_invitation<S: MucSession>(
                                 &forwarded,
                                 Some(&room_jid),
                                 session.host().federation_outbox_policy(),
-                                cluster_authority.as_ref(),
+                                None,
                             )
                             .await
                         {
-                            Ok(true) => {
-                                session.host().wake_federation_outbox();
-                                if cluster_authority.is_some() {
-                                    session
-                                        .host()
-                                        .wake_committed_muc_operation(operation_id)
-                                        .await?;
-                                }
-                            }
+                            Ok(true) => session.host().wake_federation_outbox(),
                             Ok(false) => {
                                 return Ok(MucAction::Send(muc_stanza_error(
                                     root,
                                     from,
                                     "auth",
                                     "forbidden",
-                                )));
+                                )))
                             }
                             Err(error) => {
                                 tracing::warn!(?error, %invitee_bare, %room_jid, "federated mediated MUC invite admission failed atomically");

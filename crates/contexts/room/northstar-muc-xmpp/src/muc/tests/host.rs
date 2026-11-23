@@ -137,11 +137,48 @@ impl MucHost for Host {
         occupants
     }
 
+    fn local_muc_occupant_exact(
+        &self,
+        identity: LocalMucOccupantIdentity<'_>,
+    ) -> Option<Occupant<Self>> {
+        if identity.room_jid != ROOM_JID || identity.nick != "Bob" {
+            return None;
+        }
+        let current = occupant("Bob", "bob@local.test/phone");
+        muc_departure_identity_matches(
+            &current,
+            identity.full_jid,
+            identity.connection_id,
+            identity.cluster_epoch,
+        )
+        .then_some(current)
+    }
+
+    async fn publish_muc_cluster_private_message(
+        &self,
+        room: &str,
+        route: &MucOccupantRoute,
+        _: &str,
+        _: &str,
+        require_moderator: bool,
+    ) -> Result<()> {
+        assert_eq!(room, ROOM_JID);
+        self.state
+            .record(Event::PrivateRoute(route.clone(), require_moderator));
+        Ok(())
+    }
+
     async fn blocked_muc_recipient_accounts(
         &self,
         occupants: &[Occupant<Self>],
         stanza_senders: &[String],
     ) -> HashSet<String> {
+        if stanza_senders == [ROOM_JID.to_owned()] {
+            assert_eq!(occupants.len(), 1);
+            assert_eq!(occupants[0].full_jid, "bob@local.test/phone");
+            self.state.record(Event::Privacy);
+            return HashSet::new();
+        }
         let sender = if self.federated {
             REMOTE_SENDER
         } else {
@@ -251,7 +288,6 @@ impl MucHost for Host {
         fn federated_muc_owner_node_id(&self) -> &str;
         fn federated_muc_redis_transport_enabled(&self) -> bool;
         fn local_muc_occupant_by_nick(&self, room_jid: &str, nick: &str) -> Option<Occupant<Self>>;
-        fn local_muc_occupant_exact(&self, identity: LocalMucOccupantIdentity<'_>) -> Option<Occupant<Self>>;
         fn mix_muc_mirror_enabled(&self) -> bool;
         fn move_local_muc_nickname_exact(&self, old: LocalMucOccupantIdentity<'_>, renamed: &Occupant<Self>, cluster_committed: bool) -> LocalMucNicknameMove;
         fn offline_delivery_limits(&self) -> OfflineDeliveryLimits;
@@ -292,7 +328,7 @@ impl MucHost for Host {
         fn federated_muc_leave_room(&self, room_jid: &str) -> Result<()>;
         fn federated_muc_publish_nickname_change(&self, room_jid: &str, old_occupant: &SerializableMucOccupant, new_occupant: &SerializableMucOccupant, id: Option<&str>) -> Result<()>;
         fn federated_muc_publish_presence(&self, room_jid: &str, occupant: &SerializableMucOccupant, unavailable: bool, created: bool, id: Option<&str>) -> Result<()>;
-        fn federated_muc_publish_private_message(&self, room_jid: &str, target_nick: &str, stanza: &str, real_sender: &str) -> Result<()>;
+        fn federated_muc_publish_private_message(&self, room_jid: &str, route: &northstar_room_core::occupancy::MucOccupantRoute, stanza: &str, real_sender: &str, require_moderator: bool) -> Result<()>;
         fn federated_muc_publish_removal_presence(&self, room_jid: &str, occupant: &SerializableMucOccupant, status: Option<u16>, actor_nick: Option<&str>, reason: Option<&str>) -> Result<()>;
         fn federated_muc_register_occupant(&self, room_jid: &str, nick: &str, json: &str) -> Result<bool>;
         fn federated_muc_rename_occupant(&self, room_jid: &str, old_nick: &str, new_nick: &str, expected_epoch: Uuid, old_json: &str, new_json: &str) -> Result<MucRename>;
@@ -301,7 +337,6 @@ impl MucHost for Host {
         fn publish_muc_cluster_nickname_change(&self, room: &str, before: &SerializableMucOccupant, after: &SerializableMucOccupant, id: Option<&str>) -> Result<()>;
         fn publish_muc_cluster_presence(&self, publication: MucPresencePublication<'_>) -> Result<()>;
         fn publish_muc_cluster_presence_with_id(&self, room: &str, occupant: &SerializableMucOccupant, unavailable: bool, created: bool, id: Option<&str>) -> Result<()>;
-        fn publish_muc_cluster_private_message(&self, room: &str, nick: &str, stanza: &str, real_sender: &str) -> Result<()>;
         fn register_cluster_muc_occupant(&self, room: &str, nick: &str, json: &str) -> Result<bool>;
         fn remove_exact_muc_soft_state(&self, occupant: &Occupant<Self>) -> Result<bool>;
         fn rename_cluster_muc_occupant_exact(&self, room: &str, old_nick: &str, new_nick: &str, expected_epoch: Uuid, old_json: &str, new_json: &str) -> Result<MucRename>;

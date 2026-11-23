@@ -38,7 +38,9 @@ use sha2::{Digest, Sha256};
 use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 
+mod addressed_delivery_repository;
 mod cluster_operations;
+mod invitation_admission_repository;
 mod join_continuity_repository;
 mod live_audience_repository;
 mod room_operations;
@@ -47,6 +49,8 @@ pub use live_audience_repository::{
 };
 
 pub use self::join_continuity_repository::*;
+pub use addressed_delivery_repository::*;
+pub use invitation_admission_repository::*;
 pub use northstar_room_core::occupancy::{LocalMucOccupantIdentity, SerializableMucOccupant};
 
 /// One ordered item in an XEP-0045 administrative IQ. Target names have
@@ -432,6 +436,8 @@ pub trait MucRepository:
     + MucLiveAudienceRepository
     + MucLifecycleRepository
     + MucReadRepository
+    + MucAddressedDeliveryRepository
+    + MucInvitationAdmissionRepository
     + Clone
     + Send
     + Sync

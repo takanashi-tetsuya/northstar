@@ -174,6 +174,8 @@ fn archive_facts(candidates: &[ArchiveCandidate<'_>]) -> Vec<(ArchiveDirection, 
 #[derive(Clone)]
 pub(crate) struct Repository(pub Arc<State>);
 
+mod direct_invitation_stub;
+
 impl PersonalMessageCommitRepository for Repository {
     type Error = anyhow::Error;
 

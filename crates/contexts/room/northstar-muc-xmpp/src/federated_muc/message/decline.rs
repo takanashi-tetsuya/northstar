@@ -1,6 +1,8 @@
 //! Route mediated invitation declines.
 
 use super::*;
+use crate::muc::message::addressed::{self, AddressedDeliveryKind};
+use northstar_room_application::muc_service::{MucAddressedOutcome, MucAddressedRequest};
 
 pub(super) async fn handle_invitation_decline<S: MucHost>(
     state: &S,
@@ -36,25 +38,26 @@ pub(super) async fn handle_invitation_decline<S: MucHost>(
                 "bad-request",
             )));
         }
-        if state
-            .muc_service()
-            .federated_room_snapshot(localpart(room_jid))
-            .await?
-            .is_none()
-        {
-            return Ok(MessageStep::Done(federated_error(
-                &request.stanza,
-                from,
-                "cancel",
-                "item-not-found",
-            )));
-        }
         let Ok(target) = northstar_xmpp_types::jid::CanonicalJid::parse(&target_raw) else {
             return Ok(MessageStep::Done(federated_error(
                 &request.stanza,
                 from,
                 "modify",
                 "jid-malformed",
+            )));
+        };
+        let occupant_target = target.bare() == *room_jid && target.resourcepart().is_some();
+        let nick = target.resourcepart().filter(|_| occupant_target);
+        let MucAddressedOutcome::Decline { target: route } = state
+            .muc_service()
+            .muc_addressed_authority(localpart(room_jid), MucAddressedRequest::Decline { nick })
+            .await?
+        else {
+            return Ok(MessageStep::Done(federated_error(
+                &request.stanza,
+                from,
+                "cancel",
+                "item-not-found",
             )));
         };
         let Some(target_localpart) = target.localpart() else {
@@ -87,6 +90,21 @@ pub(super) async fn handle_invitation_decline<S: MucHost>(
             )
             .validated_fragment(&request.hints)?
             .finish();
+        if occupant_target {
+            if let Some(route) = route {
+                addressed::send_addressed(
+                    state,
+                    room_jid,
+                    &route,
+                    forwarded,
+                    actor_full_jid,
+                    AddressedDeliveryKind::Decline,
+                    true,
+                )
+                .await?;
+            }
+            return Ok(MessageStep::Done(None));
+        }
         if target.domainpart() == state.local_domain() {
             let Some(recipient) = state
                 .muc_service()

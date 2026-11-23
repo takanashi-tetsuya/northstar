@@ -14,9 +14,8 @@ use northstar_message_application::messaging::{
     admit_offline_then_push, ArchiveCandidate, ArchiveDirection, ArchiveWrite, DirectMessageRouter,
     DirectRouteDelivery, DirectRouteOutcome, DirectRouteRejection, DirectRouteRequest,
     DirectRouteTarget, DurableAdmissionOutcome, FederationDelivery, FullJidFallbackPort,
-    IdentityAuthority, LocalDelivery, LocalMucInviteAdmission, LocalRecipientDecision,
-    MessageIdentity, MessagePostCommit, OfflineAdmissionOutcome, OutboundPolicyDecision,
-    PersonalMessageDestination, RemoteMucInviteAdmission, RemoteMucInviteAdmissionOutcome,
+    IdentityAuthority, LocalDelivery, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
+    OfflineAdmissionOutcome, OutboundPolicyDecision, PersonalMessageDestination,
     ValidatedPersonalMessage,
 };
 use northstar_message_application::retractions::{DeliveryProjection, RetractionOutcome};
@@ -28,12 +27,10 @@ use northstar_message_core::direct_delivery_mode;
 use northstar_message_core::retraction::retraction_target;
 use northstar_message_core::validation::strip_untrusted_direct_delays;
 use northstar_message_core::{
-    bare_message_route, durable_direct_delivery_allowed, full_no_match_route,
-    missing_user_message_should_error, undelivered_disposition, BareMessageRoute,
-    DirectDeliveryMode, DirectPostCommitMode, DirectSpoolEligibility, FullNoMatchRoute,
-    UndeliveredDisposition,
+    bare_message_route, durable_direct_delivery_allowed, missing_user_message_should_error,
+    undelivered_disposition, BareMessageRoute, DirectDeliveryMode, DirectPostCommitMode,
+    DirectSpoolEligibility, UndeliveredDisposition,
 };
-use northstar_room_core::{ClusterMucAffiliationSubject, DurableMucInviteOutcome};
 use northstar_xep_0280::should_copy as should_carbon;
 use northstar_xep_0359::{add_stanza_id, strip_stanza_ids_by_domain};
 use northstar_xml_builder::message_policy::{
@@ -178,14 +175,8 @@ async fn finalize_message_admission<S: MessageSession>(
     .await;
 }
 
-async fn direct_invite_admission<S: MessageSession>(
-    session: &S,
-    root: Node<'_, '_>,
-    inviter_id: uuid::Uuid,
-) -> Result<DirectInviteAdmission> {
-    let state = session.host();
-    let Some(room_jid) = root
-        .children()
+fn direct_invite_admission<S: MessageSession>(session: &S, root: Node<'_, '_>) -> Option<String> {
+    root.children()
         .find(|node| {
             node.is_element()
                 && node.tag_name().name() == "x"
@@ -194,37 +185,7 @@ async fn direct_invite_admission<S: MessageSession>(
         .and_then(|node| node.attribute("jid"))
         .and_then(|jid| northstar_xmpp_types::jid::CanonicalJid::parse_bare(jid).ok())
         .filter(|jid| jid.domainpart() == session.muc_domain() && jid.localpart().is_some())
-    else {
-        return Ok(DirectInviteAdmission::None);
-    };
-    let Some(room) = state
-        .direct_invite_room(
-            room_jid
-                .localpart()
-                .expect("validated MUC room has a localpart"),
-        )
-        .await?
-    else {
-        return Ok(DirectInviteAdmission::None);
-    };
-    if !room.members_only {
-        return Ok(DirectInviteAdmission::None);
-    }
-    let affiliation = state.direct_invite_affiliation(room.id, inviter_id).await?;
-    Ok(
-        if affiliation
-            .as_deref()
-            .is_some_and(|value| matches!(value, "owner" | "admin" | "member"))
-        {
-            DirectInviteAdmission::MembersOnly {
-                room_id: room.id,
-                room_epoch: room.room_epoch,
-                config_version: room.config_version,
-            }
-        } else {
-            DirectInviteAdmission::Forbidden
-        },
-    )
+        .and_then(|jid| jid.localpart().map(str::to_owned))
 }
 
 fn direct_origin_id(root: Node<'_, '_>) -> Option<String> {
@@ -236,17 +197,6 @@ fn direct_origin_id(root: Node<'_, '_>) -> Option<String> {
         })
         .and_then(|node| node.attribute("id"))
         .map(str::to_owned)
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DirectInviteAdmission {
-    None,
-    MembersOnly {
-        room_id: uuid::Uuid,
-        room_epoch: uuid::Uuid,
-        config_version: i64,
-    },
-    Forbidden,
 }
 
 /// RFC 6120 forbids generating a stanza error in response to a stanza that

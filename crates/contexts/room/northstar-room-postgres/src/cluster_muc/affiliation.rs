@@ -2,6 +2,160 @@
 
 use super::*;
 
+async fn invite_actor_role(
+    tx: &mut Transaction<'_, Postgres>,
+    target: &ClusterMucOccupancyTarget,
+    actor: &ClusterMucPrincipal,
+    actor_full_jid: &str,
+) -> Result<Option<String>> {
+    let row = sqlx::query(
+        "SELECT * FROM cluster_muc_occupancies
+          WHERE room_id=$1 AND room_epoch=$2 AND occupant_incarnation=$3
+            AND occupancy_epoch=$4 AND full_jid=$5 AND nick=$6
+            AND connection_uuid=$7 AND connection_epoch=$8
+            AND state='active' AND lease_until>clock_timestamp() FOR UPDATE",
+    )
+    .bind(target.room_id)
+    .bind(target.room_epoch)
+    .bind(target.occupant_incarnation)
+    .bind(target.occupancy_epoch)
+    .bind(&target.full_jid)
+    .bind(&target.nick)
+    .bind(target.connection_uuid)
+    .bind(target.connection_epoch)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(row
+        .map(|row| occupancy_from_row(&row))
+        .filter(|occupancy| {
+            exact_target_matches_row(target, occupancy)
+                && occupancy.full_jid == actor_full_jid
+                && principal_matches_occupancy(actor, occupancy)
+        })
+        .map(|occupancy| occupancy.role))
+}
+
+pub(crate) async fn locked_local_mediated_invite(
+    tx: &mut Transaction<'_, Postgres>,
+    room_id: Uuid,
+    room_jid: &str,
+    recipient_id: Uuid,
+    recipient_jid: &str,
+    authority: &ClusterMucInviteAuthority,
+) -> Result<
+    std::result::Result<
+        Option<i64>,
+        northstar_room_application::muc_service::LocalMediatedInvitationOutcome,
+    >,
+> {
+    use northstar_room_application::muc_service::{
+        DurableMucInviteOutcome, LocalMediatedInvitationOutcome,
+    };
+    let Some(room) = lock_room(tx, room_id).await? else {
+        return Ok(Err(LocalMediatedInvitationOutcome::Durable(
+            DurableMucInviteOutcome::Stale,
+        )));
+    };
+    if room.destroyed || room.room_epoch != authority.expected_room_epoch {
+        return Ok(Err(LocalMediatedInvitationOutcome::Durable(
+            DurableMucInviteOutcome::Stale,
+        )));
+    }
+    let actor_full_jid = northstar_xmpp_types::jid::canonicalize(&authority.actor_full_jid)?;
+    let mut block_owners = vec![recipient_id];
+    if let ClusterMucPrincipal::Local { user_id, .. } = &authority.actor {
+        block_owners.push(*user_id);
+    }
+    let blocks: Vec<(Uuid, String)> =
+        sqlx::query_as("SELECT owner_id,blocked_jid FROM blocked_jids WHERE owner_id=ANY($1)")
+            .bind(&block_owners)
+            .fetch_all(&mut **tx)
+            .await?;
+    let actor_bare = northstar_xmpp_types::jid::canonical_bare_key(&actor_full_jid)?;
+    let blocked = blocks.iter().any(|(owner, pattern)| {
+        *owner == recipient_id
+            && (northstar_xmpp_types::jid::jid_scope_matches(pattern, room_jid)
+                || (actor_bare != recipient_jid
+                    && northstar_xmpp_types::jid::jid_scope_matches(pattern, &actor_full_jid)))
+    });
+    let local_actor = matches!(&authority.actor, ClusterMucPrincipal::Local { .. });
+    if local_actor && blocked {
+        return Ok(Err(LocalMediatedInvitationOutcome::Blocked));
+    }
+    if !mediated_inviter_allowed(tx, &room, room_id, authority, &actor_full_jid).await? {
+        return Ok(Err(LocalMediatedInvitationOutcome::Durable(
+            DurableMucInviteOutcome::AuthorityRejected,
+        )));
+    }
+    if blocked {
+        return Ok(Err(LocalMediatedInvitationOutcome::Blocked));
+    }
+    Ok(Ok(room.members_only.then_some(room.config_version)))
+}
+
+pub(crate) enum LockedMediatedInviteMode {
+    Open,
+    Grant(i64),
+    Rejected,
+    Stale,
+}
+
+pub(crate) async fn locked_direct_invitation_revision(
+    tx: &mut Transaction<'_, Postgres>,
+    room_id: Uuid,
+) -> Result<Option<(Uuid, i64, bool)>> {
+    Ok(lock_room(tx, room_id)
+        .await?
+        .filter(|room| !room.destroyed)
+        .map(|room| (room.room_epoch, room.config_version, room.members_only)))
+}
+
+pub(crate) async fn locked_federated_mediated_invite(
+    tx: &mut Transaction<'_, Postgres>,
+    room_id: Uuid,
+    authority: &ClusterMucInviteAuthority,
+) -> Result<LockedMediatedInviteMode> {
+    let Some(room) = lock_room(tx, room_id).await? else {
+        return Ok(LockedMediatedInviteMode::Stale);
+    };
+    if room.destroyed || room.room_epoch != authority.expected_room_epoch {
+        return Ok(LockedMediatedInviteMode::Stale);
+    }
+    let actor_full_jid = northstar_xmpp_types::jid::canonicalize(&authority.actor_full_jid)?;
+    if !mediated_inviter_allowed(tx, &room, room_id, authority, &actor_full_jid).await? {
+        return Ok(LockedMediatedInviteMode::Rejected);
+    }
+    Ok(if room.members_only {
+        LockedMediatedInviteMode::Grant(room.config_version)
+    } else {
+        LockedMediatedInviteMode::Open
+    })
+}
+
+async fn mediated_inviter_allowed(
+    tx: &mut Transaction<'_, Postgres>,
+    room: &RoomAuthority,
+    room_id: Uuid,
+    authority: &ClusterMucInviteAuthority,
+    actor_full_jid: &str,
+) -> Result<bool> {
+    let Some(target) = authority.actor_target.as_ref() else {
+        return Ok(false);
+    };
+    if target.room_id != room_id || target.room_epoch != room.room_epoch {
+        return Ok(false);
+    }
+    let Some(role) = invite_actor_role(tx, target, &authority.actor, actor_full_jid).await? else {
+        return Ok(false);
+    };
+    let affiliation = affiliation_in_tx(tx, room_id, &authority.actor).await?;
+    let affiliation = affiliation.as_deref().unwrap_or("none");
+    let local_actor = matches!(&authority.actor, ClusterMucPrincipal::Local { .. });
+    Ok(affiliation != "outcast"
+        && (!local_actor || !room.members_only || affiliation != "none")
+        && (matches!(affiliation, "owner" | "admin") || (room.allow_invites && role != "visitor")))
+}
+
 async fn subject_affiliation_for_update(
     tx: &mut Transaction<'_, Postgres>,
     room_id: Uuid,
@@ -209,34 +363,11 @@ async fn mutate_cluster_muc_affiliation_in_tx(
             if actor_target.room_id != room_id || actor_target.room_epoch != room.room_epoch {
                 return Ok(ClusterMucAffiliationMutationOutcome::Stale);
             }
-            let row = sqlx::query(
-                "SELECT * FROM cluster_muc_occupancies
-                  WHERE room_id=$1 AND room_epoch=$2 AND occupant_incarnation=$3
-                    AND occupancy_epoch=$4 AND full_jid=$5 AND nick=$6
-                    AND connection_uuid=$7 AND connection_epoch=$8
-                    AND state='active' AND lease_until>clock_timestamp() FOR UPDATE",
-            )
-            .bind(actor_target.room_id)
-            .bind(actor_target.room_epoch)
-            .bind(actor_target.occupant_incarnation)
-            .bind(actor_target.occupancy_epoch)
-            .bind(&actor_target.full_jid)
-            .bind(&actor_target.nick)
-            .bind(actor_target.connection_uuid)
-            .bind(actor_target.connection_epoch)
-            .fetch_optional(&mut **tx)
-            .await?;
-            let Some(row) = row else {
+            let Some(role) = invite_actor_role(tx, actor_target, actor, &actor_full_jid).await?
+            else {
                 return Ok(ClusterMucAffiliationMutationOutcome::Unauthorized);
             };
-            let snapshot = occupancy_from_row(&row);
-            if !exact_target_matches_row(actor_target, &snapshot)
-                || snapshot.full_jid != actor_full_jid
-                || !principal_matches_occupancy(actor, &snapshot)
-            {
-                return Ok(ClusterMucAffiliationMutationOutcome::Unauthorized);
-            }
-            actor_role = Some(snapshot.role);
+            actor_role = Some(role);
         } else {
             // Only a locally authenticated account may authorize a direct
             // invitation without an in-room occupancy. Remote ownership must

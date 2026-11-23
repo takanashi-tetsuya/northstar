@@ -11,6 +11,8 @@ use crate::messaging::{
     DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
 };
 use crate::test_queue::TestItem;
+
+mod direct_invitation_stub;
 use northstar_abuse_policy::admission_execution::{
     AdmissionCommitObserver, CommitFact, FinalizeSuccess, TransactionScope,
 };

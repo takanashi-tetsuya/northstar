@@ -18,8 +18,8 @@ use northstar_room_application::mix_service::{MixRepository, MixService};
 use northstar_room_application::muc_service::{MucRepository, MucService};
 use northstar_room_core::occupancy::{
     FederatedMucAccountRoute, LocalMucJoinPublication, LocalMucNicknameMove,
-    LocalMucOccupantIdentity, MucJoinCacheAttempt, MucOccupant, MucPresencePublication, MucRename,
-    MucRoleChange, SerializableMucOccupant,
+    LocalMucOccupantIdentity, MucJoinCacheAttempt, MucOccupant, MucOccupantRoute,
+    MucPresencePublication, MucRename, MucRoleChange, SerializableMucOccupant,
 };
 use northstar_session_core::JoinedMucMembership;
 use northstar_stream::local_routes::session::OnlineSession;
@@ -258,9 +258,10 @@ pub trait MucHost: Send + Sync + 'static {
     fn federated_muc_publish_private_message(
         &self,
         room_jid: &str,
-        target_nick: &str,
+        route: &MucOccupantRoute,
         stanza: &str,
         real_sender: &str,
+        require_moderator: bool,
     ) -> impl Future<Output = Result<()>> + Send;
     fn federated_muc_publish_removal_presence(
         &self,
@@ -339,9 +340,10 @@ pub trait MucHost: Send + Sync + 'static {
     fn publish_muc_cluster_private_message(
         &self,
         room: &str,
-        nick: &str,
+        route: &MucOccupantRoute,
         stanza: &str,
         real_sender: &str,
+        require_moderator: bool,
     ) -> impl Future<Output = Result<()>> + Send;
     fn publish_muc_cluster_stanza(
         &self,

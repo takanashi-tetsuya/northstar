@@ -40,6 +40,7 @@ enum Event {
     Cluster(String, String, Option<String>),
     Recipients,
     Privacy,
+    PrivateRoute(northstar_room_core::occupancy::MucOccupantRoute, bool),
     Deliver(String, String),
     Subject(String),
     ClusterSubject(Uuid, String),
@@ -1022,4 +1023,6 @@ fn message_stages_preserve_authority_through_fanout() {
     );
 }
 
+#[cfg(test)]
+mod addressed_delivery;
 mod read_snapshots;

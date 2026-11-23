@@ -4,6 +4,9 @@ use super::*;
 use crate::{
     listener_dispatch::ClusterListenerDispatch, muc_delivery_endpoints::ClusterMucDeliveryEndpoints,
 };
+use northstar_room_application::muc_delivery::MucDeliveryRepository;
+
+mod private_route;
 
 pub(super) fn wake_muc_operation<A: ClusterAdapters>(
     dispatch: &ClusterListenerDispatch<A>,
@@ -304,24 +307,51 @@ pub(super) async fn deliver_muc_private_stanza<A: ClusterAdapters>(
     muc_senders: &[String],
     turn: &mut ListenerTurn,
 ) {
-    let delivered = &mut turn.delivered;
-    if let Some(nick) = json["target_nick"].as_str() {
-        if let Some(session) = muc_endpoints.cached_recipient(target, nick) {
-            let delivery = set_to(stanza, &session.full_jid);
-            let blocked = muc_delivery
-                .blocked_muc_recipient_accounts(std::slice::from_ref(&session), muc_senders)
-                .await;
-            if !northstar_xmpp_types::jid::canonical_bare_key(&session.full_jid)
-                .is_ok_and(|owner| blocked.contains(&owner))
-            {
-                *delivered += usize::from(
-                    muc_delivery
-                        .deliver_to_muc_occupant_unchecked(&session, delivery)
-                        .await,
-                );
-            }
+    let Some(address) = private_route::decode(json) else {
+        return;
+    };
+    let Some(session) = address.recipient(muc_endpoints, target) else {
+        return;
+    };
+    let blocked = muc_delivery
+        .blocked_muc_recipient_accounts(std::slice::from_ref(&session), muc_senders)
+        .await;
+    if northstar_xmpp_types::jid::canonical_bare_key(&session.full_jid)
+        .is_ok_and(|owner| blocked.contains(&owner))
+    {
+        return;
+    }
+    if let Some(route) = address.required_moderator() {
+        let Ok(room) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(target) else {
+            return;
+        };
+        let Some(localpart) = room.localpart() else {
+            return;
+        };
+        if !muc_delivery
+            .repository
+            .current_muc_moderators(localpart, std::slice::from_ref(route))
+            .await
+            .is_ok_and(|moderators| address.role_allows(&moderators))
+        {
+            return;
         }
     }
+    let session = match address {
+        private_route::PrivateRoute::Legacy(_) => session,
+        private_route::PrivateRoute::Exact { .. } => {
+            let Some(current) = address.recipient(muc_endpoints, target) else {
+                return;
+            };
+            current
+        }
+    };
+    let delivery = set_to(stanza, &session.full_jid);
+    turn.delivered += usize::from(
+        muc_delivery
+            .deliver_to_muc_occupant_unchecked(&session, delivery)
+            .await,
+    );
 }
 
 pub(super) async fn broadcast_muc_stanza<A: ClusterAdapters>(

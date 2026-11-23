@@ -63,6 +63,11 @@ async fn federated_muc_message_owned(
     {
         return Ok(value);
     }
+    if let MessageStep::Done(value) =
+        validate::dispatch_addressed(state, authenticated_domain, &request, &address).await?
+    {
+        return Ok(value);
+    }
     let validate::OccupantLookup {
         occupancy,
         voice_form,
@@ -80,11 +85,6 @@ async fn federated_muc_message_owned(
         voice_form,
     )
     .await?
-    {
-        return Ok(value);
-    }
-    if let MessageStep::Done(value) =
-        private::handle_private_message(state, &request, &address, &occupancy).await?
     {
         return Ok(value);
     }

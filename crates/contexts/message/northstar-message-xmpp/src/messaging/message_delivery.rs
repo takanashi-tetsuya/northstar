@@ -2,6 +2,13 @@
 
 use super::archive_admission::archive_candidate;
 use super::*;
+use northstar_message_application::messaging::invitation_admission::{
+    DirectInvitation, DirectInvitationOutcome, DirectInvitationRefusal,
+};
+
+use self::invitation_admission::GrantDelivery;
+
+mod invitation_admission;
 
 pub async fn message<S: MessageSession>(
     session: &S,
@@ -175,28 +182,75 @@ pub async fn message<S: MessageSession>(
         }
     }
     session.enter_frame_stage(MessageFrameStage::Policy);
-    let direct_invite_admission = direct_invite_admission(session, root, user_id).await?;
-    if direct_invite_admission == DirectInviteAdmission::Forbidden {
-        return Ok(message_error(root, "auth", "forbidden"));
+    let invitation_room = direct_invite_admission(session, root);
+    let active_privacy = session.active_privacy();
+    let target_domain = target_jid.domainpart();
+    let local_invitee = target_domain == state.local_domain()
+        || target_domain == session.upload_domain()
+        || target_domain == session.pubsub_domain();
+    let invitation = invitation_room.as_deref().map(|room| DirectInvitation {
+        room,
+        actor_id: user_id,
+        actor_jid: from,
+        invitee_jid: to,
+        local_recipient_name: target_jid.localpart().filter(|_| local_invitee),
+        active_privacy: active_privacy.as_deref(),
+    });
+    let invitation_outcome = match &invitation {
+        Some(invitation) => Some(
+            state
+                .message_service()
+                .admit_direct_invitation(invitation, None)
+                .await?,
+        ),
+        None => None,
+    };
+    if matches!(
+        invitation_outcome,
+        Some(DirectInvitationOutcome::Refused(
+            DirectInvitationRefusal::Forbidden
+        ))
+    ) {
+        return Ok(invitation_admission::refused(
+            root,
+            DirectInvitationRefusal::Forbidden,
+        ));
     }
     if session.push_disable_message(root, from, to).await? {
         return Ok(S::Action::none());
     }
-    let active_privacy = session.active_privacy();
     // XEP-0191 is account scoped and applies to every outbound stanza,
     // including local service addresses such as MUC and MIX. The service
     // always evaluates that non-overridable rule before XEP-0016.
-    match state
-        .message_service()
-        .authorize_outbound_message(user_id, bare_jid(from), active_privacy.as_deref(), to)
-        .await?
-    {
-        OutboundPolicyDecision::Allowed => {}
-        OutboundPolicyDecision::Blocked => return Ok(message_blocked_error(root)),
-        OutboundPolicyDecision::PrivacyDenied => {
-            return Ok(message_error(root, "cancel", "service-unavailable"));
+    let (invitation_recipient, grant_revision) = if let Some(admission) = invitation_outcome {
+        match admission {
+            DirectInvitationOutcome::Open { recipient } => (recipient, None),
+            DirectInvitationOutcome::GrantRequired {
+                recipient,
+                room_epoch,
+                config_version,
+            } => (recipient, Some((room_epoch, config_version))),
+            DirectInvitationOutcome::Refused(refusal) => {
+                return Ok(invitation_admission::refused(root, refusal));
+            }
+            DirectInvitationOutcome::Granted { .. } | DirectInvitationOutcome::Replay => {
+                unreachable!("an invitation without a grant projection cannot grant access")
+            }
         }
-    }
+    } else {
+        match state
+            .message_service()
+            .authorize_outbound_message(user_id, bare_jid(from), active_privacy.as_deref(), to)
+            .await?
+        {
+            OutboundPolicyDecision::Allowed => {}
+            OutboundPolicyDecision::Blocked => return Ok(message_blocked_error(root)),
+            OutboundPolicyDecision::PrivacyDenied => {
+                return Ok(message_error(root, "cancel", "service-unavailable"));
+            }
+        }
+        (None, None)
+    };
     session.enter_frame_stage(MessageFrameStage::Handler);
     if let Some(action) = session.try_mix_message(root, &routed_raw).await? {
         if action.is_none() {
@@ -236,7 +290,6 @@ pub async fn message<S: MessageSession>(
     }
 
     session.enter_frame_stage(MessageFrameStage::Policy);
-    let target_domain = target_jid.domainpart();
     let remote_domain = (target_domain != state.local_domain()
         && target_domain != session.muc_domain()
         && target_domain != session.upload_domain()
@@ -253,10 +306,7 @@ pub async fn message<S: MessageSession>(
         if !personal_retraction
             && direct_delivery_mode(root) == DirectDeliveryMode::VolatileExplicitNoStore
         {
-            if matches!(
-                direct_invite_admission,
-                DirectInviteAdmission::MembersOnly { .. }
-            ) {
+            if grant_revision.is_some() {
                 // Granting affiliation for a members-only invitation is
                 // a durable authorization mutation. Never send an invite
                 // which the recipient could not subsequently exercise.
@@ -312,25 +362,11 @@ pub async fn message<S: MessageSession>(
                     .message_service()
                     .archive_content_eligible(mam_storage_eligible(root), encrypted),
         );
-        if let DirectInviteAdmission::MembersOnly {
-            room_id,
-            room_epoch,
-            config_version,
-        } = direct_invite_admission
+        let invitation_sent = if let (Some(invitation), Some(revision)) =
+            (&invitation, grant_revision)
         {
-            let cluster_authority = state.direct_muc_invite_cluster_authority(
-                stable_id,
-                room_epoch,
-                config_version,
-                user_id,
-                from,
-                ClusterMucAffiliationSubject::Federated {
-                    bare_jid: target_jid.bare(),
-                },
-            )?;
             let actor_scope = bare_jid(from);
             let target_scope = bare_jid(to);
-            let invitee_bare_jid = target_jid.bare();
             let origin_id = direct_origin_id(root);
             let identity = origin_id.as_deref().map(|id| MessageIdentity {
                 authority: IdentityAuthority::LocalOrigin,
@@ -340,35 +376,36 @@ pub async fn message<S: MessageSession>(
                 value: id,
                 payload: &rewritten,
             });
-            let admission = RemoteMucInviteAdmission {
-                local_actor_id: user_id,
+            let admission = ValidatedPersonalMessage {
+                local_actor_id: Some(user_id),
                 identity,
                 archives: candidate.as_slice(),
-                room_id,
-                invitee_bare_jid: &invitee_bare_jid,
-                target_domain: domain,
-                stanza: &routed,
-                bounce_to: Some(from),
-                outbox_policy: state.federation_outbox_policy().into(),
-                cluster_authority: cluster_authority.as_ref(),
+                destination: PersonalMessageDestination::Federation(FederationDelivery {
+                    local_actor_id: user_id,
+                    target_domain: domain,
+                    stanza: &routed,
+                    bounce_to: Some(from),
+                    limits: state.federation_outbox_policy(),
+                }),
             };
+            let grant = invitation_admission::prepare_grant(
+                state, invitation, revision, stable_id, &admission,
+            )?;
             session.enter_frame_stage(MessageFrameStage::Admission);
-            match state
-                .message_service()
-                .admit_remote_muc_invite(&admission)
-                .await
-            {
-                Ok(RemoteMucInviteAdmissionOutcome::Stored) => {
+            match grant.admit(state).await {
+                Ok(Ok(GrantDelivery::Open)) => false,
+                Ok(Ok(GrantDelivery::Granted { wake_operation, .. })) => {
                     state.wake_federation_outbox();
-                    if cluster_authority.is_some() {
+                    if wake_operation {
                         if let Err(error) = state.wake_committed_direct_muc_invite(stable_id).await
                         {
                             state.personal_message_telemetry().post_accept_failed();
                             tracing::warn!(?error, %stable_id, "accepted federated direct MUC invite cluster wake failed");
                         }
                     }
+                    true
                 }
-                Ok(RemoteMucInviteAdmissionOutcome::Replay) => {
+                Ok(Ok(GrantDelivery::Replay)) => {
                     finalize_message_admission(
                         session,
                         &mut message_admission_lease,
@@ -377,28 +414,18 @@ pub async fn message<S: MessageSession>(
                     .await;
                     return Ok(S::Action::none());
                 }
-                Ok(RemoteMucInviteAdmissionOutcome::AccountUnavailable) => {
-                    // Treat a sender account disabled/revoked during the
-                    // admission transaction like the other durable send
-                    // paths.  Do not expose whether the account, room or
-                    // federation authority changed concurrently.
-                    return Ok(message_error(root, "cancel", "service-unavailable"));
-                }
-                Ok(RemoteMucInviteAdmissionOutcome::Rejected) => {
-                    return Ok(message_error(root, "auth", "forbidden"));
-                }
-                Ok(RemoteMucInviteAdmissionOutcome::Stale) => {
-                    return Ok(message_error(root, "cancel", "item-not-found"));
-                }
-                Ok(RemoteMucInviteAdmissionOutcome::Conflict) => {
-                    return Ok(message_error(root, "cancel", "conflict"));
+                Ok(Err(refusal)) => {
+                    return Ok(invitation_admission::refused(root, refusal));
                 }
                 Err(error) => {
                     tracing::warn!(?error, invitee = %target_jid.bare(), "federated direct MUC invite admission failed atomically");
                     return Ok(message_error(root, "wait", "resource-constraint"));
                 }
             }
-        } else if personal_retraction {
+        } else {
+            false
+        };
+        if personal_retraction {
             session.enter_frame_stage(MessageFrameStage::Admission);
             match apply_outbound_personal_retraction(
                 state,
@@ -441,7 +468,7 @@ pub async fn message<S: MessageSession>(
                     return Ok(message_error(root, "wait", "remote-server-timeout"));
                 }
             }
-        } else {
+        } else if !invitation_sent {
             let actor_scope = bare_jid(from);
             let target_scope = bare_jid(to);
             let origin_id = direct_origin_id(root);
@@ -512,11 +539,18 @@ pub async fn message<S: MessageSession>(
     let Some(recipient_local) = target_jid.localpart() else {
         return Ok(message_error(root, "cancel", "service-unavailable"));
     };
-    let recipient = match state
-        .message_service()
-        .resolve_local_recipient(recipient_local, state.local_domain(), from)
-        .await?
-    {
+    let recipient_decision = if invitation.is_some() {
+        invitation_recipient.map_or(
+            LocalRecipientDecision::Missing,
+            LocalRecipientDecision::Deliver,
+        )
+    } else {
+        state
+            .message_service()
+            .resolve_local_recipient(recipient_local, state.local_domain(), from)
+            .await?
+    };
+    let recipient = match recipient_decision {
         LocalRecipientDecision::Deliver(recipient) => recipient,
         LocalRecipientDecision::Blocked => {
             return Ok(message_error(root, "cancel", "service-unavailable"));
@@ -529,16 +563,6 @@ pub async fn message<S: MessageSession>(
                 .await;
             return Ok(S::Action::none());
         }
-    };
-    // A direct MUC invitation can grant access to a members-only room, but
-    // that authorization is a side effect of an accepted message. Merely
-    // parsing the stanza must never mutate affiliation state: full-JID
-    // routing rejection, offline quota failure, no-store, and blocking all
-    // remain side-effect free.
-    let direct_invite_room = match direct_invite_admission {
-        DirectInviteAdmission::MembersOnly { room_id, .. } => Some(room_id),
-        DirectInviteAdmission::None => None,
-        DirectInviteAdmission::Forbidden => unreachable!("rejected before routing"),
     };
     let message_type = root.attribute("type").unwrap_or("normal");
     let bare_target = target_jid.resourcepart().is_none();
@@ -684,7 +708,94 @@ pub async fn message<S: MessageSession>(
     let mut durable_c2s_delivery = None;
     let mut prepared_live = None;
     let mut live_claim_id = None;
-    let direct_delivery_candidate = direct_invite_room.is_none()
+    let durable_direct_invite = if let (Some(invitation), Some(revision)) =
+        (&invitation, grant_revision)
+    {
+        if !matches!(message_type, "normal" | "chat") {
+            return Ok(message_error(root, "modify", "bad-request"));
+        }
+        if !persistence_allowed {
+            return Ok(message_error(root, "wait", "service-unavailable"));
+        }
+        if !exact_full_target_can_route {
+            return Ok(message_error(root, "cancel", "service-unavailable"));
+        }
+        let delayed = add_delay_from(
+            recipient_delivery,
+            northstar_time::Utc::now(),
+            Some(bare_jid(from)),
+        );
+        let identity = origin_id.map(|identity_value| {
+            let actor_scope = bare_jid(from);
+            MessageIdentity {
+                authority: IdentityAuthority::LocalOrigin,
+                actor_scope_raw: actor_scope,
+                actor_scope,
+                target_scope: bare_jid(to),
+                value: identity_value,
+                payload: rewritten,
+            }
+        });
+        let grant = ValidatedPersonalMessage {
+            local_actor_id: Some(user_id),
+            identity,
+            archives: &candidates,
+            destination: PersonalMessageDestination::Local(LocalDelivery {
+                delivery_id: recipient_stable_id,
+                recipient_id: recipient.id,
+                recipient_bare_jid: &recipient_by,
+                sender_jid: from,
+                stanza: &delayed,
+                encrypted,
+            }),
+        };
+        let grant = invitation_admission::prepare_grant(
+            state,
+            invitation,
+            revision,
+            recipient_stable_id,
+            &grant,
+        )?;
+        session.enter_frame_stage(MessageFrameStage::Admission);
+        match grant.admit(state).await? {
+            Ok(GrantDelivery::Open) => None,
+            Ok(GrantDelivery::Granted {
+                live_claim_id: admitted_claim_id,
+                wake_operation,
+            }) => {
+                live_claim_id = admitted_claim_id;
+                if wake_operation {
+                    if let Err(error) = state
+                        .wake_committed_direct_muc_invite(recipient_stable_id)
+                        .await
+                    {
+                        state.personal_message_telemetry().post_accept_failed();
+                        tracing::warn!(?error, %recipient_stable_id, "accepted local direct MUC invite cluster wake failed");
+                    }
+                }
+                finalize_message_admission(
+                    session,
+                    &mut message_admission_lease,
+                    "local-muc-invite",
+                )
+                .await;
+                Some(recipient_stable_id)
+            }
+            Ok(GrantDelivery::Replay) => {
+                finalize_message_admission(
+                    session,
+                    &mut message_admission_lease,
+                    "local-muc-invite-replay",
+                )
+                .await;
+                return Ok(S::Action::none());
+            }
+            Err(refusal) => return Ok(invitation_admission::refused(root, refusal)),
+        }
+    } else {
+        None
+    };
+    let direct_delivery_candidate = durable_direct_invite.is_none()
         && matches!(message_type, "normal" | "chat")
         && exact_full_target_can_route
         && !personal_retraction;
@@ -873,7 +984,7 @@ pub async fn message<S: MessageSession>(
         // Retractions mutate durable history and therefore always use the
         // recoverable C2S projection. They must never share a stanza with
         // an invitation or enter a volatile message-type route.
-        if direct_invite_room.is_some() || !matches!(message_type, "normal" | "chat") {
+        if !matches!(message_type, "normal" | "chat") {
             return Ok(message_error(root, "modify", "bad-request"));
         }
         if !exact_full_target_can_route {
@@ -955,137 +1066,6 @@ pub async fn message<S: MessageSession>(
             }
         }
     }
-    if direct_invite_room.is_some() {
-        if !matches!(message_type, "normal" | "chat") {
-            return Ok(message_error(root, "modify", "bad-request"));
-        }
-        // A members-only direct invitation needs a durable pending row to
-        // make affiliation and delivery one recoverable state machine.
-        // Honor an explicit no-store hint by declining instead of
-        // silently persisting that row or reintroducing the crash gap.
-        if !persistence_allowed {
-            return Ok(message_error(root, "wait", "service-unavailable"));
-        }
-        // RFC 6121 does not permit a normal message to a vanished full
-        // resource to fall back to the bare account. Perform that
-        // rejection before the durable admission transaction.
-        if !bare_target
-            && full_no_match_route(message_type) == FullNoMatchRoute::Reject
-            && targets.is_empty()
-        {
-            let remote_exact = state.personal_message_remote_resource_exists(to).await;
-            if !remote_exact {
-                return Ok(message_error(root, "cancel", "service-unavailable"));
-            }
-        }
-    }
-    // All fallible policy reads and deterministic routing rejections are
-    // complete. From this point a direct invite is durably recoverable
-    // before any in-memory delivery queue can observe it.
-    let durable_direct_invite = if let Some(room_id) = direct_invite_room {
-        let (room_epoch, config_version) = match direct_invite_admission {
-            DirectInviteAdmission::MembersOnly {
-                room_epoch,
-                config_version,
-                ..
-            } => (room_epoch, config_version),
-            _ => unreachable!("durable direct invite has room authority"),
-        };
-        let cluster_authority = state.direct_muc_invite_cluster_authority(
-            recipient_stable_id,
-            room_epoch,
-            config_version,
-            user_id,
-            from,
-            ClusterMucAffiliationSubject::Local {
-                user_id: recipient.id,
-                bare_jid: recipient_by.clone(),
-            },
-        )?;
-        let delayed = add_delay_from(
-            recipient_delivery,
-            northstar_time::Utc::now(),
-            Some(bare_jid(from)),
-        );
-        let identity = origin_id.map(|identity_value| {
-            let actor_scope = bare_jid(from);
-            let target_scope = bare_jid(to);
-            MessageIdentity {
-                authority: IdentityAuthority::LocalOrigin,
-                actor_scope_raw: actor_scope,
-                actor_scope,
-                target_scope,
-                value: identity_value,
-                payload: rewritten,
-            }
-        });
-        let invitation = LocalMucInviteAdmission {
-            local_actor_id: user_id,
-            identity,
-            archives: &candidates,
-            delivery_id: recipient_stable_id,
-            recipient_id: recipient.id,
-            recipient_bare_jid: &recipient_by,
-            sender_jid: from,
-            stanza: &delayed,
-            encrypted,
-            room_id,
-            cluster_authority: cluster_authority.as_ref(),
-        };
-        session.enter_frame_stage(MessageFrameStage::Admission);
-        match state
-            .message_service()
-            .admit_local_muc_invite(&invitation)
-            .await?
-        {
-            DurableMucInviteOutcome::Stored {
-                id,
-                live_claim_id: admitted_claim_id,
-                ..
-            } => {
-                live_claim_id = admitted_claim_id;
-                if cluster_authority.is_some() {
-                    if let Err(error) = state
-                        .wake_committed_direct_muc_invite(recipient_stable_id)
-                        .await
-                    {
-                        state.personal_message_telemetry().post_accept_failed();
-                        tracing::warn!(?error, %recipient_stable_id, "accepted local direct MUC invite cluster wake failed");
-                    }
-                }
-                finalize_message_admission(
-                    session,
-                    &mut message_admission_lease,
-                    "local-muc-invite",
-                )
-                .await;
-                Some(id)
-            }
-            DurableMucInviteOutcome::Replay { .. } => {
-                finalize_message_admission(
-                    session,
-                    &mut message_admission_lease,
-                    "local-muc-invite-replay",
-                )
-                .await;
-                return Ok(S::Action::none());
-            }
-            DurableMucInviteOutcome::QuotaExceeded => {
-                return Ok(message_error(root, "wait", "resource-constraint"));
-            }
-            DurableMucInviteOutcome::Outcast | DurableMucInviteOutcome::AuthorityRejected => {
-                return Ok(message_error(root, "auth", "forbidden"));
-            }
-            DurableMucInviteOutcome::RecipientUnavailable => {
-                return Ok(message_error(root, "cancel", "service-unavailable"));
-            }
-            DurableMucInviteOutcome::Stale => {
-                return Ok(message_error(root, "cancel", "item-not-found"));
-            }
-        }
-    } else {
-        None
-    };
     let live_delivery_id = durable_direct_invite.or(durable_c2s_delivery);
     let delivery = match live_delivery_id {
         Some(message_id) => {

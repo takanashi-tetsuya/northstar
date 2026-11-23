@@ -6,6 +6,12 @@ use std::{collections::HashSet, future::Future};
 use uuid::Uuid;
 
 pub trait MucDeliveryRepository: Send + Sync {
+    fn current_muc_moderators(
+        &self,
+        room_localpart: &str,
+        candidates: &[northstar_room_core::occupancy::MucOccupantRoute],
+    ) -> impl Future<Output = Result<Vec<northstar_room_core::occupancy::MucOccupantRoute>>> + Send;
+
     fn blocked_local_accounts(
         &self,
         local_domain: &str,

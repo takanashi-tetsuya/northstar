@@ -343,12 +343,19 @@ impl MucHost for ServerNode {
     async fn federated_muc_publish_private_message(
         &self,
         room_jid: &str,
-        target_nick: &str,
+        route: &northstar_room_core::occupancy::MucOccupantRoute,
         stanza: &str,
         real_sender: &str,
+        require_moderator: bool,
     ) -> Result<()> {
         self.cluster
-            .federated_muc_publish_private_message(room_jid, target_nick, stanza, real_sender)
+            .federated_muc_publish_private_message(
+                room_jid,
+                route,
+                stanza,
+                real_sender,
+                require_moderator,
+            )
             .await
     }
 
@@ -544,12 +551,19 @@ impl MucHost for ServerNode {
     async fn publish_muc_cluster_private_message(
         &self,
         room: &str,
-        nick: &str,
+        route: &northstar_room_core::occupancy::MucOccupantRoute,
         stanza: &str,
         real_sender: &str,
+        require_moderator: bool,
     ) -> Result<()> {
         self.cluster
-            .publish_muc_cluster_private_message(room, nick, stanza, real_sender)
+            .publish_muc_cluster_private_message(
+                room,
+                route,
+                stanza,
+                real_sender,
+                require_moderator,
+            )
             .await
     }
 

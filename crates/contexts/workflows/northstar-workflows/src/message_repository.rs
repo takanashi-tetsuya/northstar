@@ -21,6 +21,8 @@ struct OfflineLimits {
     ttl_days: i64,
 }
 
+mod invitation_admission;
+
 #[derive(Clone)]
 pub struct PostgresMessageRepository {
     pool: PgPool,

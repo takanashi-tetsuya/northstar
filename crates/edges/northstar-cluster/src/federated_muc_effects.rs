@@ -201,14 +201,15 @@ impl ClusterManager {
     pub async fn federated_muc_publish_private_message(
         &self,
         room_jid: &str,
-        target_nick: &str,
+        route: &northstar_room_core::occupancy::MucOccupantRoute,
         stanza: &str,
         real_sender: &str,
+        require_moderator: bool,
     ) -> Result<()> {
         if !self.federated_muc_redis_transport_enabled() {
             return Ok(());
         }
-        self.send_muc_private_from(room_jid, target_nick, stanza, real_sender)
+        self.send_muc_private_from(room_jid, route, stanza, real_sender, require_moderator)
             .await
     }
 

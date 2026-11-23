@@ -8,6 +8,23 @@ pub(super) struct OccupantLookup<'a, S: MucHost> {
     pub(super) voice_form: Option<&'a MucVoiceForm>,
 }
 
+pub(super) async fn dispatch_addressed<S: MucHost>(
+    state: &S,
+    authenticated_domain: &str,
+    request: &FederatedMessageRequest,
+    address: &MessageAddress<'_>,
+) -> Result<MessageStep<()>> {
+    match &request.voice_form {
+        Ok(Some(MucVoiceForm::Request)) => {
+            voice::handle_voice_request(state, authenticated_domain, request, address).await
+        }
+        Ok(None) if address.to.contains('/') => {
+            private::handle_private_message(state, request, address, authenticated_domain).await
+        }
+        _ => Ok(MessageStep::Next(())),
+    }
+}
+
 pub(super) fn validate_message<'a, S: MucHost>(
     state: &S,
     authenticated_domain: &str,

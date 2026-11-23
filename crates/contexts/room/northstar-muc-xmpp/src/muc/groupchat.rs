@@ -70,6 +70,19 @@ pub async fn muc_message(
         return handle_muc_invitation_decline(session, root, raw, from, room_jid, &to_jid, decline)
             .await;
     }
+    let voice_form = parse_muc_voice_form(root);
+    match &voice_form {
+        Ok(Some(MucVoiceForm::Request)) => {
+            return super::message::handle_local_voice_request(
+                session, root, from, &to_jid, &room_jid,
+            )
+            .await;
+        }
+        Ok(None) if to.contains('/') => {
+            return handle_muc_private_message(session, root, raw, from, room_jid, &to_jid).await;
+        }
+        _ => {}
+    }
     let Some(own) = authorized_muc_occupant(session, &room_jid).await? else {
         return Ok(MucAction::Send(muc_stanza_error(
             root,
@@ -114,7 +127,7 @@ pub async fn muc_message(
             "forbidden",
         )));
     }
-    let voice_form = match parse_muc_voice_form(root) {
+    let voice_form = match voice_form {
         Ok(form) => form,
         Err(MalformedMucStanza) => {
             return Ok(MucAction::Send(muc_stanza_error(
@@ -128,10 +141,6 @@ pub async fn muc_message(
     if let Some(voice_form) = voice_form {
         return handle_muc_voice_form(session, root, from, &to_jid, room_jid, &own, voice_form)
             .await;
-    }
-
-    if to.contains('/') {
-        return handle_muc_private_message(session, root, raw, from, room_jid, &to_jid, &own).await;
     }
 
     if root.attribute("type") != Some("groupchat") {

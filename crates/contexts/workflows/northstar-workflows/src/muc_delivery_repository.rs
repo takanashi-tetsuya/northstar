@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use northstar_room_application::muc_delivery::MucDeliveryRepository;
+use northstar_room_core::occupancy::MucOccupantRoute;
 use sqlx::PgPool;
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -18,6 +19,19 @@ impl PostgresMucDeliveryRepository {
 }
 
 impl MucDeliveryRepository for PostgresMucDeliveryRepository {
+    async fn current_muc_moderators(
+        &self,
+        room_localpart: &str,
+        candidates: &[MucOccupantRoute],
+    ) -> Result<Vec<MucOccupantRoute>> {
+        northstar_room_postgres::room::addressed_delivery::current_muc_moderators(
+            &self.pool,
+            room_localpart,
+            candidates,
+        )
+        .await
+    }
+
     async fn blocked_local_accounts(
         &self,
         local_domain: &str,

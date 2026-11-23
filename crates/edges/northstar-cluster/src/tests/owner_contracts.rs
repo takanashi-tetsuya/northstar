@@ -308,6 +308,14 @@ impl ClusterMucOutboxHousekeepingRepository for Ports {
 }
 
 impl MucDeliveryRepository for Ports {
+    async fn current_muc_moderators(
+        &self,
+        _: &str,
+        _: &[northstar_room_core::occupancy::MucOccupantRoute],
+    ) -> Result<Vec<northstar_room_core::occupancy::MucOccupantRoute>> {
+        panic!("unexpected MUC moderator read")
+    }
+
     async fn blocked_local_accounts(
         &self,
         domain: &str,

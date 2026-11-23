@@ -1,6 +1,9 @@
 //! Persist local and federated membership, nickname reservations, and durable invitation admission.
 
 use super::*;
+use northstar_room_application::muc_service::{
+    LocalMediatedInvitation, LocalMediatedInvitationOutcome,
+};
 
 pub async fn muc_affiliation(
     pool: &PgPool,
@@ -343,10 +346,7 @@ pub async fn grant_local_muc_invite_affiliation_in_transaction(
     recipient_id: Uuid,
     cluster_authority: Option<&crate::cluster_muc::ClusterMucInviteAuthority>,
 ) -> Result<DurableMucInviteOutcome> {
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::TEXT, 17))")
-        .bind(format!("{room_id}:{recipient_id}"))
-        .execute(&mut **transaction)
-        .await?;
+    lock_local_invitee(transaction, room_id, recipient_id).await?;
     let affiliation_changed = if let Some(authority) = cluster_authority {
         anyhow::ensure!(
             matches!(
@@ -412,6 +412,152 @@ pub async fn grant_local_muc_invite_affiliation_in_transaction(
     })
 }
 
+async fn lock_local_invitee(
+    transaction: &mut Transaction<'_, Postgres>,
+    room_id: Uuid,
+    recipient_id: Uuid,
+) -> Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::TEXT, 17))")
+        .bind(format!("{room_id}:{recipient_id}"))
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
+}
+
+fn durable_invitation(outcome: DurableMucInviteOutcome) -> LocalMediatedInvitationOutcome {
+    LocalMediatedInvitationOutcome::Durable(outcome.into())
+}
+
+const LOCK_INVITATION_ACCOUNT_NAME: &str = "SELECT northstar_lock_enabled_user_name($1,$2)";
+
+#[derive(Debug)]
+pub enum DirectInvitationMode {
+    Open,
+    MembersOnly {
+        room_id: Uuid,
+        room_epoch: Uuid,
+        config_version: i64,
+    },
+    Forbidden,
+    SenderBlocked,
+    RecipientBlocked,
+    Stale,
+}
+
+pub struct DirectInvitationRoom<'a> {
+    localpart: &'a str,
+    room_id: Option<Uuid>,
+}
+
+pub async fn lock_direct_invitation_namespace<'a>(
+    transaction: &mut Transaction<'_, Postgres>,
+    localpart: &'a str,
+) -> Result<DirectInvitationRoom<'a>> {
+    let room_id =
+        sqlx::query_scalar("SELECT id FROM muc_rooms WHERE localpart=$1 AND destroyed_at IS NULL")
+            .bind(localpart)
+            .fetch_optional(&mut **transaction)
+            .await?;
+    if let Some(room_id) = room_id {
+        lock_muc_affiliation_namespace(transaction, room_id).await?;
+    }
+    Ok(DirectInvitationRoom { localpart, room_id })
+}
+
+pub async fn lock_direct_invitation_accounts(
+    transaction: &mut Transaction<'_, Postgres>,
+    actor_id: Uuid,
+    actor: &northstar_xmpp_types::jid::CanonicalJid,
+    recipient: Option<&crate::accounts::EnabledAccount>,
+) -> Result<bool> {
+    let Some(actor_name) = actor.localpart() else {
+        return Ok(false);
+    };
+    let mut accounts = vec![(actor_id, actor_name)];
+    if let Some(recipient) = recipient {
+        accounts.push((recipient.id, recipient.username.as_str()));
+    }
+    let ids: Vec<_> = accounts.iter().map(|(id, _)| *id).collect();
+    if !crate::accounts::lock_enabled_users_in_transaction(transaction, &ids).await? {
+        return Ok(false);
+    }
+    for (id, username) in accounts {
+        let owns_name: bool = sqlx::query_scalar(LOCK_INVITATION_ACCOUNT_NAME)
+            .bind(id)
+            .bind(username)
+            .fetch_one(&mut **transaction)
+            .await?;
+        if !owns_name {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+pub async fn locked_direct_invitation_mode(
+    transaction: &mut Transaction<'_, Postgres>,
+    room: DirectInvitationRoom<'_>,
+    actor_id: Uuid,
+    recipient_id: Option<Uuid>,
+    invitee_bare: &str,
+    sender_block_candidates: &[String],
+    recipient_block_candidates: &[String],
+) -> Result<DirectInvitationMode> {
+    use DirectInvitationMode as Mode;
+    let DirectInvitationRoom { localpart, room_id } = room;
+    let room = if let Some(room_id) = room_id {
+        if let Some(recipient_id) = recipient_id {
+            lock_local_invitee(transaction, room_id, recipient_id).await?;
+        } else {
+            lock_federated_invitee(transaction, room_id, invitee_bare).await?;
+        }
+        let revision =
+            crate::cluster_muc::locked_direct_invitation_revision(transaction, room_id).await?;
+        let Some((room_epoch, config_version, members_only)) = revision else {
+            return Ok(Mode::Stale);
+        };
+        members_only.then_some((room_id, room_epoch, config_version))
+    } else {
+        None
+    };
+    let (affiliation, sender_blocked, recipient_blocked, room_appeared): (Option<String>, bool, bool, bool) =
+        sqlx::query_as(
+            "SELECT (SELECT affiliation FROM muc_affiliations WHERE room_id=$1 AND user_id=$2),
+                    EXISTS(SELECT 1 FROM blocked_jids WHERE owner_id=$2 AND blocked_jid=ANY($4::text[])),
+                    EXISTS(SELECT 1 FROM blocked_jids WHERE owner_id=$3 AND blocked_jid=ANY($5::text[])),
+                    $1::uuid IS NULL AND EXISTS(
+                        SELECT 1 FROM muc_rooms WHERE localpart=$6 AND destroyed_at IS NULL)",
+        )
+        .bind(room_id)
+        .bind(actor_id)
+        .bind(recipient_id)
+        .bind(sender_block_candidates)
+        .bind(recipient_block_candidates)
+        .bind(localpart)
+        .fetch_one(&mut **transaction)
+        .await?;
+    if room_appeared {
+        return Ok(Mode::Stale);
+    }
+    if room.is_some() && !matches!(affiliation.as_deref(), Some("owner" | "admin" | "member")) {
+        return Ok(Mode::Forbidden);
+    }
+    if sender_blocked {
+        return Ok(Mode::SenderBlocked);
+    }
+    if recipient_blocked {
+        return Ok(Mode::RecipientBlocked);
+    }
+    Ok(match room {
+        Some((room_id, room_epoch, config_version)) => Mode::MembersOnly {
+            room_id,
+            room_epoch,
+            config_version,
+        },
+        None => Mode::Open,
+    })
+}
+
 /// Atomically grant a local members-only affiliation and persist the invite
 /// in the existing offline queue. The caller may deliver the durable row
 /// online and let the owning transport delete it after its write boundary; a
@@ -431,6 +577,68 @@ pub async fn admit_local_muc_invite(
     policy: northstar_room_core::OfflineStorePolicy,
     cluster_authority: Option<&crate::cluster_muc::ClusterMucInviteAuthority>,
 ) -> Result<DurableMucInviteOutcome> {
+    let result = admit_local_muc_invite_inner(
+        effects,
+        pool,
+        id,
+        room_id,
+        recipient_id,
+        recipient_bare_jid,
+        sender_jid,
+        stanza,
+        encrypted,
+        policy,
+        cluster_authority,
+        None,
+    )
+    .await?;
+    Ok(match result {
+        LocalMediatedInvitationOutcome::Durable(outcome) => match outcome {
+            northstar_room_core::DurableMucInviteOutcome::Stored {
+                id,
+                affiliation_changed,
+                live_claim_id,
+            } => DurableMucInviteOutcome::Stored {
+                id,
+                affiliation_changed,
+                live_claim_id,
+            },
+            northstar_room_core::DurableMucInviteOutcome::Replay { id } => {
+                DurableMucInviteOutcome::Replay { id }
+            }
+            northstar_room_core::DurableMucInviteOutcome::QuotaExceeded => {
+                DurableMucInviteOutcome::QuotaExceeded
+            }
+            northstar_room_core::DurableMucInviteOutcome::RecipientUnavailable => {
+                DurableMucInviteOutcome::RecipientUnavailable
+            }
+            northstar_room_core::DurableMucInviteOutcome::Outcast => {
+                DurableMucInviteOutcome::Outcast
+            }
+            northstar_room_core::DurableMucInviteOutcome::AuthorityRejected => {
+                DurableMucInviteOutcome::AuthorityRejected
+            }
+            northstar_room_core::DurableMucInviteOutcome::Stale => DurableMucInviteOutcome::Stale,
+        },
+        _ => unreachable!("legacy admission does not select invitation mode"),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn admit_local_muc_invite_inner(
+    effects: &impl crate::effects::RoomEffects,
+    pool: &PgPool,
+    id: Uuid,
+    room_id: Uuid,
+    recipient_id: Uuid,
+    recipient_bare_jid: &str,
+    sender_jid: &str,
+    stanza: &str,
+    encrypted: bool,
+    policy: northstar_room_core::OfflineStorePolicy,
+    cluster_authority: Option<&crate::cluster_muc::ClusterMucInviteAuthority>,
+    mediated: Option<&LocalMediatedInvitation<'_>>,
+) -> Result<LocalMediatedInvitationOutcome> {
     let mut transaction = pool.begin().await?;
     if cluster_authority.is_some() {
         // The node-instance claim takes this lock exclusively. Acquire its
@@ -445,7 +653,9 @@ pub async fn admit_local_muc_invite(
         .await?
     {
         transaction.rollback().await?;
-        return Ok(DurableMucInviteOutcome::RecipientUnavailable);
+        return Ok(durable_invitation(
+            DurableMucInviteOutcome::RecipientUnavailable,
+        ));
     }
     let recipient_bare_jid = northstar_xmpp_types::jid::canonicalize_bare(recipient_bare_jid)?;
     let recipient_authority =
@@ -460,12 +670,11 @@ pub async fn admit_local_muc_invite(
             "cluster MUC invite recipient authority does not match the durable row"
         );
     }
-    let recipient_matches: bool =
-        sqlx::query_scalar("SELECT northstar_lock_enabled_user_name($1,$2)")
-            .bind(recipient_id)
-            .bind(recipient_authority.localpart().unwrap_or_default())
-            .fetch_one(&mut *transaction)
-            .await?;
+    let recipient_matches: bool = sqlx::query_scalar(LOCK_INVITATION_ACCOUNT_NAME)
+        .bind(recipient_id)
+        .bind(recipient_authority.localpart().unwrap_or_default())
+        .fetch_one(&mut *transaction)
+        .await?;
     anyhow::ensure!(
         recipient_matches,
         "local MUC invite recipient account is unavailable or authority does not match"
@@ -496,12 +705,51 @@ pub async fn admit_local_muc_invite(
         .bind(recipient_id.to_string())
         .execute(&mut *transaction)
         .await?;
+    let current_authority = if let Some(mediated) = mediated {
+        let mut authority = cluster_authority
+            .context("mediated invitation must name its inviter")?
+            .clone();
+        lock_local_invitee(&mut transaction, room_id, recipient_id).await?;
+        match crate::cluster_muc::locked_local_mediated_invite(
+            &mut transaction,
+            room_id,
+            sender_jid,
+            recipient_id,
+            &recipient_bare_jid,
+            &authority,
+        )
+        .await?
+        {
+            Ok(None) => {
+                transaction.commit().await?;
+                return Ok(LocalMediatedInvitationOutcome::Open);
+            }
+            Ok(Some(_)) if !mediated.storage_permitted => {
+                transaction.rollback().await?;
+                return Ok(LocalMediatedInvitationOutcome::StorageRequired);
+            }
+            Ok(Some(_)) if !mediated.grant_available => {
+                transaction.rollback().await?;
+                return Ok(LocalMediatedInvitationOutcome::GrantUnavailable);
+            }
+            Ok(Some(config_version)) => authority.expected_config_version = config_version,
+            Err(refusal) => {
+                transaction.rollback().await?;
+                return Ok(refusal);
+            }
+        }
+        Some(authority)
+    } else {
+        None
+    };
+    let delayed = mediated.map(|request| (request.delay_grant_stanza)());
+    let stanza = delayed.as_deref().unwrap_or(stanza);
     let affiliation = grant_local_muc_invite_affiliation_in_transaction(
         &mut transaction,
         id,
         room_id,
         recipient_id,
-        cluster_authority,
+        current_authority.as_ref().or(cluster_authority),
     )
     .await?;
     let affiliation_changed = match affiliation {
@@ -511,7 +759,7 @@ pub async fn admit_local_muc_invite(
         } => affiliation_changed,
         DurableMucInviteOutcome::Replay { .. } => {
             transaction.commit().await?;
-            return Ok(affiliation);
+            return Ok(durable_invitation(affiliation));
         }
         DurableMucInviteOutcome::QuotaExceeded | DurableMucInviteOutcome::RecipientUnavailable => {
             unreachable!("affiliation does not check account availability or quota")
@@ -520,7 +768,7 @@ pub async fn admit_local_muc_invite(
         | DurableMucInviteOutcome::AuthorityRejected
         | DurableMucInviteOutcome::Stale => {
             transaction.rollback().await?;
-            return Ok(affiliation);
+            return Ok(durable_invitation(affiliation));
         }
     };
     {
@@ -583,7 +831,7 @@ pub async fn admit_local_muc_invite(
             .is_none_or(|projected| projected > policy.max_bytes)
     {
         transaction.rollback().await?;
-        return Ok(DurableMucInviteOutcome::QuotaExceeded);
+        return Ok(durable_invitation(DurableMucInviteOutcome::QuotaExceeded));
     }
     sqlx::query(
         "INSERT INTO offline_messages(id,recipient_id,sender_jid,stanza,target_resource,encrypted) VALUES($1,$2,$3,$4,$5,$6)",
@@ -612,11 +860,11 @@ pub async fn admit_local_muc_invite(
         None
     };
     transaction.commit().await?;
-    Ok(DurableMucInviteOutcome::Stored {
+    Ok(durable_invitation(DurableMucInviteOutcome::Stored {
         id,
         affiliation_changed,
         live_claim_id,
-    })
+    }))
 }
 
 /// Federated members-only invitation admission uses the same transaction for
@@ -701,10 +949,7 @@ pub async fn grant_federated_muc_invite_affiliation_in_transaction(
         "MUC invitee requires a user JID"
     );
     let invitee = invitee.to_string();
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::TEXT, 17))")
-        .bind(format!("{room_id}:{invitee}"))
-        .execute(&mut **transaction)
-        .await?;
+    lock_federated_invitee(transaction, room_id, &invitee).await?;
     if let Some(authority) = cluster_authority {
         anyhow::ensure!(
             matches!(
@@ -756,6 +1001,18 @@ pub async fn grant_federated_muc_invite_affiliation_in_transaction(
         .await?;
     }
     Ok(FederatedMucInviteAffiliationOutcome::Stored)
+}
+
+pub(crate) async fn lock_federated_invitee(
+    transaction: &mut Transaction<'_, Postgres>,
+    room_id: Uuid,
+    invitee_bare_jid: &str,
+) -> Result<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::TEXT, 17))")
+        .bind(format!("{room_id}:{invitee_bare_jid}"))
+        .execute(&mut **transaction)
+        .await?;
+    Ok(())
 }
 
 pub async fn federated_muc_affiliation(

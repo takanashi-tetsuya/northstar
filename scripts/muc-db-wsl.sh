@@ -287,3 +287,27 @@ cargo test --locked --offline -p northstar-db-it \
 cargo test --locked --offline -p northstar-db-it \
   room::muc_join_continuity::resume_without_suspended_authority_fails_closed \
   -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_addressed_delivery::private_authority_names_the_exact_target_incarnation \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_addressed_delivery::private_authority_serializes_against_a_policy_change \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_addressed_delivery::voice_request_skips_a_moderator_demoted_before_delivery \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_addressed_delivery::voice_request_authority_rejects_a_requester_granted_voice_concurrently \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_addressed_delivery::invitation_mode_follows_the_locked_room_revision \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_addressed_delivery::invitations_commit_per_invitee_after_a_later_failure \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_addressed_delivery::federated_mediated_invitation_grants_only_on_the_locked_members_only_revision \
+  -- --ignored --exact --nocapture
+cargo test --locked --offline -p northstar-db-it \
+  room::muc_addressed_delivery::direct_invitation_mode_follows_the_locked_room_revision \
+  -- --ignored --exact --nocapture

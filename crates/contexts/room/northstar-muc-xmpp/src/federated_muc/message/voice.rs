@@ -1,7 +1,71 @@
 //! Handle federated voice requests and approvals.
 
 use super::*;
+use crate::muc::message::{addressed, voice_routes};
 use crate::muc::MucVoiceForm;
+use northstar_room_application::muc_service::{
+    MucAddressedActor, MucAddressedOutcome, MucAddressedRequest,
+};
+
+pub(super) async fn handle_voice_request(
+    state: &impl MucHost,
+    authenticated_domain: &str,
+    request: &FederatedMessageRequest,
+    address: &MessageAddress<'_>,
+) -> Result<MessageStep<()>> {
+    let authenticated_domain = canonical_authenticated_domain(authenticated_domain);
+    let actor = MucAddressedActor::Federated {
+        authenticated_domain: &authenticated_domain,
+        full_jid: &address.actor_full_jid,
+    };
+    let outcome = state
+        .muc_service()
+        .muc_addressed_authority(
+            localpart(&address.room_jid),
+            MucAddressedRequest::Voice { actor },
+        )
+        .await?;
+    if matches!(
+        outcome,
+        MucAddressedOutcome::NotJoined
+            | MucAddressedOutcome::MissingRoom
+            | MucAddressedOutcome::NotAuthorized
+    ) {
+        let (error_type, condition) = addressed::rejection(&outcome);
+        return Ok(MessageStep::Done(federated_error(
+            &request.stanza,
+            address.from,
+            error_type,
+            condition,
+        )));
+    }
+    if address.to_jid.resourcepart().is_some()
+        || !matches!(request.stanza.kind.as_deref(), None | Some("normal"))
+    {
+        return Ok(MessageStep::Done(federated_error(
+            &request.stanza,
+            address.from,
+            "modify",
+            "bad-request",
+        )));
+    }
+    let MucAddressedOutcome::Voice {
+        requester,
+        moderators,
+    } = outcome
+    else {
+        let (error_type, condition) = addressed::rejection(&outcome);
+        return Ok(MessageStep::Done(federated_error(
+            &request.stanza,
+            address.from,
+            error_type,
+            condition,
+        )));
+    };
+    voice_routes::deliver_voice_request(state, &address.room_jid, &requester, moderators, true)
+        .await;
+    Ok(MessageStep::Done(None))
+}
 
 pub(super) async fn handle_voice_form<S: MucHost>(
     state: &S,
@@ -49,38 +113,7 @@ pub(super) async fn handle_voice_form<S: MucHost>(
         }
         match voice_form {
             crate::muc::MucVoiceForm::Request => {
-                if !room.moderated || own.role != "visitor" {
-                    return Ok(MessageStep::Done(federated_error(
-                        &request.stanza,
-                        from,
-                        "auth",
-                        "forbidden",
-                    )));
-                }
-                let voice_request =
-                    crate::muc::muc_voice_request(room_jid, &own.full_jid, &own.nick);
-                for moderator in occupants
-                    .values()
-                    .filter(|occupant| occupant.role == "moderator")
-                {
-                    if let Some(local) = state.local_muc_occupant_exact(moderator.into()) {
-                        let _ = state
-                            .deliver_to_muc_occupant(
-                                &local,
-                                set_to(&voice_request, &local.full_jid),
-                            )
-                            .await;
-                    }
-                    state
-                        .federated_muc_publish_private_message(
-                            room_jid,
-                            &moderator.nick,
-                            &voice_request,
-                            &own.full_jid,
-                        )
-                        .await?;
-                }
-                return Ok(MessageStep::Done(None));
+                unreachable!("voice requests use addressed authority")
             }
             crate::muc::MucVoiceForm::Approval { jid, nick, allow } => {
                 if own.role != "moderator" {

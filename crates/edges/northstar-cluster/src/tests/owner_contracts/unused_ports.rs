@@ -2,6 +2,8 @@
 #[derive(Clone)]
 pub(super) struct UnusedPorts;
 
+mod direct_invitation_stub;
+
 mod mix {
     use super::UnusedPorts;
     use anyhow::Result;

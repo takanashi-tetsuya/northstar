@@ -84,33 +84,40 @@ impl ClusterManager {
     pub async fn send_muc_private_from(
         &self,
         room_jid: &str,
-        target_nick: &str,
+        route: &northstar_room_core::occupancy::MucOccupantRoute,
         stanza: &str,
         real_sender: &str,
+        require_moderator: bool,
     ) -> Result<()> {
         let real_sender = northstar_xmpp_types::jid::canonicalize(real_sender)?;
-        self.send_muc_private_internal(room_jid, target_nick, stanza, Some(&real_sender))
+        self.send_muc_private_internal(room_jid, route, stanza, &real_sender, require_moderator)
             .await
     }
 
     pub(super) async fn send_muc_private_internal(
         &self,
         room_jid: &str,
-        target_nick: &str,
+        route: &northstar_room_core::occupancy::MucOccupantRoute,
         stanza: &str,
-        real_sender: Option<&str>,
+        real_sender: &str,
+        require_moderator: bool,
     ) -> Result<()> {
         let Some(pool) = &self.pool else {
             return Ok(());
         };
         let nodes = self.active_muc_nodes(room_jid).await?;
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "target": room_jid,
             "muc_private": true,
-            "target_nick": target_nick,
+            "envelope_version": northstar_room_core::occupancy::MUC_EXACT_ROUTE_ENVELOPE_VERSION,
+            "target_nick": route.nick,
+            "target_route": route,
             "stanza": stanza,
             "real_sender": real_sender,
         });
+        if require_moderator {
+            payload["require_role"] = serde_json::Value::from("moderator");
+        }
         let mut conn = pool.get().await?;
         for node_id in nodes {
             if node_id != self.node_id {

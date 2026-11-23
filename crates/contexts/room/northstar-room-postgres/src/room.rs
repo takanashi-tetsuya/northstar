@@ -8,7 +8,9 @@ use sqlx::PgPool;
 use std::time::Duration;
 use uuid::Uuid;
 
+pub mod addressed_delivery;
 mod conversions;
+mod invitation_admission;
 mod join_continuity;
 mod lifecycle;
 mod live_audience;

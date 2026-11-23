@@ -3,6 +3,8 @@ use crate::discussion::{FanoutStage, KnowledgeClass, Request};
 use crate::muc_service::*;
 use std::sync::atomic::Ordering;
 
+mod addressed_delivery;
+
 #[derive(Clone)]
 struct Repository {
     inner: Arc<fixture::Repository>,

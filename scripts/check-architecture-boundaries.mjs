@@ -420,9 +420,16 @@ if (!/runtime_control_pool\s*\.acquire\(\)\s*\.await/s.test(runtimeControlReserv
 if (!/pub async fn new\([\s\S]*?runtime_control_connection\s*:\s*PoolConnection<Postgres>/.test(state)) {
   throw new Error('ServerNode must receive the already-reserved runtime-control connection');
 }
-const terminalMain = structBody(mainSource, 'async fn main()');
-if (terminalMain.replace(/\s+/g, '') !== 'northstar_telemetry::logging::report_result(run().await)') {
-  throw new Error('main must report its final result through the bounded console owner');
+const terminalMain = structBody(mainSource, 'async fn report_run()');
+const processMain = structBody(mainSource, 'fn main()');
+const serverRuntime = structBody(mainSource, 'fn server_runtime()');
+if (terminalMain.replace(/\s+/g, '') !== 'northstar_telemetry::logging::report_result(run().await)'
+    || processMain.replace(/\s+/g, '') !== 'matchserver_runtime(){Ok(runtime)=>runtime.block_on(report_run()),Err(error)=>northstar_telemetry::logging::report_result(Err(error)),}') {
+  throw new Error('main must report its final result, including a runtime start failure, through the bounded console owner');
+}
+if (!/\.thread_stack_size\(RUNTIME_THREAD_STACK_BYTES\)/.test(serverRuntime)
+    || !/const RUNTIME_THREAD_STACK_BYTES: usize = 8 \* 1024 \* 1024;/.test(mainSource)) {
+  throw new Error('runtime threads must reserve the reviewed stack for unoptimized connection-actor frames');
 }
 const runtimeMain = structBody(mainSource, 'async fn run()');
 if ([...runtimeMain.matchAll(/state\.start_workers\(&cancel, process_role\)/g)].length !== 1

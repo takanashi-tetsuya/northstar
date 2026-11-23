@@ -124,8 +124,30 @@ fn install_crypto_provider() -> Result<()> {
         .map_err(|_| anyhow::anyhow!("could not install the rustls AWS-LC crypto provider"))
 }
 
-#[tokio::main]
-async fn main() -> std::process::ExitCode {
+/// Stack reserved for each runtime worker and blocking-pool thread. Those
+/// threads poll connection actors, and unoptimized builds keep every await
+/// temporary of a function in one frame: the WebSocket, message dispatch,
+/// MUC invitation and room repository chain measured 2.09 MB in S48, past
+/// tokio's 2 MiB default. Release frames are far smaller. The reservation is
+/// virtual; only touched pages are committed.
+const RUNTIME_THREAD_STACK_BYTES: usize = 8 * 1024 * 1024;
+
+fn main() -> std::process::ExitCode {
+    match server_runtime() {
+        Ok(runtime) => runtime.block_on(report_run()),
+        Err(error) => northstar_telemetry::logging::report_result(Err(error)),
+    }
+}
+
+fn server_runtime() -> Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(RUNTIME_THREAD_STACK_BYTES)
+        .build()
+        .context("could not start the tokio runtime")
+}
+
+async fn report_run() -> std::process::ExitCode {
     northstar_telemetry::logging::report_result(run().await)
 }
 

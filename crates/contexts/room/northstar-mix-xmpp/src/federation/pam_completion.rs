@@ -4,7 +4,6 @@ use northstar_room_core::mix::{MixChannelAddress, MixRealJid};
 
 mod join_evidence;
 
-#[allow(clippy::needless_return)]
 pub(super) async fn complete_pam_response(
     state: &Arc<impl MixHost>,
     authenticated_domain: &str,
@@ -78,7 +77,7 @@ pub(super) async fn complete_pam_response(
             tracing::warn!(request_id=%request.id, from, to, "ignored conflicting remote PAM result replay");
         }
     }
-    return Ok(true);
+    Ok(true)
 }
 
 #[cfg(test)]

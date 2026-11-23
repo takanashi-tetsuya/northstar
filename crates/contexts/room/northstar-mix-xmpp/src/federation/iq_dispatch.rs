@@ -4,7 +4,6 @@ use northstar_room_application::mix_service::{
     FederatedMixIqAlreadyFinalized, FederatedMixIqConflict, MixMamAdmissionOutcome,
 };
 
-#[allow(clippy::needless_return)]
 pub(super) async fn dispatch_disco_info(
     state: &Arc<impl MixHost>,
     authenticated_domain: &str,
@@ -16,10 +15,9 @@ pub(super) async fn dispatch_disco_info(
         .federation_outbox()
         .send(authenticated_domain, response, None)
         .await;
-    return Ok(true);
+    Ok(true)
 }
 
-#[allow(clippy::needless_return)]
 pub(super) async fn dispatch_mam(
     state: &Arc<impl MixHost>,
     authenticated_domain: &str,
@@ -81,10 +79,9 @@ pub(super) async fn dispatch_mam(
             }
         }
     }
-    return Ok(true);
+    Ok(true)
 }
 
-#[allow(clippy::needless_return)]
 pub(super) async fn dispatch_channel_iq(
     state: &Arc<impl MixHost>,
     authenticated_domain: &str,
@@ -236,7 +233,7 @@ pub(super) async fn dispatch_channel_iq(
             .send(authenticated_domain, response, None)
             .await;
     }
-    return Ok(true);
+    Ok(true)
 }
 
 fn admission_conflict(error: &anyhow::Error) -> Option<FederatedMixIqReplay> {

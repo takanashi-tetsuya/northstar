@@ -6,7 +6,7 @@ use northstar_room_core::mix::{
     MixChannelAddress, MixRealJid, MixRelayAddress, MixStableParticipantId,
 };
 
-#[allow(clippy::needless_return, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn admit_reflected_message(
     state: &Arc<impl MixHost>,
     authenticated_domain: &str,
@@ -85,10 +85,9 @@ pub(super) async fn admit_reflected_message(
     if let Some(account_id) = account_id {
         send_reflection(state.as_ref(), account_id, &to_jid, &raw);
     }
-    return Ok(true);
+    Ok(true)
 }
 
-#[allow(clippy::needless_return)]
 pub(super) async fn handle_reflected_presence(
     state: &Arc<impl MixHost>,
     authenticated_domain: &str,
@@ -141,7 +140,7 @@ pub(super) async fn handle_reflected_presence(
         return Ok(true);
     };
     send_reflection(state.as_ref(), account_id, &target, &raw);
-    return Ok(true);
+    Ok(true)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

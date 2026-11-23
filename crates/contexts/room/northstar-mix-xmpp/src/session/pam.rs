@@ -3,10 +3,10 @@ use crate::iq_parse::{remote_pam_join_stanza, JoinData};
 use northstar_room_application::mix_service::{HostedMixOutcome, RemotePamJoinOptions};
 use northstar_room_core::mix::{MixChannelAddress, MixChannelId, MixRealJid};
 
-#[allow(clippy::ptr_arg, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_pam_join(
     session: &impl MixSession,
-    request_id: &String,
+    request_id: &str,
     user_id: Uuid,
     _username: &str,
     actor_bare: &str,
@@ -154,7 +154,7 @@ pub(super) async fn handle_pam_join(
                 nick: join.nick.clone(),
                 nodes: join.nodes.clone(),
                 request_id: federation_id,
-                client_request_id: request_id.clone(),
+                client_request_id: request_id.to_owned(),
                 requester_full_jid: full_jid.to_owned(),
                 request_digest,
                 remote_domain: domain.to_owned(),
@@ -186,10 +186,10 @@ pub(super) async fn handle_pam_join(
     }
 }
 
-#[allow(clippy::ptr_arg, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_pam_leave(
     session: &impl MixSession,
-    request_id: &String,
+    request_id: &str,
     user_id: Uuid,
     _username: &str,
     actor_bare: &str,
@@ -305,7 +305,7 @@ pub(super) async fn handle_pam_leave(
                 actor_jid: actor_bare.to_owned(),
                 channel_jid: channel.clone(),
                 request_id: federation_id,
-                client_request_id: request_id.clone(),
+                client_request_id: request_id.to_owned(),
                 requester_full_jid: full_jid.to_owned(),
                 request_digest,
                 remote_domain: domain.to_owned(),

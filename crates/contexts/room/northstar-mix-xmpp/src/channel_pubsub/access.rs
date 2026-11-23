@@ -1,7 +1,6 @@
 use super::*;
 use northstar_room_core::mix::{MixChannelId, MixRealJid};
 
-#[allow(clippy::needless_return)]
 pub(super) async fn get(
     state: &Arc<impl MixHost>,
     request: &OwnedIq,
@@ -34,12 +33,12 @@ pub(super) async fn get(
     let payload = XmlElement::namespaced("pubsub", PUBSUB_NS)
         .child(items)
         .finish();
-    return Ok(iq_result_to(
+    Ok(iq_result_to(
         &request.id,
         &channel.jid(),
         reply_to,
         &payload,
-    ));
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]

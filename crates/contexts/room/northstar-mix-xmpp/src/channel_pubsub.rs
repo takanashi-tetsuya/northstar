@@ -116,7 +116,7 @@ pub async fn pubsub_get(
     ))
 }
 
-#[allow(clippy::needless_return, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub async fn pubsub_publish(
     state: &Arc<impl MixHost>,
     request: &OwnedIq,
@@ -171,12 +171,12 @@ pub async fn pubsub_publish(
                 ));
             }
             let acknowledgement = mix_pubsub_publish_ack(node, &item_ids[0]);
-            return Ok(iq_result_to(
+            Ok(iq_result_to(
                 &request.id,
                 &channel.jid(),
                 reply_to,
                 &acknowledgement,
-            ));
+            ))
         }
         NODE_INFO => {
             return admin::publish_info(
@@ -197,15 +197,13 @@ pub async fn pubsub_publish(
             )
             .await
         }
-        _ => {
-            return Ok(iq_error_to(
-                &request.id,
-                &channel.jid(),
-                reply_to,
-                "auth",
-                "forbidden",
-            ));
-        }
+        _ => Ok(iq_error_to(
+            &request.id,
+            &channel.jid(),
+            reply_to,
+            "auth",
+            "forbidden",
+        )),
     }
 }
 

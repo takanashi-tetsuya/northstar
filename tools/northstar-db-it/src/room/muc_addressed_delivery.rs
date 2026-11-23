@@ -13,6 +13,7 @@ use northstar_room_application::muc_service::{
     LocalMediatedInvitationOutcome, MucAddressedActor, MucAddressedOutcome, MucAddressedRequest,
     MucInvitationAdmissionRepository, OfflineStorePolicy,
 };
+use northstar_room_core::muc_authority::MucOccupancyTransition;
 use northstar_room_core::occupancy::MucOccupantRoute;
 use northstar_room_postgres::room::addressed_delivery::{
     current_muc_moderators, muc_addressed_authority,
@@ -234,7 +235,7 @@ async fn private_authority_names_the_exact_target_incarnation() {
             &fixture.pool,
             Uuid::new_v4(),
             &previous,
-            "leave",
+            MucOccupancyTransition::Leave,
             NODE,
             None,
             None,

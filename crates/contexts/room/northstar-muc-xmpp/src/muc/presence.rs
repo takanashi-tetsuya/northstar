@@ -104,7 +104,7 @@ pub async fn handle_muc_unavailable_presence(
                     .transition_local_cluster_occupancy(
                         cluster_operation_id,
                         &target,
-                        "leave",
+                        MucOccupancyTransition::Leave,
                         session.host().muc_cluster_node_id(),
                         None,
                         None,

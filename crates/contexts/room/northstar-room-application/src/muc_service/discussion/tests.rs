@@ -98,7 +98,7 @@ impl MucRepository for Repository {
         claim_local_cluster_occupancy(request: ClusterMucJoin<'_>) -> ClusterMucJoinOutcome;
         renew_local_cluster_occupancy(target: &ClusterMucOccupancyTarget, owner_node_id: &str, lease: Duration) -> bool;
         refresh_local_cluster_presence(target: &ClusterMucOccupancyTarget, owner_node_id: &str, presence_payload: &str, lease: Duration) -> bool;
-        transition_local_cluster_occupancy(operation_id: Uuid, target: &ClusterMucOccupancyTarget, transition: &str, owner_node_id: &str, new_connection_uuid: Option<Uuid>, new_connection_epoch: Option<i64>, sm_session_id: Option<Uuid>, lease: Duration) -> ClusterMucTransitionOutcome;
+        transition_local_cluster_occupancy(operation_id: Uuid, target: &ClusterMucOccupancyTarget, transition: MucOccupancyTransition, owner_node_id: &str, new_connection_uuid: Option<Uuid>, new_connection_epoch: Option<i64>, sm_session_id: Option<Uuid>, lease: Duration) -> ClusterMucTransitionOutcome;
         rebind_federated_cluster_occupancy(operation_id: Uuid, target: &ClusterMucOccupancyTarget, owner_node_id: &str, authenticated_domain: &str, new_connection_uuid: Uuid, lease: Duration) -> ClusterMucTransitionOutcome;
         disconnect_local_cluster_occupancy(operation_id: Uuid, target: &ClusterMucOccupancyTarget, owner_node_id: &str) -> ClusterMucTransitionOutcome;
         rename_local_cluster_occupancy(operation_id: Uuid, target: &ClusterMucOccupancyTarget, owner_node_id: &str, new_nick: &str) -> ClusterMucTransitionOutcome;

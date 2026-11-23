@@ -406,7 +406,7 @@ async fn audience_at_admission(retract: bool) {
             &fixture.pool,
             Uuid::new_v4(),
             &ClusterMucOccupancyTarget::from(&sleeping),
-            "suspend",
+            northstar_room_core::muc_authority::MucOccupancyTransition::Suspend,
             "node-b",
             None,
             None,

@@ -46,9 +46,11 @@ use northstar_room_application::muc_service::{
     MucSubjectMutation, MucSubjectOutcome, OfflineStoreOutcome, OfflineStorePolicy,
 };
 use northstar_room_application::PostCommitPlan as MucPostCommitPlan;
+use northstar_room_core::muc_authority::MucOccupancyTransition;
 use northstar_room_core::occupancy::{MucOccupant, MucPresencePublication};
 use northstar_room_core::stanza::*;
 use northstar_room_core::MucJoinSnapshotError;
+use northstar_xep_0045::MucRoomJid;
 use northstar_xep_0280::should_copy as should_carbon;
 use northstar_xep_0359::add_stanza_id;
 use northstar_xml_builder::message_policy::{
@@ -99,7 +101,7 @@ pub async fn compensate_unpublished_cluster_muc_join<H: MucHost>(
                 .transition_local_cluster_occupancy(
                     operation_id,
                     &target,
-                    "leave",
+                    MucOccupancyTransition::Leave,
                     state.muc_cluster_node_id(),
                     None,
                     None,
@@ -474,13 +476,17 @@ pub async fn deliver_muc_offline_affiliation_change_notice(
 }
 
 pub fn canonical_local_muc_room(value: &str, expected_domain: &str) -> Option<(String, String)> {
-    let room = CanonicalJid::parse_bare(value).ok()?;
-    let expected_domain = prepare_domainpart(expected_domain).ok()?;
-    let localpart = room.localpart()?;
-    if room.domainpart() != expected_domain || !valid_muc_room(localpart) {
+    let room = local_muc_room_jid(value, expected_domain)?;
+    Some((room.to_string(), room.room_name().as_str().to_owned()))
+}
+
+/// Parse a bare room address for this local MUC service.
+pub fn local_muc_room_jid(value: &str, expected_domain: &str) -> Option<MucRoomJid> {
+    // The kernel parser projects a resource-bearing address to its bare room.
+    if value.contains('/') {
         return None;
     }
-    Some((room.to_string(), localpart.to_owned()))
+    MucRoomJid::parse_for_service(value, expected_domain).ok()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -961,5 +967,7 @@ pub fn muc_service_domain(local_domain: &str) -> String {
         .expect("configured XMPP domain must form a valid MUC service domain")
 }
 
+#[cfg(test)]
+mod room_jid_tests;
 #[cfg(test)]
 mod tests;

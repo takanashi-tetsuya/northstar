@@ -406,7 +406,7 @@ async fn temporary_room_cleanup_deletes_only_the_departed_incarnation() {
             &fixture.pool,
             Uuid::new_v4(),
             &ClusterMucOccupancyTarget::from(&creator),
-            "leave",
+            northstar_room_core::muc_authority::MucOccupancyTransition::Leave,
             NODE,
             None,
             None,

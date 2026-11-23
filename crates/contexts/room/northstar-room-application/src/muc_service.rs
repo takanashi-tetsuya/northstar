@@ -21,6 +21,7 @@ pub use crate::{
     MucSubjectCommand, MucSubjectResult, RepositoryFuture, RoomApplication,
 };
 use anyhow::Result;
+pub use northstar_room_core::muc_authority::MucOccupancyTransition;
 pub use northstar_room_core::{
     ClusterMucAffiliationSubject, ClusterMucConfigurationOutcome, ClusterMucInviteAuthority,
     ClusterMucJoin, ClusterMucJoinOutcome, ClusterMucOccupancy, ClusterMucOccupancyTarget,
@@ -697,7 +698,7 @@ pub trait MucRepository:
         &self,
         operation_id: Uuid,
         target: &ClusterMucOccupancyTarget,
-        transition: &str,
+        transition: MucOccupancyTransition,
         owner_node_id: &str,
         new_connection_uuid: Option<Uuid>,
         new_connection_epoch: Option<i64>,

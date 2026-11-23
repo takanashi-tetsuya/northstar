@@ -7,6 +7,7 @@ mod clock;
 pub mod cluster_muc;
 pub mod mix;
 pub mod mix_iq_relay;
+pub mod muc_authority;
 pub mod occupancy;
 pub mod stanza;
 pub mod telemetry;

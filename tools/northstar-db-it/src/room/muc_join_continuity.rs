@@ -3,6 +3,7 @@ use northstar_room_application::muc_service::{
     ClusterMucTransitionOutcome, MucJoinCommitOutcome, MucJoinContinuityRepository,
     MucJoinProjection, MucJoinProjectionRequest, SmMucResume,
 };
+use northstar_room_core::muc_authority::MucOccupancyTransition;
 use northstar_room_postgres::{cluster_muc, muc};
 use northstar_time::{DateTime, Utc};
 use northstar_workflows::room_effects::PostgresMucRepository;
@@ -435,8 +436,18 @@ async fn suspend_and_resume_reject_a_lease_that_expired_after_lookup() {
     .unwrap()
     .is_some());
     for (target, session, transition, state) in [
-        (active, active_session, "suspend", "active"),
-        (suspended, suspended_session, "resume", "suspended"),
+        (
+            active,
+            active_session,
+            MucOccupancyTransition::Suspend,
+            "active",
+        ),
+        (
+            suspended,
+            suspended_session,
+            MucOccupancyTransition::Resume,
+            "suspended",
+        ),
     ] {
         assert_eq!(
             cluster_muc::cluster_muc_occupancy_target(
@@ -457,7 +468,7 @@ async fn suspend_and_resume_reject_a_lease_that_expired_after_lookup() {
         let attempt = target.clone();
         let connection_pool = pool.clone();
         let waiter = tokio::spawn(async move {
-            let resume = transition == "resume";
+            let resume = transition == MucOccupancyTransition::Resume;
             cluster_muc::transition_cluster_muc_occupancy(
                 &connection_pool,
                 Uuid::new_v4(),
@@ -516,7 +527,7 @@ async fn elapsed_exact_departure_still_removes_its_row() {
             &fixture.pool,
             Uuid::new_v4(),
             &lookup,
-            "leave",
+            MucOccupancyTransition::Leave,
             NODE,
             None,
             None,

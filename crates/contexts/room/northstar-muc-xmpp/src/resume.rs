@@ -6,6 +6,7 @@ use crate::ports::MucHost;
 use anyhow::{Context, Result};
 use dashmap::DashMap;
 use northstar_room_application::muc_service::{MucWakePort, SerializableMucOccupant, SmMucResume};
+use northstar_room_core::muc_authority::MucOccupancyTransition;
 use northstar_room_core::occupancy::MucOccupantRoute;
 use northstar_room_core::{
     ClusterMucOccupancy, ClusterMucOccupancyTarget, ClusterMucTransitionOutcome,
@@ -796,7 +797,7 @@ pub(crate) async fn compensate_resumed_muc_target<H: MucResumeHost>(
         .transition_local_cluster_occupancy(
             operation_id,
             target,
-            "suspend",
+            MucOccupancyTransition::Suspend,
             host.muc_cluster_node_id(),
             None,
             None,

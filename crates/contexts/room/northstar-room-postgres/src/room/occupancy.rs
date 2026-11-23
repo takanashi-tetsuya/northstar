@@ -36,7 +36,7 @@ impl ClusterMucOccupancyDepartureRepository for PostgresClusterMucOccupancyDepar
             &self.pool,
             operation_id,
             &target.into(),
-            "leave",
+            MucOccupancyTransition::Leave,
             owner_node_id,
             None,
             None,

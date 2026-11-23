@@ -2,8 +2,9 @@
 
 use super::*;
 use northstar_room_application::muc_service::{
-    MucJoinProjection, MucJoinProjectionRequest, SmMucResume,
+    MucJoinProjection, MucJoinProjectionRequest, MucOccupancyTransition, SmMucResume,
 };
+use northstar_xmpp_types::CanonicalJid;
 
 mod join_projection;
 
@@ -562,7 +563,7 @@ pub async fn transition_cluster_muc_occupancy(
     pool: &PgPool,
     operation_id: Uuid,
     target: &ClusterMucOccupancyTarget,
-    transition: &str,
+    transition: MucOccupancyTransition,
     owner_node_id: &str,
     new_connection_uuid: Option<Uuid>,
     new_connection_epoch: Option<i64>,
@@ -598,7 +599,7 @@ pub async fn suspend_cluster_muc_authority(
         pool,
         operation_id,
         target,
-        "suspend",
+        MucOccupancyTransition::Suspend,
         owner_node_id,
         None,
         None,
@@ -619,7 +620,7 @@ pub(crate) async fn resume_cluster_muc_authority(
         pool,
         request.operation_id,
         request.target,
-        "resume",
+        MucOccupancyTransition::Resume,
         request.owner_node_id,
         Some(request.connection_id),
         request.target.connection_epoch.checked_add(1),
@@ -645,7 +646,7 @@ pub async fn rebind_federated_cluster_muc_occupancy(
     lease: Duration,
 ) -> Result<ClusterMucTransitionOutcome> {
     let authenticated_domain = northstar_xmpp_types::jid::prepare_domainpart(authenticated_domain)?;
-    let actor = northstar_xmpp_types::jid::CanonicalJid::parse(&target.full_jid)?;
+    let actor = target.full_jid()?;
     anyhow::ensure!(
         actor.domainpart() == authenticated_domain,
         "federated MUC rebind requires the authenticated actor domain"
@@ -654,14 +655,14 @@ pub async fn rebind_federated_cluster_muc_occupancy(
         pool,
         operation_id,
         target,
-        "rebind",
+        MucOccupancyTransition::Rebind,
         owner_node_id,
         Some(new_connection_uuid),
         target.connection_epoch.checked_add(1),
         None,
         lease,
         None,
-        Some(&authenticated_domain),
+        Some((&authenticated_domain, &actor)),
     )
     .await
     .map(|(outcome, _)| outcome)
@@ -677,7 +678,7 @@ pub async fn disconnect_cluster_muc_occupancy(
         pool,
         operation_id,
         target,
-        "leave",
+        MucOccupancyTransition::Leave,
         owner_node_id,
         None,
         None,
@@ -695,30 +696,28 @@ async fn transition_cluster_muc_occupancy_with_status(
     pool: &PgPool,
     operation_id: Uuid,
     target: &ClusterMucOccupancyTarget,
-    transition: &str,
+    transition: MucOccupancyTransition,
     owner_node_id: &str,
     new_connection_uuid: Option<Uuid>,
     new_connection_epoch: Option<i64>,
     sm_session_id: Option<Uuid>,
     lease: Duration,
     removal_status: Option<u16>,
-    rebind_authenticated_domain: Option<&str>,
+    rebind_actor: Option<(&str, &CanonicalJid)>,
 ) -> Result<(ClusterMucTransitionOutcome, Option<ClusterMucOccupancy>)> {
+    use MucOccupancyTransition::{Leave, Rebind, Resume, Suspend};
+
     anyhow::ensure!(
-        matches!(transition, "suspend" | "resume" | "rebind" | "leave"),
-        "unsupported MUC self transition"
-    );
-    anyhow::ensure!(
-        (transition == "rebind") == rebind_authenticated_domain.is_some(),
+        (transition == Rebind) == rebind_actor.is_some(),
         "federated MUC rebind requires an authenticated domain"
     );
     anyhow::ensure!(
-        removal_status.is_none() || (transition == "leave" && removal_status == Some(333)),
+        removal_status.is_none() || (transition == Leave && removal_status == Some(333)),
         "MUC transport failure status is only valid on a leave"
     );
     validate_node_id(owner_node_id)?;
     let lease_seconds = validate_lease(lease)?;
-    if transition == "resume" {
+    if transition == Resume {
         anyhow::ensure!(
             new_connection_uuid.is_some_and(|value| !value.is_nil())
                 && new_connection_epoch.is_some_and(|value| value > target.connection_epoch)
@@ -726,13 +725,13 @@ async fn transition_cluster_muc_occupancy_with_status(
             "MUC resume requires a newer exact connection and SM session"
         );
     }
-    if transition == "suspend" {
+    if transition == Suspend {
         anyhow::ensure!(
             sm_session_id.is_some(),
             "MUC suspend requires an exact SM session"
         );
     }
-    if transition == "rebind" {
+    if transition == Rebind {
         anyhow::ensure!(
             new_connection_uuid
                 .is_some_and(|value| !value.is_nil() && value != target.connection_uuid)
@@ -750,7 +749,7 @@ async fn transition_cluster_muc_occupancy_with_status(
         nick: &target.nick,
         connection_uuid: target.connection_uuid,
         connection_epoch: target.connection_epoch,
-        transition,
+        transition: transition.as_str(),
         new_connection_uuid,
         new_connection_epoch,
         sm_session_id,
@@ -765,10 +764,10 @@ async fn transition_cluster_muc_occupancy_with_status(
     // Existing readers already understand the resume presence event. Rebind
     // keeps that wire kind during rolling upgrades while its digest and
     // details retain the distinct transaction semantics.
-    let operation_kind = if transition == "rebind" {
-        "resume"
+    let operation_kind = if transition == Rebind {
+        Resume.as_str()
     } else {
-        transition
+        transition.as_str()
     };
     let mut tx = pool.begin().await?;
     if existing_operation(&mut tx, operation_id, operation_kind, &digest)
@@ -786,8 +785,7 @@ async fn transition_cluster_muc_occupancy_with_status(
         tx.rollback().await?;
         return Ok((ClusterMucTransitionOutcome::Destroyed, None));
     }
-    if room.room_epoch != target.room_epoch
-        || (transition == "resume" && room.configuration_expired)
+    if room.room_epoch != target.room_epoch || (transition == Resume && room.configuration_expired)
     {
         tx.rollback().await?;
         return Ok((ClusterMucTransitionOutcome::Stale, None));
@@ -810,7 +808,7 @@ async fn transition_cluster_muc_occupancy_with_status(
     .bind(target.connection_uuid)
     .bind(target.connection_epoch)
     .bind(owner_node_id)
-    .bind(transition)
+    .bind(transition.as_str())
     .fetch_optional(&mut *tx)
     .await?;
     let Some(current) = current else {
@@ -823,7 +821,7 @@ async fn transition_cluster_muc_occupancy_with_status(
         "federated_verified"
     };
     let current = occupancy_from_row(&current);
-    if transition == "suspend" && current.state == "suspended" {
+    if transition == Suspend && current.state == "suspended" {
         let lease_is_live =
             sqlx::query_scalar::<_, bool>("SELECT $1::timestamptz > clock_timestamp()")
                 .bind(current.lease_until)
@@ -836,7 +834,7 @@ async fn transition_cluster_muc_occupancy_with_status(
             (ClusterMucTransitionOutcome::Stale, None)
         });
     }
-    if let Some(authenticated_domain) = rebind_authenticated_domain {
+    if let Some((authenticated_domain, _)) = rebind_actor {
         if current.identity_kind != "federated"
             || current.authenticated_domain.as_deref() != Some(authenticated_domain)
         {
@@ -857,7 +855,7 @@ async fn transition_cluster_muc_occupancy_with_status(
             return Ok((ClusterMucTransitionOutcome::Unauthorized, None));
         }
     }
-    let expected_state = if transition == "resume" {
+    let expected_state = if transition == Resume {
         "suspended"
     } else {
         "active"
@@ -868,11 +866,9 @@ async fn transition_cluster_muc_occupancy_with_status(
     }
     let (_unused, event_sequence) = allocate_room_epochs(&mut tx, target.room_id, false).await?;
     let new_state = match transition {
-        "suspend" => "suspended",
-        "resume" => "active",
-        "rebind" => "active",
-        "leave" => "left",
-        _ => unreachable!(),
+        Suspend => "suspended",
+        Resume | Rebind => "active",
+        Leave => "left",
     };
     let updated = sqlx::query(
         "UPDATE cluster_muc_occupancies SET
@@ -907,7 +903,7 @@ async fn transition_cluster_muc_occupancy_with_status(
     .bind(new_connection_epoch)
     .bind(sm_session_id)
     .bind(lease_seconds as f64)
-    .bind(transition == "resume")
+    .bind(transition == Resume)
     .bind(expected_state)
     .fetch_optional(&mut *tx)
     .await?;
@@ -916,7 +912,7 @@ async fn transition_cluster_muc_occupancy_with_status(
         return Ok((ClusterMucTransitionOutcome::Stale, None));
     };
     let committed = occupancy_from_row(&updated);
-    if matches!(transition, "resume" | "rebind") {
+    if matches!(transition, Resume | Rebind) {
         sqlx::query("SELECT northstar_transfer_cluster_muc_outbox($1,$2,$3,$4,$5,$6,$7,$8)")
             .bind(target.room_id)
             .bind(target.room_epoch)
@@ -943,12 +939,15 @@ async fn transition_cluster_muc_occupancy_with_status(
         "new_connection_uuid": new_connection_uuid,
         "new_connection_epoch": new_connection_epoch,
         "sm_session_id": sm_session_id,
-        "connection_rebind": transition == "rebind",
+        "connection_rebind": transition == Rebind,
     });
     if let Some(status) = removal_status {
         details["status"] = json!(status);
     }
-    let actor_bare_jid = muc_address_bare_jid(&target.full_jid)?;
+    let actor_bare_jid = match rebind_actor {
+        Some((_, actor)) => actor.bare(),
+        None => target.full_jid()?.bare(),
+    };
     insert_operation_and_outbox(
         &mut tx,
         OperationRecord {

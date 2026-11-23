@@ -2,38 +2,20 @@
 
 use super::*;
 use northstar_room_application::muc_service::{DiscussionCommit, LiveAudience};
+use northstar_xmpp_types::{prepare_domainpart, CanonicalJid};
+use std::borrow::Cow;
 
+mod actor_addresses;
 mod live_audience;
 
+use self::actor_addresses::{parse_history_actor, parse_history_sender, HistoryActorAddresses};
+
 pub fn canonical_history_actor(actor_scope: &str) -> Result<String> {
-    anyhow::ensure!(
-        !actor_scope.is_empty() && actor_scope.len() <= 3071,
-        "MUC history actor scope must contain 1 to 3071 bytes"
-    );
-    let actor = northstar_xmpp_types::jid::CanonicalJid::parse_bare(actor_scope)?;
-    anyhow::ensure!(
-        actor.localpart().is_some(),
-        "MUC history actor scope must be a user bare JID"
-    );
-    let canonical = actor.to_string();
-    anyhow::ensure!(
-        canonical == actor_scope,
-        "MUC history actor scope must already be canonical"
-    );
-    Ok(canonical)
+    Ok(parse_history_actor(actor_scope)?.to_string())
 }
 
 pub fn canonical_history_sender(sender_jid: &str) -> Result<String> {
-    anyhow::ensure!(
-        !sender_jid.is_empty() && sender_jid.len() <= 3071,
-        "MUC history sender JID must contain 1 to 3071 bytes"
-    );
-    let canonical = northstar_xmpp_types::jid::canonicalize(sender_jid)?;
-    anyhow::ensure!(
-        canonical == sender_jid,
-        "MUC history sender JID must already be canonical"
-    );
-    Ok(canonical)
+    Ok(parse_history_sender(sender_jid)?.to_string())
 }
 
 pub fn validate_history_payload(nick: &str, stanza: &str) -> Result<()> {
@@ -122,6 +104,15 @@ pub async fn lock_muc_actor_authority(
     room_id: Uuid,
     authority: &MucActorAuthority<'_>,
 ) -> Result<MucAuthorityCheck> {
+    lock_muc_actor_authority_with_addresses(transaction, room_id, authority, None).await
+}
+
+async fn lock_muc_actor_authority_with_addresses(
+    transaction: &mut Transaction<'_, Postgres>,
+    room_id: Uuid,
+    authority: &MucActorAuthority<'_>,
+    addresses: Option<&HistoryActorAddresses>,
+) -> Result<MucAuthorityCheck> {
     if authority.clustered != authority.cluster_target.is_some() {
         return Ok(MucAuthorityCheck::Stale);
     }
@@ -135,10 +126,18 @@ pub async fn lock_muc_actor_authority(
     }) {
         return Ok(MucAuthorityCheck::Stale);
     }
-    if authority.actor_scope != canonical_history_actor(authority.actor_scope)?
-        || authority.full_jid != canonical_history_sender(authority.full_jid)?
-        || northstar_xmpp_types::jid::canonical_bare_key(authority.full_jid)?
-            != authority.actor_scope
+    // Callers supplying addresses have compared their exact spellings with the authority.
+    // History also accepts a canonical bare sender and checks nickname length only.
+    let parsed;
+    let addresses = match addresses {
+        Some(addresses) => addresses,
+        None => {
+            parsed = HistoryActorAddresses::parse(authority.actor_scope, authority.full_jid)?;
+            &parsed
+        }
+    };
+    let actor = &addresses.actor;
+    if addresses.sender.to_bare() != *actor
         || authority.nick.is_empty()
         || authority.nick.len() > MAX_MUC_NICK_BYTES
         || !matches!(
@@ -158,13 +157,8 @@ pub async fn lock_muc_actor_authority(
         local_domain,
     } = &authority.principal
     {
-        let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
-        let Ok(actor) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(authority.actor_scope)
-        else {
-            return Ok(MucAuthorityCheck::Unauthorized);
-        };
+        let local_domain = prepare_domainpart(local_domain)?;
         if actor.domainpart() != local_domain
-            || actor.resourcepart().is_some()
             || !crate::accounts::lock_enabled_user_name(
                 transaction,
                 *user_id,
@@ -246,20 +240,21 @@ pub async fn lock_muc_actor_authority(
             bare_jid,
             authenticated_domain,
         } => {
-            let actor = northstar_xmpp_types::jid::CanonicalJid::parse_bare(bare_jid)?;
-            let authenticated_domain =
-                northstar_xmpp_types::jid::prepare_domainpart(authenticated_domain)?;
-            let principal_matches = actor.localpart().is_some()
-                && actor.resourcepart().is_none()
-                && actor.to_string() == *bare_jid
-                && actor.to_string() == authority.actor_scope
-                && actor.domainpart() == authenticated_domain;
+            let principal = if *bare_jid == authority.actor_scope {
+                Cow::Borrowed(actor)
+            } else {
+                // Preserve the parse error or affiliation lookup for a mismatched principal.
+                Cow::Owned(CanonicalJid::parse_bare(bare_jid)?)
+            };
+            let authenticated_domain = prepare_domainpart(authenticated_domain)?;
+            let principal_matches = *bare_jid == authority.actor_scope
+                && principal.domainpart() == authenticated_domain;
             let affiliation: Option<String> = sqlx::query_scalar(
                 "SELECT affiliation FROM muc_external_affiliations
                   WHERE room_id=$1 AND jid=$2 FOR UPDATE",
             )
             .bind(room_id)
-            .bind(actor.to_string())
+            .bind(principal.to_string())
             .fetch_optional(&mut **transaction)
             .await?;
             (
@@ -278,16 +273,10 @@ pub async fn lock_muc_actor_authority(
 
     if let Some(row) = cluster_occupancy {
         let occupancy_principal_matches = match &authority.principal {
-            MucActorPrincipal::Local {
-                user_id,
-                local_domain,
-            } => {
-                let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
+            MucActorPrincipal::Local { user_id, .. } => {
                 row.get::<String, _>("identity_kind") == "local"
                     && row.get::<Option<Uuid>, _>("local_user_id") == Some(*user_id)
                     && row.get::<String, _>("bare_jid") == authority.actor_scope
-                    && northstar_xmpp_types::jid::CanonicalJid::parse_bare(authority.actor_scope)
-                        .is_ok_and(|actor| actor.domainpart() == local_domain)
                     && row
                         .get::<Option<String>, _>("authenticated_domain")
                         .is_none()
@@ -359,8 +348,9 @@ pub(crate) async fn admit_muc_discussion_live(
     message: MucDiscussion<'_>,
     request: Option<&northstar_room_application::discussion::Request>,
 ) -> Result<DiscussionCommit> {
-    let actor_scope = canonical_history_actor(message.actor_scope)?;
-    let sender_jid = canonical_history_sender(message.sender_jid)?;
+    let addresses = HistoryActorAddresses::parse(message.actor_scope, message.sender_jid)?;
+    let actor_scope = addresses.actor.to_string();
+    let sender_jid = addresses.sender.to_string();
     if message.unarchived_stanza_bytes.is_none() {
         validate_history_payload(message.nick, message.stanza)?;
     }
@@ -382,8 +372,13 @@ pub(crate) async fn admit_muc_discussion_live(
             .execute(&mut *transaction)
             .await?;
     }
-    let authority =
-        lock_muc_actor_authority(&mut transaction, message.room_id, &message.authority).await?;
+    let authority = lock_muc_actor_authority_with_addresses(
+        &mut transaction,
+        message.room_id,
+        &message.authority,
+        Some(&addresses),
+    )
+    .await?;
     let archived = match authority {
         MucAuthorityCheck::Authorized(actor) if actor.role != "visitor" => {
             message.archive_eligible && actor.logging_enabled
@@ -539,8 +534,9 @@ pub async fn set_local_muc_subject(
     archive_stanza: Option<&str>,
     authority: MucActorAuthority<'_>,
 ) -> Result<MucSubjectOutcome> {
-    let actor_scope = canonical_history_actor(mutation.actor_scope)?;
-    let sender_jid = canonical_history_sender(mutation.sender_jid)?;
+    let addresses = HistoryActorAddresses::parse(mutation.actor_scope, mutation.sender_jid)?;
+    let actor_scope = addresses.actor.to_string();
+    let sender_jid = addresses.sender.to_string();
     let live_bytes = mutation.stanza.len();
     let candidate_bytes = archive_stanza.map_or(live_bytes, str::len);
     if live_bytes == candidate_bytes {
@@ -566,18 +562,24 @@ pub async fn set_local_muc_subject(
             .execute(&mut *transaction)
             .await?;
     }
-    let locked =
-        match lock_muc_actor_authority(&mut transaction, mutation.room_id, &authority).await? {
-            MucAuthorityCheck::Authorized(actor) => actor,
-            MucAuthorityCheck::Unauthorized => {
-                transaction.rollback().await?;
-                return Ok(MucSubjectOutcome::Unauthorized);
-            }
-            MucAuthorityCheck::Stale => {
-                transaction.rollback().await?;
-                return Ok(MucSubjectOutcome::Stale);
-            }
-        };
+    let locked = match lock_muc_actor_authority_with_addresses(
+        &mut transaction,
+        mutation.room_id,
+        &authority,
+        Some(&addresses),
+    )
+    .await?
+    {
+        MucAuthorityCheck::Authorized(actor) => actor,
+        MucAuthorityCheck::Unauthorized => {
+            transaction.rollback().await?;
+            return Ok(MucSubjectOutcome::Unauthorized);
+        }
+        MucAuthorityCheck::Stale => {
+            transaction.rollback().await?;
+            return Ok(MucSubjectOutcome::Stale);
+        }
+    };
     let archive_stanza = archive_stanza.filter(|_| locked.logging_enabled);
     if live_bytes != candidate_bytes {
         let bytes = archive_stanza.map_or(live_bytes, str::len);
@@ -659,8 +661,9 @@ async fn retract_muc_message_once(
     pool: &PgPool,
     mutation: &MucRetractionMutation<'_>,
 ) -> Result<(MucRetractionOutcome, Option<LiveAudience>)> {
-    let actor_scope = canonical_history_actor(mutation.actor_scope)?;
-    let sender_jid = canonical_history_sender(mutation.sender_jid)?;
+    let addresses = HistoryActorAddresses::parse(mutation.actor_scope, mutation.sender_jid)?;
+    let actor_scope = addresses.actor.to_string();
+    let sender_jid = addresses.sender.to_string();
     validate_history_payload(mutation.nick, mutation.tombstone)?;
     validate_history_payload(mutation.nick, mutation.action_stanza)?;
     if let Some(reason) = mutation.reason {
@@ -696,20 +699,24 @@ async fn retract_muc_message_once(
     sqlx::query(LOCK_MUC_ARCHIVE_WRITER)
         .execute(&mut *transaction)
         .await?;
-    let actor =
-        match lock_muc_actor_authority(&mut transaction, mutation.room_id, &mutation.authority)
-            .await?
-        {
-            MucAuthorityCheck::Authorized(actor) => actor,
-            MucAuthorityCheck::Unauthorized => {
-                transaction.rollback().await?;
-                return Ok((MucRetractionOutcome::Unauthorized, None));
-            }
-            MucAuthorityCheck::Stale => {
-                transaction.rollback().await?;
-                return Ok((MucRetractionOutcome::Stale, None));
-            }
-        };
+    let actor = match lock_muc_actor_authority_with_addresses(
+        &mut transaction,
+        mutation.room_id,
+        &mutation.authority,
+        Some(&addresses),
+    )
+    .await?
+    {
+        MucAuthorityCheck::Authorized(actor) => actor,
+        MucAuthorityCheck::Unauthorized => {
+            transaction.rollback().await?;
+            return Ok((MucRetractionOutcome::Unauthorized, None));
+        }
+        MucAuthorityCheck::Stale => {
+            transaction.rollback().await?;
+            return Ok((MucRetractionOutcome::Stale, None));
+        }
+    };
     if mutation.kind == MucRetractionKind::Moderator
         && actor.role != "moderator"
         && !matches!(actor.affiliation.as_str(), "owner" | "admin")

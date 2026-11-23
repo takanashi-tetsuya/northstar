@@ -616,7 +616,7 @@ impl<E: RoomEffects> MucRepository for PostgresMucRepository<E> {
         &self,
         operation_id: Uuid,
         target: &ClusterMucOccupancyTarget,
-        transition: &str,
+        transition: MucOccupancyTransition,
         owner_node_id: &str,
         new_connection_uuid: Option<Uuid>,
         new_connection_epoch: Option<i64>,

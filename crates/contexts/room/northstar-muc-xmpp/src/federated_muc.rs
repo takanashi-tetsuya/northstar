@@ -18,6 +18,7 @@ use northstar_room_application::muc_service::{
     MucRetractionKind, MucRetractionMutation, MucRetractionOutcome, MucRoom, MucRoomIncarnation,
     MucSubjectMutation, MucSubjectOutcome, OfflineStoreOutcome, SerializableMucOccupant,
 };
+use northstar_room_core::muc_authority::MucOccupancyTransition;
 use northstar_room_core::occupancy::{MucOccupant, MucOccupantEndpoint};
 use northstar_room_core::stanza::*;
 use northstar_room_core::MucJoinSnapshotError;
@@ -743,7 +744,7 @@ async fn unregister_remote_occupant<H: MucHost>(
                 .transition_local_cluster_occupancy(
                     operation_id,
                     &target,
-                    "leave",
+                    MucOccupancyTransition::Leave,
                     state.federated_muc_owner_node_id(),
                     None,
                     None,

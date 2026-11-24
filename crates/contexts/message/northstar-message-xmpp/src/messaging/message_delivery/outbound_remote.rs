@@ -70,7 +70,15 @@ pub(super) async fn route<S: MessageSession>(
             };
             finalize_admission(session, message_admission_lease, route).await;
             if should_carbon(root) {
-                send_sent_carbons(state, from, &sender_archive, None, None).await;
+                send_sent_carbons_from(
+                    state,
+                    from,
+                    &sender_archive,
+                    None,
+                    None,
+                    carbons::origin(session).as_ref(),
+                )
+                .await;
             }
             state.personal_message_telemetry().message_routed();
             return Ok(Some(S::Action::none()));
@@ -282,7 +290,15 @@ pub(super) async fn route<S: MessageSession>(
         // post-accept history write here that could fail and invite an
         // unsafe client retry.
         if should_carbon(root) {
-            send_sent_carbons(state, from, &sender_archive, None, None).await;
+            send_sent_carbons_from(
+                state,
+                from,
+                &sender_archive,
+                None,
+                None,
+                carbons::origin(session).as_ref(),
+            )
+            .await;
         }
         state.personal_message_telemetry().message_routed();
         return Ok(Some(S::Action::none()));

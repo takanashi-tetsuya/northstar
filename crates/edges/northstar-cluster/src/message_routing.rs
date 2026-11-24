@@ -4,12 +4,12 @@ use crate::ClusterManager;
 use anyhow::Result;
 use northstar_message_application::messaging::OnlineRouteResult;
 use northstar_message_application::telemetry::PersonalMessageTelemetry;
-use northstar_message_core::validation::carbon_message;
 use northstar_room_application::muc_service::{
     ClusterMucAffiliationSubject, ClusterMucInviteAuthority, ClusterMucPrincipal,
 };
 use uuid::Uuid;
 
+pub(crate) mod carbons;
 pub(crate) mod exact;
 
 impl ClusterManager {
@@ -126,92 +126,5 @@ impl ClusterManager {
             subject,
             reason: None,
         }))
-    }
-
-    /// Carbons are best effort after primary acceptance. Keep one attempt and
-    /// one failure count per remote node, including invalid wrapper failures.
-    pub async fn route_sent_carbons_to_remote_resources(
-        &self,
-        bare: &str,
-        forwarded: &str,
-        current: &str,
-        delivered_self: Option<&str>,
-        muc_scope: Option<(&str, &str)>,
-        telemetry: &PersonalMessageTelemetry<'_>,
-    ) {
-        match self.lookup_nodes(bare).await {
-            Ok(nodes) => {
-                for node_id in nodes {
-                    if node_id == self.node_id {
-                        continue;
-                    }
-                    let Some(carbon) = carbon_message("sent", bare, bare, forwarded) else {
-                        telemetry.carbon_delivery_failed();
-                        tracing::error!(%node_id, %bare, direction = "sent", "suppressed an invalid cluster XEP-0280 Carbon payload");
-                        continue;
-                    };
-                    // Version 1 peers use only the first scalar exclusion.
-                    let mut exclusions = delivered_self.into_iter().collect::<Vec<_>>();
-                    exclusions.push(current);
-                    let routed = if let Some((room, nick)) = muc_scope {
-                        self.send_to_node_muc_carbons_excluding(
-                            &node_id,
-                            bare,
-                            &carbon,
-                            &exclusions,
-                            room,
-                            nick,
-                        )
-                        .await
-                    } else {
-                        self.send_to_node_excluding(&node_id, bare, &carbon, true, &exclusions)
-                            .await
-                    };
-                    if let Err(error) = routed {
-                        telemetry.carbon_delivery_failed();
-                        tracing::warn!(%node_id, %bare, ?error, direction = "sent", "post-accept Carbon could not be routed to a cluster peer");
-                    }
-                }
-            }
-            Err(error) => {
-                telemetry.carbon_delivery_failed();
-                tracing::warn!(%bare, ?error, direction = "sent", "cluster Carbon recipient lookup failed after primary acceptance");
-            }
-        }
-    }
-
-    pub async fn route_received_carbons_to_remote_resources(
-        &self,
-        recipient: &str,
-        delivered: Option<&str>,
-        forwarded: &str,
-        telemetry: &PersonalMessageTelemetry<'_>,
-    ) {
-        match self.lookup_nodes(recipient).await {
-            Ok(nodes) => {
-                for node_id in nodes {
-                    if node_id == self.node_id {
-                        continue;
-                    }
-                    let Some(carbon) = carbon_message("received", recipient, recipient, forwarded)
-                    else {
-                        telemetry.carbon_delivery_failed();
-                        tracing::error!(%node_id, %recipient, direction = "received", "suppressed an invalid cluster XEP-0280 Carbon payload");
-                        continue;
-                    };
-                    if let Err(error) = self
-                        .send_to_node(&node_id, recipient, &carbon, true, delivered)
-                        .await
-                    {
-                        telemetry.carbon_delivery_failed();
-                        tracing::warn!(%node_id, %recipient, ?error, direction = "received", "post-accept Carbon could not be routed to a cluster peer");
-                    }
-                }
-            }
-            Err(error) => {
-                telemetry.carbon_delivery_failed();
-                tracing::warn!(%recipient, ?error, direction = "received", "cluster Carbon recipient lookup failed after primary acceptance");
-            }
-        }
     }
 }

@@ -8,6 +8,9 @@ use northstar_delivery_core::{
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
+mod volatile_policy;
+use volatile_policy::{FinalOutboundPolicy, VolatilePolicySink};
+
 /// The transport's sealed authentication control. The session layer only
 /// checks that the queued bytes are the sealed control; the transport reads
 /// its own holder back through `OutboundItem::auth_control`.
@@ -264,7 +267,7 @@ impl MixTransportHandoff {
 /// transport-neutral `OrderedOutboundSink` capability.
 #[derive(Clone)]
 pub struct OutboundSender {
-    inner: std::sync::Arc<dyn OrderedOutboundSink<OutboundItem>>,
+    inner: std::sync::Arc<dyn VolatilePolicySink>,
     /// A full durable queue is a transport failure, not an offline-routing
     /// decision.  Every clone shares this latch so the owning transport is
     /// torn down before a later stanza can cross the delivery gap.
@@ -371,6 +374,31 @@ impl OutboundSender {
         self.send_item(OutboundItem::plain(stanza))
             .await
             .map_err(|error| mpsc::error::SendError(error.0.stanza))
+    }
+
+    pub async fn send_if_current<F, P>(
+        &self,
+        stanza: String,
+        is_current: F,
+        policy: P,
+    ) -> Result<bool, mpsc::error::SendError<String>>
+    where
+        F: Fn() -> bool + Send + Sync,
+        P: std::future::Future<Output = bool> + Send,
+    {
+        match self
+            .inner
+            .enqueue_with_policy(
+                OutboundItem::plain(stanza),
+                &is_current,
+                Some(Box::pin(policy)),
+            )
+            .await
+        {
+            Ok(GuardedEnqueue::Queued) => Ok(true),
+            Ok(GuardedEnqueue::Stale(_)) => Ok(false),
+            Err(error) => Err(mpsc::error::SendError(error.into_item().stanza)),
+        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -516,6 +544,17 @@ impl OrderedOutboundSink<OutboundItem> for TokioOutboundSink {
         item: OutboundItem,
         is_current: &'a (dyn Fn() -> bool + Send + Sync),
     ) -> OutboundFuture<'a, OutboundItem, GuardedEnqueue<OutboundItem>> {
+        self.enqueue_with_policy(item, is_current, None)
+    }
+}
+
+impl VolatilePolicySink for TokioOutboundSink {
+    fn enqueue_with_policy<'a>(
+        &'a self,
+        item: OutboundItem,
+        is_current: &'a (dyn Fn() -> bool + Send + Sync),
+        policy: Option<FinalOutboundPolicy<'a>>,
+    ) -> OutboundFuture<'a, OutboundItem, GuardedEnqueue<OutboundItem>> {
         Box::pin(async move {
             if !is_current() {
                 return Ok(GuardedEnqueue::Stale(item));
@@ -535,6 +574,17 @@ impl OrderedOutboundSink<OutboundItem> for TokioOutboundSink {
             }
             if !is_current() {
                 return Ok(GuardedEnqueue::Stale(item));
+            }
+            if let Some(policy) = policy {
+                if !policy.await {
+                    return Ok(GuardedEnqueue::Stale(item));
+                }
+                if self.backpressure_disconnect.is_cancelled() {
+                    return Err(OutboundQueueError::Closed(item));
+                }
+                if !is_current() {
+                    return Ok(GuardedEnqueue::Stale(item));
+                }
             }
             permit.send(item);
             Ok(GuardedEnqueue::Queued)

@@ -5,6 +5,8 @@ use super::*;
 use crate::{
     listener_dispatch::ClusterListenerDispatch, listener_mix_caps::ClusterListenerMixCaps,
 };
+use northstar_message_application::messaging::ExactMessageRoute;
+use northstar_stream::local_routes::session_table::LocalSessionTable;
 
 pub(super) struct StanzaDelivery<'a> {
     stanza: &'a str,
@@ -346,6 +348,15 @@ pub(super) fn validate_direct_delivery<'a>(
             Some(routes)
         }
     };
+    if carbons_only
+        && (expected_connections.is_none()
+            || !matches!(
+                resolved_message_delivery,
+                Some(ResolvedNodeMessageDelivery::Volatile)
+            ))
+    {
+        return ListenerStep::Continue;
+    }
     ListenerStep::Next(DirectDeliveryOptions {
         blocklist_requested_only,
         roster_requested_only,
@@ -440,7 +451,6 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
                 session.user_id,
                 session.auth_generation,
             )
-            || (carbons_only && !session.carbons.load(std::sync::atomic::Ordering::Acquire))
             || (blocklist_requested_only && !session.blocklist_requested.load(Ordering::Acquire))
             || (roster_requested_only && !session.roster_requested.load(Ordering::Acquire))
             || (privacy_requested_only && !session.privacy_requested.load(Ordering::Acquire))
@@ -451,6 +461,58 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
                     .is_none_or(|membership| membership.nick != *nick)
             })
         {
+            continue;
+        }
+        if carbons_only {
+            let route = ExactMessageRoute {
+                full_jid: jid.clone(),
+                account_id: session.user_id,
+                auth_generation: session.auth_generation,
+                connection_id: session.connection_id,
+                node_id: None,
+                priority: None,
+                available: None,
+            };
+            let table = LocalSessionTable::new(Arc::clone(&dispatch.account_routes.sessions));
+            let scope = carbon_muc_scope
+                .as_ref()
+                .map(|(room, nick)| (room.as_str(), nick.as_str()));
+            let Some((peer, _)) = privacy_peer_kind else {
+                continue;
+            };
+            let Some(active_list) = table.with_exact_carbon_route(&route, scope, |current| {
+                active_privacy_list(&current.privacy_active)
+            }) else {
+                continue;
+            };
+            match message_policy
+                .message
+                .allows_carbon(
+                    northstar_xmpp_types::jid_text::bare_jid(&jid),
+                    route.account_id,
+                    route.connection_id,
+                    active_list.as_deref(),
+                    peer,
+                )
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(error) => {
+                    tracing::warn!(?error, %jid, "privacy policy failed closed for a clustered Carbon");
+                    continue;
+                }
+            }
+            let delivery = node_delivery_stanza(stanza, true, &jid);
+            let accepted = table.with_exact_carbon_route(&route, scope, |current| {
+                active_privacy_list(&current.privacy_active) == active_list
+                    && current.sender.try_send(delivery).is_ok()
+            });
+            if accepted == Some(true) {
+                message_policy.record_online_queue_acceptance(false);
+                *delivered += 1;
+                accepted_full_jid.get_or_insert(jid);
+            }
             continue;
         }
         if !blocklist_requested_only && !roster_requested_only && !privacy_requested_only {

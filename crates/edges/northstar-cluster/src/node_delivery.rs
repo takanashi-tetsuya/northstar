@@ -691,9 +691,11 @@ impl ClusterNodeDelivery {
                     .ok()
                     .flatten()
                 else {
-                    self.record_control_plane_failure(&anyhow::anyhow!(
-                        "cluster delivery acknowledgement timed out"
-                    ));
+                    if !(options.carbons_only && exact_message_version) {
+                        self.record_control_plane_failure(&anyhow::anyhow!(
+                            "cluster delivery acknowledgement timed out"
+                        ));
+                    }
                     return Ok(NodeDeliveryReceipt::default());
                 };
                 let Ok(ack_payload) = serde_json::to_string(&ack) else {
@@ -725,7 +727,11 @@ impl ClusterNodeDelivery {
                                 .is_some_and(|jid| routes.contains_key(jid))
                         })
                 }) {
-                    return Ok(receipt);
+                    return Ok(if options.carbons_only && exact_message_version {
+                        crate::message_routing::carbons::exact_carbon_receipt(&ack, receipt)
+                    } else {
+                        receipt
+                    });
                 }
                 debug_assert!(require_correlated_ack);
             }

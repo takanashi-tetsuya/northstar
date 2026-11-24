@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "retain the original offline and received Carbon follow-up inputs"
+    reason = "retain the original offline follow-up inputs"
 )]
 pub(super) async fn finish<S: MessageSession>(
     session: &S,
@@ -28,10 +28,6 @@ pub(super) async fn finish<S: MessageSession>(
     actor_fence: Option<ActorGenerationFence>,
     policy: DirectMessagePolicy<'_>,
     history_committed: bool,
-    user_id: Uuid,
-    to: &str,
-    delivered_key: &Option<String>,
-    recipient_delivery: &str,
 ) -> Result<Option<S::Action>> {
     if !delivered {
         if direct_delivery_mode == DirectDeliveryMode::VolatileExplicitNoStore {
@@ -150,14 +146,6 @@ pub(super) async fn finish<S: MessageSession>(
                     }
                 }
             }
-        }
-    } else if should_carbon(root)
-        && recipient.id != user_id
-        && (!local_direct || state.message_service().direct_mode() == DirectPostCommitMode::Live)
-    {
-        if let Some(delivered_key) = delivered_key.as_deref() {
-            send_received_carbons(state, bare_jid(to), Some(delivered_key), recipient_delivery)
-                .await;
         }
     }
     Ok(None)

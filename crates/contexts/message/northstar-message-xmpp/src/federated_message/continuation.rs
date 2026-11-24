@@ -4,6 +4,7 @@ use super::{
 };
 use crate::ports::FederatedMessageHost;
 use anyhow::Result;
+use northstar_message_application::message_carbons::{send_received_carbons_to, CarbonExclusion};
 use northstar_message_application::messaging::{
     LocalRecipient, OfflineAdmissionOutcome, OfflineMessageAdmission, PreparedMessageHistory,
 };
@@ -64,11 +65,12 @@ pub(super) async fn finish<H: FederatedMessageHost>(
             && !remote_muc_private_message
         {
             if let Some(delivered_key) = delivered_key.as_deref() {
-                northstar_message_application::message_carbons::send_received_carbons(
+                send_received_carbons_to(
                     state,
                     recipient_by,
-                    Some(delivered_key),
+                    Some(CarbonExclusion::FullJid(delivered_key)),
                     annotated,
+                    Some(recipient.id),
                 )
                 .await;
             }

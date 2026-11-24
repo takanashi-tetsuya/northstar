@@ -1,4 +1,5 @@
 use super::LocalSessionTable;
+use northstar_message_application::messaging::ExactMessageRoute;
 use std::sync::atomic::Ordering;
 
 impl LocalSessionTable {
@@ -18,5 +19,19 @@ impl LocalSessionTable {
         }
         route.carbons.store(enabled, Ordering::Release);
         true
+    }
+
+    pub fn with_exact_carbon_route<T>(
+        &self,
+        route: &ExactMessageRoute,
+        muc_scope: Option<(&str, &str)>,
+        accept: impl FnOnce(&super::OnlineSession) -> T,
+    ) -> Option<T> {
+        self.with_exact_message_route(route, |session| {
+            (muc_scope.is_none_or(|(room, nick)| session.joined_muc_as(room, nick))
+                && session.carbons.load(Ordering::Acquire))
+            .then(|| accept(session))
+        })
+        .flatten()
     }
 }

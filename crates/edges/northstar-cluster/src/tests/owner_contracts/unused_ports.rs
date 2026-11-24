@@ -3,7 +3,15 @@
 pub(super) struct UnusedPorts;
 
 #[derive(Clone)]
-pub(super) struct MessagePorts(pub(super) std::sync::Arc<std::sync::Mutex<Vec<uuid::Uuid>>>);
+pub(super) struct MessagePorts(
+    pub(super) std::sync::Arc<std::sync::Mutex<Vec<uuid::Uuid>>>,
+    pub(super) std::sync::Arc<std::sync::Mutex<Option<CarbonPolicy>>>,
+);
+
+pub(super) struct CarbonPolicy {
+    pub(super) account: uuid::Uuid,
+    pub(super) pause: Option<std::sync::Arc<(tokio::sync::Notify, tokio::sync::Notify)>>,
+}
 
 mod administration;
 mod direct_invitation_stub;
@@ -902,11 +910,18 @@ mod message {
 
         async fn resolve_local_recipient(
             &self,
-            _username: &str,
+            username: &str,
             _local_domain: &str,
             _sender_jid: &str,
         ) -> Result<LocalRecipientDecision> {
-            panic!("unused MessageRepository::resolve_local_recipient port");
+            let policy = self.1.lock().unwrap();
+            let policy = policy
+                .as_ref()
+                .expect("unused MessageRepository::resolve_local_recipient port");
+            Ok(LocalRecipientDecision::Deliver(LocalRecipient {
+                id: policy.account,
+                username: username.to_owned(),
+            }))
         }
 
         async fn default_recipient_privacy_denies(
@@ -926,6 +941,16 @@ mod message {
             _kind: PrivacyStanzaKind,
         ) -> Result<bool> {
             self.0.lock().unwrap().push(user_id);
+            let pause = self
+                .1
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(|policy| policy.pause.clone());
+            if let Some(pause) = pause {
+                pause.0.notify_one();
+                pause.1.notified().await;
+            }
             Ok(true)
         }
 

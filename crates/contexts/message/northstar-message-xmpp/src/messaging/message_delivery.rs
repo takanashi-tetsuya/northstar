@@ -198,6 +198,7 @@ pub async fn message<S: MessageSession>(
             finalize_message_admission(session, &mut message_admission_lease, "muc").await;
         }
         if action.is_none() && should_carbon(root) {
+            let origin = carbons::origin(session);
             let room_jid = target_jid.bare();
             let muc_scope = target_jid.resourcepart().and_then(|_| {
                 session
@@ -208,14 +209,15 @@ pub async fn message<S: MessageSession>(
             if target_jid.resourcepart().is_none() {
                 // Mediated invitations are addressed to the room bare
                 // JID and are explicitly Carbon-eligible under rules:0.
-                send_sent_carbons(state, from, &forwarded, None, None).await;
+                send_sent_carbons_from(state, from, &forwarded, None, None, origin.as_ref()).await;
             } else if let Some((room_jid, nick)) = muc_scope.as_ref() {
-                send_sent_carbons(
+                send_sent_carbons_from(
                     state,
                     from,
                     &forwarded,
                     None,
                     Some((room_jid.as_str(), nick.as_str())),
+                    origin.as_ref(),
                 )
                 .await;
             }
@@ -555,6 +557,36 @@ pub async fn message<S: MessageSession>(
     };
 
     session.enter_frame_stage(MessageFrameStage::Followup);
+    let carbon_origin = carbons::origin(session);
+    let carbon_primary = delivered_key.as_deref().map(CarbonExclusion::FullJid);
+    let (mut sent_carbons, received_carbons) = if delivered {
+        // Capture both audiences before any follow-up work.
+        let sent = carbons::prepare(
+            state,
+            root,
+            local_direct,
+            &recipient,
+            user_id,
+            carbon_primary,
+            from,
+            sender_archive,
+            carbon_origin.as_ref(),
+        )
+        .await;
+        let received = carbons::prepare_received(
+            state,
+            root,
+            local_direct,
+            (recipient.id, bare_jid(to)),
+            user_id,
+            carbon_primary,
+            recipient_delivery,
+        )
+        .await;
+        (sent, received)
+    } else {
+        (None, None)
+    };
     let mut stored_offline = false;
     if let Some(action) = offline_fallback::finish(
         session,
@@ -578,14 +610,29 @@ pub async fn message<S: MessageSession>(
         local_actor_fence,
         commit_policy,
         history_committed,
-        user_id,
-        to,
-        &delivered_key,
-        recipient_delivery,
     )
     .await?
     {
         return Ok(action);
+    }
+    if !delivered {
+        sent_carbons = carbons::prepare(
+            state,
+            root,
+            local_direct,
+            &recipient,
+            user_id,
+            carbon_primary,
+            from,
+            sender_archive,
+            carbon_origin.as_ref(),
+        )
+        .await;
+    }
+    if let Some(fanout) = received_carbons {
+        if !local_direct || state.message_service().direct_mode() == DirectPostCommitMode::Live {
+            fanout.deliver(state).await;
+        }
     }
 
     // Durable deliveries have already decided their archive projections.
@@ -611,17 +658,11 @@ pub async fn message<S: MessageSession>(
             tracing::warn!(?error, %sender_stable_id, route = accepted_route, "accepted message history transaction failed atomically");
         }
     }
-    carbons::send(
-        state,
-        root,
-        local_direct,
-        &recipient,
-        user_id,
-        &delivered_key,
-        from,
-        sender_archive,
-    )
-    .await;
+    if let Some(fanout) = sent_carbons {
+        if !local_direct || state.message_service().direct_mode() == DirectPostCommitMode::Live {
+            fanout.deliver(state).await;
+        }
+    }
     state.personal_message_telemetry().message_routed();
     Ok(S::Action::none())
 }

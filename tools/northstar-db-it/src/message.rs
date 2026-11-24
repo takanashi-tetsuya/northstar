@@ -1,6 +1,7 @@
 //! Message, retraction, retention, direct-spool wake and push repositories.
 
 mod archive_admission;
+mod carbon_audience;
 mod cluster_live_handoff;
 mod commit_authorization;
 mod direct_spool_wake_repository;

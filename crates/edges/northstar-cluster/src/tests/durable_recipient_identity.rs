@@ -86,7 +86,7 @@ impl DirectDeliveryFixture {
         let (_, security) = northstar_security::cluster_bus::test_configuration_pair(namespace);
         let cluster = verification_manager(namespace, security);
         let sessions = Arc::new(dashmap::DashMap::new());
-        let message_ports = MessagePorts(Arc::default());
+        let message_ports = MessagePorts(Arc::default(), Arc::default());
         let generations = Arc::new(Vec::new());
         Self {
             admission: cluster.listener_admission(),
@@ -240,3 +240,6 @@ async fn volatile_primary_keeps_priority_order_unlike_durable_primary() {
 
 #[path = "cluster_live_handoff.rs"]
 mod cluster_live_handoff;
+
+#[path = "carbon_audience.rs"]
+mod carbon_audience;

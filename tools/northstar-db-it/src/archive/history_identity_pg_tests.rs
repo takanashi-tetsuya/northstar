@@ -2035,29 +2035,57 @@ async fn mix_source_dedupe_and_mam_visibility_share_one_snapshot_scope() {
     assert!(offline_rx.recv().await.is_none());
     assert_eq!(offline_message_count(&pool, owner_id).await.unwrap(), 0);
 
-    for (id, mam_backed) in [
-        ("bind2-mam-duplicate", true),
-        ("bind2-temporary-only", false),
-    ] {
-        assert_eq!(
-            store_offline(
-                &pool,
-                recipient_owner_id,
-                "sender@remote.test/Phone",
-                &format!("<message id='{id}'/>"),
-                false,
-                OfflineStorePolicy {
-                    max_messages: 10,
-                    max_bytes: 16_384,
-                    ttl_days: 30,
-                    mam_backed,
-                },
-            )
-            .await
-            .unwrap(),
-            OfflineStoreOutcome::Stored
-        );
-    }
+    let archive_id = Uuid::new_v4();
+    let recipient = "mamrecipient@localhost";
+    let peer = "sender@remote.test/Phone";
+    let stanza = format!("<message id='bind2-mam-duplicate'><stanza-id xmlns='urn:xmpp:sid:0' by='{recipient}' id='{archive_id}'/></message>");
+    let policy = OfflineStorePolicy {
+        max_messages: 10,
+        max_bytes: 16_384,
+        ttl_days: 30,
+        mam_backed: false,
+    };
+    assert_eq!(
+        admit_personal_history_and_c2s_delivery(
+            &pool,
+            None,
+            &[PersonalArchiveWrite {
+                id: archive_id,
+                owner_id: recipient_owner_id,
+                peer_jid: peer,
+                stanza: &stanza,
+                encrypted: false,
+                stanza_id: None,
+            }],
+            &PersonalC2sDeliveryAdmission {
+                id: archive_id,
+                recipient_id: recipient_owner_id,
+                recipient_bare_jid: recipient,
+                local_actor_id: None,
+                sender_jid: peer,
+                stanza: &stanza,
+                target_full_jid: None,
+                encrypted: false,
+                policy,
+            },
+        )
+        .await
+        .unwrap(),
+        PersonalHistoryAdmission::Stored(vec![archive_id])
+    );
+    assert_eq!(
+        store_offline(
+            &pool,
+            recipient_owner_id,
+            peer,
+            "<message id='bind2-temporary-only'/>",
+            false,
+            policy,
+        )
+        .await
+        .unwrap(),
+        OfflineStoreOutcome::Stored
+    );
     let (bind2_tx, mut bind2_rx) = tokio::sync::mpsc::channel(4);
     let bind2_tx = northstar_stream::outbound::OutboundSender::new(bind2_tx);
     assert_eq!(

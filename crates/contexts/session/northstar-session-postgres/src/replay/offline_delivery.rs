@@ -1,6 +1,14 @@
 //! Manage C2S offline replay authorization, leases, page claims and durable delivery ownership.
 
 use super::*;
+use northstar_session_application::replay::{
+    AuthorizedReplayClaim, AuthorizedReplayPage, ReplayDisposition, ReplayMessage,
+    ReplayMessageAuthority, ReplayPageAuthority, ReplayPolicyVersion, ReplaySession,
+};
+
+mod authority;
+pub(crate) use authority::prepare_current_message;
+use authority::{delete_exact_claims, lock_account, mam_proofs, policy_version};
 
 pub(super) fn validate_replay_lease_seconds(lease_seconds: i64) -> Result<()> {
     anyhow::ensure!(
@@ -147,11 +155,7 @@ pub async fn lock_recovery_replay_authorization(
     let mut transaction = pool.begin().await?;
     // The runtime role has no UPDATE on users; the reviewed capability takes
     // the same FOR SHARE lock on the enabled, current-generation row.
-    let authorized = sqlx::query_scalar::<_, bool>("SELECT northstar_lock_auth_generation($1,$2)")
-        .bind(user_id)
-        .bind(expected_auth_generation)
-        .fetch_one(&mut *transaction)
-        .await?;
+    let authorized = lock_account(&mut transaction, user_id, expected_auth_generation).await?;
     if !authorized {
         transaction.rollback().await?;
         return Ok(None);
@@ -237,6 +241,98 @@ pub(super) async fn claim_offline_replay_page_retrying(
     lease_seconds: i64,
     test_hook: ReplayClaimHookRef<'_>,
 ) -> Result<OfflineReplayPageOutcome> {
+    Ok(claim_page_retrying(
+        pool,
+        lease,
+        ttl_days,
+        owner_bare_jid,
+        owner_full_jid,
+        active_privacy_list,
+        bind2_mam_catchup,
+        lease_seconds,
+        None,
+        test_hook,
+    )
+    .await?
+    .offline)
+}
+
+pub(crate) async fn claim_current_page(
+    pool: &PgPool,
+    session: &ReplaySession,
+    authority: ReplayPageAuthority<'_>,
+    bind2_mam_catchup: bool,
+    ttl_days: i64,
+) -> Result<AuthorizedReplayClaim> {
+    #[cfg(test)]
+    let test_hook = None;
+    #[cfg(not(test))]
+    let test_hook = ();
+    let claim = claim_page_retrying(
+        pool,
+        session.lease(),
+        ttl_days,
+        session.owner_bare_jid(),
+        session.owner_full_jid(),
+        authority.active_privacy_list,
+        bind2_mam_catchup,
+        REPLAY_OWNER_LEASE_SECONDS,
+        Some((session, authority.is_current)),
+        test_hook,
+    )
+    .await?;
+    Ok(if claim.stale {
+        AuthorizedReplayClaim::StaleRoute
+    } else if let Some(page) = claim.authorized {
+        AuthorizedReplayClaim::Claimed(page)
+    } else {
+        match claim.offline {
+            OfflineReplayPageOutcome::Empty => AuthorizedReplayClaim::Empty,
+            OfflineReplayPageOutcome::PendingClaims => AuthorizedReplayClaim::PendingClaims,
+            OfflineReplayPageOutcome::LeaseLost => AuthorizedReplayClaim::LeaseLost,
+            OfflineReplayPageOutcome::Claimed(_) => unreachable!("current claims carry policy"),
+        }
+    })
+}
+
+type CurrentClaim<'a> = (&'a ReplaySession, &'a (dyn Fn() -> bool + Send + Sync));
+
+struct ClaimSnapshot {
+    offline: OfflineReplayPageOutcome,
+    authorized: Option<AuthorizedReplayPage>,
+    stale: bool,
+}
+
+impl ClaimSnapshot {
+    fn offline(offline: OfflineReplayPageOutcome) -> Self {
+        Self {
+            offline,
+            authorized: None,
+            stale: false,
+        }
+    }
+
+    fn stale() -> Self {
+        Self {
+            stale: true,
+            ..Self::offline(OfflineReplayPageOutcome::LeaseLost)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn claim_page_retrying(
+    pool: &PgPool,
+    lease: &OfflineReplayLease,
+    ttl_days: i64,
+    owner_bare_jid: &str,
+    owner_full_jid: &str,
+    active_privacy_list: Option<&str>,
+    bind2_mam_catchup: bool,
+    lease_seconds: i64,
+    current: Option<CurrentClaim<'_>>,
+    test_hook: ReplayClaimHookRef<'_>,
+) -> Result<ClaimSnapshot> {
     for attempt in 0..=SERIALIZATION_RETRY_ATTEMPTS {
         let result = claim_offline_replay_page_once(
             pool,
@@ -247,6 +343,7 @@ pub(super) async fn claim_offline_replay_page_retrying(
             active_privacy_list,
             bind2_mam_catchup,
             lease_seconds,
+            current,
             test_hook,
         )
         .await;
@@ -272,7 +369,7 @@ pub(super) async fn claim_offline_replay_page_retrying(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn claim_offline_replay_page_once(
+async fn claim_offline_replay_page_once(
     pool: &PgPool,
     lease: &OfflineReplayLease,
     ttl_days: i64,
@@ -281,8 +378,9 @@ pub(super) async fn claim_offline_replay_page_once(
     active_privacy_list: Option<&str>,
     bind2_mam_catchup: bool,
     lease_seconds: i64,
+    current: Option<CurrentClaim<'_>>,
     _test_hook: ReplayClaimHookRef<'_>,
-) -> Result<OfflineReplayPageOutcome> {
+) -> Result<ClaimSnapshot> {
     validate_replay_lease_seconds(lease_seconds)?;
     let owner_bare_jid = northstar_xmpp_types::jid::canonicalize_bare(owner_bare_jid)?;
     let raw_owner_full_jid = owner_full_jid;
@@ -309,29 +407,41 @@ pub(super) async fn claim_offline_replay_page_once(
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
         .execute(&mut *transaction)
         .await?;
-    let lease_renewed = sqlx::query(
-        "UPDATE offline_replay_leases
-            SET renewed_at=clock_timestamp(),
-                expires_at=clock_timestamp()+($4::DOUBLE PRECISION*INTERVAL '1 second')
-          WHERE recipient_id=$1 AND resource=$2 AND owner_token=$3
-            AND expires_at>clock_timestamp()",
-    )
-    .bind(lease.recipient_id)
-    .bind(&lease.resource)
-    .bind(lease.owner_token)
-    .bind(lease_seconds)
-    .execute(&mut *transaction)
-    .await?
-    .rows_affected();
-    if lease_renewed != 1 {
+    if let Some((session, is_current)) = current {
+        if !is_current()
+            || !lock_account(
+                &mut transaction,
+                lease.recipient_id,
+                session.route().auth_generation,
+            )
+            .await?
+            || !is_current()
+        {
+            transaction.rollback().await?;
+            return Ok(ClaimSnapshot::stale());
+        }
+    }
+    if !renew_owner(&mut transaction, lease, lease_seconds).await? {
         transaction.rollback().await?;
-        return Ok(OfflineReplayPageOutcome::LeaseLost);
+        return Ok(ClaimSnapshot::offline(OfflineReplayPageOutcome::LeaseLost));
     }
 
     #[cfg(test)]
     if let Some(hook) = _test_hook {
         hook.pause_once_after_snapshot().await;
     }
+
+    let version = if let Some((session, is_current)) = current {
+        let version =
+            policy_version(&mut transaction, session.route(), active_privacy_list).await?;
+        if !is_current() || version.is_none() {
+            transaction.rollback().await?;
+            return Ok(ClaimSnapshot::stale());
+        }
+        version
+    } else {
+        None
+    };
 
     // Retention runs before an expired BOSH response is handed off. Thus an
     // old row remains protected by any response fence until this transaction
@@ -466,11 +576,11 @@ pub(super) async fn claim_offline_replay_page_once(
         .fetch_one(&mut *transaction)
         .await?;
         transaction.commit().await?;
-        return Ok(if pending {
+        return Ok(ClaimSnapshot::offline(if pending {
             OfflineReplayPageOutcome::PendingClaims
         } else {
             OfflineReplayPageOutcome::Empty
-        });
+        }));
     }
     let mut candidates = rows
         .into_iter()
@@ -498,8 +608,21 @@ pub(super) async fn claim_offline_replay_page_once(
         &senders,
     )
     .await?;
+    let mam_proofs = if bind2_mam_catchup {
+        mam_proofs(
+            &mut transaction,
+            lease.recipient_id,
+            &owner_bare_jid,
+            &candidates,
+            current.is_none(),
+        )
+        .await?
+    } else {
+        HashMap::new()
+    };
     let mut suppressed = Vec::new();
     let mut messages = Vec::with_capacity(candidates.len());
+    let mut authorized = Vec::with_capacity(candidates.len());
     for row in candidates {
         let denied = replay_policy_denies(
             &owner_bare_jid,
@@ -509,42 +632,57 @@ pub(super) async fn claim_offline_replay_page_once(
             &privacy,
             &roster,
         )?;
-        if (bind2_mam_catchup && row.mam_backed) || denied {
+        let disposition = if denied {
+            ReplayDisposition::Denied
+        } else if let Some(projection) = mam_proofs.get(&row.message.id) {
+            ReplayDisposition::MamProjection(*projection)
+        } else {
+            ReplayDisposition::Deliver
+        };
+        if version.is_some() {
+            authorized.push((
+                ReplayMessage {
+                    id: row.message.id,
+                    stanza: row.message.stanza,
+                },
+                disposition,
+            ));
+        } else if disposition != ReplayDisposition::Deliver {
             suppressed.push(row.message.id);
         } else {
             messages.push(row.message);
         }
     }
     if !suppressed.is_empty() {
-        let removed = sqlx::query(
-            "DELETE FROM offline_messages
-              WHERE recipient_id=$1 AND delivery_claim_id=$2 AND id=ANY($3::UUID[])",
+        delete_exact_claims(
+            &mut transaction,
+            lease.recipient_id,
+            claim_token,
+            &suppressed,
         )
-        .bind(lease.recipient_id)
-        .bind(claim_token)
-        .bind(&suppressed)
-        .execute(&mut *transaction)
-        .await?
-        .rows_affected();
-        anyhow::ensure!(
-            removed == suppressed.len() as u64,
-            "offline suppression lost its exact page claim"
-        );
+        .await?;
+    }
+    if current.is_some_and(|(_, is_current)| !is_current()) {
+        transaction.rollback().await?;
+        return Ok(ClaimSnapshot::stale());
     }
     transaction.commit().await?;
-    if messages.is_empty() {
-        // The page contained only policy/MAM-suppressed projections.  Report
-        // an empty claimed page so the caller continues to the next page
-        // rather than treating this as the high-water end.
-        return Ok(OfflineReplayPageOutcome::Claimed(ClaimedOfflinePage {
+    if let Some(policy_version) = version {
+        return Ok(ClaimSnapshot {
+            authorized: Some(AuthorizedReplayPage {
+                claim_token,
+                policy_version,
+                messages: authorized,
+            }),
+            ..ClaimSnapshot::offline(OfflineReplayPageOutcome::Empty)
+        });
+    }
+    Ok(ClaimSnapshot::offline(OfflineReplayPageOutcome::Claimed(
+        ClaimedOfflinePage {
             claim_token,
             messages,
-        }));
-    }
-    Ok(OfflineReplayPageOutcome::Claimed(ClaimedOfflinePage {
-        claim_token,
-        messages,
-    }))
+        },
+    )))
 }
 
 /// Atomically renew both the resource-scoped coordinator and the exact unsent
@@ -570,21 +708,7 @@ pub async fn renew_offline_replay_before_send(
         "offline replay renewal suffix contains duplicates"
     );
     let mut transaction = pool.begin().await?;
-    let owner = sqlx::query(
-        "UPDATE offline_replay_leases
-            SET renewed_at=clock_timestamp(),
-                expires_at=clock_timestamp()+($4::DOUBLE PRECISION*INTERVAL '1 second')
-          WHERE recipient_id=$1 AND resource=$2 AND owner_token=$3
-            AND expires_at>clock_timestamp()",
-    )
-    .bind(lease.recipient_id)
-    .bind(&lease.resource)
-    .bind(lease.owner_token)
-    .bind(lease_seconds)
-    .execute(&mut *transaction)
-    .await?
-    .rows_affected();
-    if owner != 1 {
+    if !renew_owner(&mut transaction, lease, lease_seconds).await? {
         transaction.rollback().await?;
         return Ok(false);
     }
@@ -606,6 +730,28 @@ pub async fn renew_offline_replay_before_send(
     }
     transaction.commit().await?;
     Ok(true)
+}
+
+async fn renew_owner(
+    transaction: &mut Transaction<'_, Postgres>,
+    lease: &OfflineReplayLease,
+    lease_seconds: i64,
+) -> Result<bool> {
+    Ok(sqlx::query(
+        "UPDATE offline_replay_leases
+            SET renewed_at=clock_timestamp(),
+                expires_at=clock_timestamp()+($4::DOUBLE PRECISION*INTERVAL '1 second')
+          WHERE recipient_id=$1 AND resource=$2 AND owner_token=$3
+            AND expires_at>clock_timestamp()",
+    )
+    .bind(lease.recipient_id)
+    .bind(&lease.resource)
+    .bind(lease.owner_token)
+    .bind(lease_seconds)
+    .execute(&mut **transaction)
+    .await?
+    .rows_affected()
+        == 1)
 }
 
 /// Clear only claims which have not crossed queue acceptance.  Earlier rows

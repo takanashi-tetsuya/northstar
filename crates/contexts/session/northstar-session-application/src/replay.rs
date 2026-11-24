@@ -9,6 +9,9 @@ use northstar_time::{DateTime, Utc};
 use std::{future::Future, pin::Pin, sync::Arc};
 use uuid::Uuid;
 
+mod authority;
+pub use authority::*;
+
 pub const OWNER_LEASE_SECONDS: i64 = 90;
 
 pub type PendingPresencePage = PendingPresenceReplayPage;
@@ -68,6 +71,12 @@ pub struct RecoveryReplayAuthorizationGuard {
 }
 
 impl RecoveryReplayAuthorizationGuard {
+    pub fn new(inner: impl RecoveryReplayGuardPort + 'static) -> Self {
+        Self {
+            inner: Box::new(inner),
+        }
+    }
+
     pub async fn release(self) -> Result<()> {
         self.inner.release().await
     }
@@ -77,7 +86,7 @@ impl RecoveryReplayAuthorizationGuard {
 pub struct ReplaySession {
     lease: OfflineReplayLease,
     owner_bare_jid: String,
-    owner_full_jid: String,
+    route: ReplayRoute,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -100,7 +109,10 @@ impl ReplaySession {
         &self.owner_bare_jid
     }
     pub fn owner_full_jid(&self) -> &str {
-        &self.owner_full_jid
+        &self.route.full_jid
+    }
+    pub fn route(&self) -> &ReplayRoute {
+        &self.route
     }
 
     pub fn recipient_id(&self) -> Uuid {
@@ -268,23 +280,22 @@ impl<R: ReplayLeaseRepository> ReplayService<R> {
     }
     pub async fn start(
         &self,
-        recipient_id: Uuid,
-        current_full_jid: &str,
+        mut route: ReplayRoute,
         explicit_cutoff: Option<DateTime<Utc>>,
     ) -> Result<ReplayStartOutcome> {
         let username = self
             .repository
-            .username(recipient_id)
+            .username(route.recipient_id)
             .await?
             .context("offline replay account disappeared")?;
         let owner_bare_jid =
             northstar_xmpp_types::jid::canonicalize_bare(&format!("{username}@{}", self.domain))?;
-        let owner_full_jid = northstar_xmpp_types::jid::canonical_session_key(current_full_jid)?;
+        route.full_jid = northstar_xmpp_types::jid::canonical_session_key(&route.full_jid)?;
         anyhow::ensure!(
-            northstar_xmpp_types::jid::canonical_bare_key(&owner_full_jid)? == owner_bare_jid,
+            northstar_xmpp_types::jid::canonical_bare_key(&route.full_jid)? == owner_bare_jid,
             "offline replay resource does not belong to recipient account"
         );
-        let parsed = northstar_xmpp_types::jid::CanonicalJid::parse(&owner_full_jid)?;
+        let parsed = northstar_xmpp_types::jid::CanonicalJid::parse(&route.full_jid)?;
         let owner_resource = parsed
             .resourcepart()
             .expect("canonical_session_key requires a resourcepart");
@@ -297,7 +308,7 @@ impl<R: ReplayLeaseRepository> ReplayService<R> {
             match self
                 .repository
                 .acquire_lease(
-                    recipient_id,
+                    route.recipient_id,
                     owner_resource,
                     owner_token,
                     explicit_cutoff,
@@ -309,7 +320,7 @@ impl<R: ReplayLeaseRepository> ReplayService<R> {
                     ReplayStartOutcome::Acquired(ReplaySession {
                         lease,
                         owner_bare_jid,
-                        owner_full_jid,
+                        route,
                     })
                 }
                 OfflineReplayLeaseAcquire::BusyUntil(busy) => {
@@ -504,16 +515,22 @@ mod tests {
     async fn rejects_foreign_resources_before_claiming_and_preserves_database_retry_delay() {
         let service = service(Some("alice"), false, false);
         let user = Uuid::new_v4();
+        let route = |jid: &str| ReplayRoute {
+            recipient_id: user,
+            auth_generation: 0,
+            connection_id: Uuid::new_v4(),
+            full_jid: jid.to_owned(),
+        };
         for jid in [
             "bob@example.test/Phone",
             "alice@elsewhere.test/Phone",
             "alice@example.test",
         ] {
-            assert!(service.start(user, jid, None).await.is_err());
+            assert!(service.start(route(jid), None).await.is_err());
         }
         assert_eq!(service.repository.lease_calls.load(Ordering::SeqCst), 0);
         let ReplayStartOutcome::BusyUntil(busy) = service
-            .start(user, "Alice@EXAMPLE.test/Phone", None)
+            .start(route("Alice@EXAMPLE.test/Phone"), None)
             .await
             .unwrap()
         else {
@@ -533,7 +550,15 @@ mod tests {
         ] {
             let service = service(username, fail_lookup, fail_lease);
             assert!(service
-                .start(Uuid::new_v4(), "alice@example.test/Phone", None)
+                .start(
+                    ReplayRoute {
+                        recipient_id: Uuid::new_v4(),
+                        auth_generation: 0,
+                        connection_id: Uuid::new_v4(),
+                        full_jid: "alice@example.test/Phone".to_owned(),
+                    },
+                    None
+                )
                 .await
                 .is_err());
             assert_eq!(service.repository.lease_calls.load(Ordering::SeqCst), calls);

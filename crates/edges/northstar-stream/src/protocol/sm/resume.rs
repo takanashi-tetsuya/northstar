@@ -1107,15 +1107,9 @@ impl<H: SessionHost> ProtocolSession<H> {
         // The ordinary presence transition will start replay later if this
         // resource becomes eligible.
         if resumed_offline_replay_eligible(claim.available, claim.priority) {
-            let active_privacy = self
-                .privacy_active
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone();
             let replay_service = self.host.replay_service().clone();
             let replay_outbound = self.outbound.clone();
-            let replay_user_id = current_user.id;
-            let replay_full_jid = key.clone();
+            let replay_target = crate::replay::ReplayTarget::for_session(self, &current_user, &key);
             let replay_available = self
                 .available
                 .as_ref()
@@ -1127,9 +1121,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                 crate::replay::replay_resumed_offline(
                     replay_service,
                     replay_outbound,
-                    replay_user_id,
-                    replay_full_jid,
-                    active_privacy,
+                    replay_target,
                     replay_available,
                     replay_availability_generation,
                     replay_expected_generation,

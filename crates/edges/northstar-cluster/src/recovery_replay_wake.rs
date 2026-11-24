@@ -6,7 +6,9 @@ use crate::{ClusterAdmission, DirectPostCommitMode};
 use dashmap::DashMap;
 use northstar_security::cluster_keys::ClusterReadinessAuthority;
 use northstar_session_application::post_actions::PostActionTelemetry;
-use northstar_session_application::replay::{RecoveryReplayStore, ReplayRepository, ReplayService};
+use northstar_session_application::replay::{
+    RecoveryReplayStore, ReplayAuthorityRepository, ReplayRoute, ReplayService,
+};
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::replay;
 use northstar_telemetry::metrics::Metrics;
@@ -166,7 +168,7 @@ fn recovery_route_page_after(
 
 impl<R, S> ClusterRecoveryReplayWake<R, S>
 where
-    R: ReplayRepository + Clone + 'static,
+    R: ReplayAuthorityRepository + Clone + 'static,
     S: RecoveryReplayStore + Clone + 'static,
 {
     pub fn direct_mode(&self) -> DirectPostCommitMode {
@@ -382,9 +384,16 @@ where
         let completed_epoch = Arc::clone(&session.recovery_replay_completed_epoch);
         let replay_service = self.replay.clone();
         let replay_session = session.clone();
-        let recovery_authority = self
-            .store
-            .recovery_authority(session.user_id, session.auth_generation);
+        let replay_target = replay::ReplayTarget::new(
+            ReplayRoute {
+                recipient_id: session.user_id,
+                auth_generation: session.auth_generation,
+                connection_id,
+                full_jid: replay_key,
+            },
+            session.privacy_active.clone(),
+            current_route,
+        );
         let result = session.post_actions.defer_recovery(
             "cluster-recovered-offline-replay",
             async move {
@@ -398,16 +407,12 @@ where
                 pending.completed = replay::replay_after_cluster_reconciliation(
                     replay_service,
                     replay_session.sender,
-                    replay_session.user_id,
-                    replay_key,
-                    replay_session.privacy_active,
+                    replay_target,
                     replay_session.bind2_mam_catchup,
                     replay_session.available,
                     replay_session.availability_generation,
                     generation,
                     cutoff,
-                    current_route,
-                    recovery_authority,
                 )
                 .await;
             },

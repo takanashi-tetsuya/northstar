@@ -25,7 +25,7 @@ use northstar_session_application::{
     cluster_replay_maintenance::ClusterReplayMaintenanceRepository,
     cluster_session_route_maintenance::ClusterSessionRouteMaintenanceRepository,
     node_message_contract_verifier::NodeMessageProjectionRepository,
-    replay::{RecoveryReplayStore, ReplayRepository},
+    replay::{RecoveryReplayStore, ReplayAuthorityRepository},
     session_authority_sweep::SessionAuthoritySweepRepository,
     session_termination_authority::SessionTerminationAuthorityRepository,
 };
@@ -37,7 +37,7 @@ pub trait ClusterAdapters: Send + Sync + 'static {
     type SessionAuthoritySweep: SessionAuthoritySweepRepository + 'static;
     type NodeMessageProjection: NodeMessageProjectionRepository + 'static;
     type SessionTermination: SessionTerminationAuthorityRepository + 'static;
-    type Replay: ReplayRepository + Clone + 'static;
+    type Replay: ReplayAuthorityRepository + Clone + 'static;
     type RecoveryReplay: RecoveryReplayStore + Clone + 'static;
     type MucOccupancyMaintenance: ClusterMucOccupancyMaintenanceRepository + 'static;
     type MucOutboxPreclaim: ClusterMucOutboxPreclaimRepository + 'static;

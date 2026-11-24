@@ -28,6 +28,7 @@ pub use self::offline_delivery::{
     fence_durable_socket_write, release_offline_replay_lease, release_untransferred_offline_claims,
     renew_offline_replay_before_send,
 };
+pub(crate) use self::offline_delivery::{claim_current_page, prepare_current_message};
 pub use self::presence_policy::pending_presence_replay_page_filtered;
 #[cfg(test)]
 use self::presence_policy::pending_presence_replay_page_in_transaction;

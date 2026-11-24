@@ -1,8 +1,18 @@
 use super::*;
+use northstar_session_application::replay::ReplayPageOutcome;
 use northstar_session_postgres::replay_repository::ReplayServiceTestFixture;
 use northstar_time::Utc;
 use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
+
+fn replay_route(recipient_id: Uuid, jid: &str) -> ReplayRoute {
+    ReplayRoute {
+        recipient_id,
+        auth_generation: 0,
+        connection_id: Uuid::new_v4(),
+        full_jid: jid.to_owned(),
+    }
+}
 
 #[test]
 fn recovery_account_lock_is_shorter_than_revocation_budget() {
@@ -21,7 +31,7 @@ async fn elapsed_recovery_deadline_never_schedules_another_retry() {
         .checked_sub(Duration::from_millis(1))
         .expect("a one-millisecond monotonic subtraction is representable");
 
-    assert!(!wait_for_replay_retry(&busy, &outbound, None, elapsed).await);
+    assert!(!wait_for_replay_retry(&busy, &outbound, &|| true, elapsed).await);
 }
 
 #[tokio::test]
@@ -34,8 +44,6 @@ async fn already_invalid_availability_fence_cancels_without_waiting() {
         available,
         generation,
         expected_generation: 11,
-        current_route: None,
-        recovery_authority: None,
     };
     let busy = ReplayBusyUntil {
         expires_at: Utc::now() + northstar_time::Duration::seconds(30),
@@ -46,7 +54,7 @@ async fn already_invalid_availability_fence_cancels_without_waiting() {
         !wait_for_replay_retry(
             &busy,
             &outbound,
-            Some(&availability),
+            &|| availability.current(),
             tokio::time::Instant::now() + Duration::from_secs(30),
         )
         .await
@@ -63,18 +71,17 @@ async fn availability_generation_change_cancels_busy_wait() {
         available,
         generation: Arc::clone(&generation),
         expected_generation: 7,
-        current_route: None,
-        recovery_authority: None,
     };
     let busy = ReplayBusyUntil {
         expires_at: Utc::now() + northstar_time::Duration::seconds(30),
         retry_after: Duration::from_secs(30),
     };
 
+    let current = || availability.current();
     let wait = wait_for_replay_retry(
         &busy,
         &outbound,
-        Some(&availability),
+        &current,
         tokio::time::Instant::now() + Duration::from_secs(2),
     );
     let invalidate = async {
@@ -97,7 +104,8 @@ async fn busy_resource_lease_retries_without_second_availability_transition() {
         .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
     let (service, recipient, full_jid, message_id) =
         ReplayService::busy_retry_test_fixture(&url).await.unwrap();
-    let stale_session = match service.start(recipient, &full_jid, None).await.unwrap() {
+    let route = replay_route(recipient, &full_jid);
+    let stale_session = match service.start(route.clone(), None).await.unwrap() {
         ReplayStartOutcome::Acquired(session) => session,
         ReplayStartOutcome::BusyUntil(_) => panic!("initial replay lease must be available"),
     };
@@ -109,20 +117,18 @@ async fn busy_resource_lease_retries_without_second_availability_transition() {
         available,
         generation,
         expected_generation: 11,
-        current_route: None,
-        recovery_authority: None,
     };
 
     // The current resource starts while an unexpired lease from its previous
     // replay task still exists. Releasing that stale lease must wake the same
     // availability task; no second presence/generation transition is needed.
+    let current = || availability.current();
     let retrying = acquire_replay_session(
         &service,
         &outbound,
-        recipient,
-        &full_jid,
+        &route,
         None,
-        Some(&availability),
+        &current,
         tokio::time::Instant::now() + Duration::from_secs(3),
     );
     let release_stale = async {
@@ -171,6 +177,8 @@ struct ReplayCalls {
     acquisitions: Vec<tokio::time::Instant>,
     page_claims: usize,
     releases: usize,
+    authority_cut: Option<authority::AuthorityCut>,
+    released_suffix: Vec<Uuid>,
 }
 
 #[derive(Clone)]
@@ -196,9 +204,11 @@ impl northstar_session_application::replay::ReplayLeaseRepository for ReplayRepo
         assert_eq!(recipient_id, Uuid::from_u128(901));
         assert_eq!(resource, "Phone");
         assert!(!owner_token.is_nil());
-        assert_eq!(cutoff, None);
         assert_eq!(lease_seconds, 90);
         let mut calls = self.0.lock().unwrap();
+        if calls.authority_cut.is_none() {
+            assert_eq!(cutoff, None);
+        }
         calls.acquisitions.push(tokio::time::Instant::now());
         if calls.busy_remaining > 0 {
             calls.busy_remaining -= 1;
@@ -243,10 +253,21 @@ impl ReplayRepository for ReplayRepositoryFake {
         Ok(true)
     }
     async fn renew_before_send(&self, _: &ReplaySession, _: Uuid, _: &[Uuid]) -> Result<bool> {
-        panic!("empty replay must not renew a page")
+        assert!(
+            self.0.lock().unwrap().authority_cut.is_some(),
+            "empty replay must not renew a page"
+        );
+        Ok(true)
     }
-    async fn release_unsent(&self, _: &ReplaySession, _: Uuid, _: &[Uuid]) -> Result<u64> {
-        panic!("empty replay must not release a suffix")
+    async fn release_unsent(&self, _: &ReplaySession, token: Uuid, ids: &[Uuid]) -> Result<u64> {
+        let mut calls = self.0.lock().unwrap();
+        assert!(
+            calls.authority_cut.is_some(),
+            "empty replay must not release a suffix"
+        );
+        assert_eq!(token, authority::CLAIM_TOKEN);
+        calls.released_suffix.extend_from_slice(ids);
+        Ok(ids.len() as u64)
     }
     async fn pending_presence_page(
         &self,
@@ -309,13 +330,13 @@ async fn replay_busy_deadline_is_absolute_across_retries_and_success_can_precede
         let (sender, _receiver) = mpsc::channel(1);
         let outbound = crate::outbound::OutboundSender::new(sender);
         let start = tokio::time::Instant::now();
+        let route = replay_route(Uuid::from_u128(901), "alice@example.test/Phone");
         let mut acquiring = Box::pin(acquire_replay_session(
             &service,
             &outbound,
-            Uuid::from_u128(901),
-            "alice@example.test/Phone",
+            &route,
             None,
-            None,
+            &|| true,
             start + Duration::from_secs(2),
         ));
         assert!(futures::poll!(&mut acquiring).is_pending(), "{label}");
@@ -376,8 +397,11 @@ async fn bind2_busy_recovery_retries_then_claims_and_releases_the_same_resource(
         let mut replay = Box::pin(replay_bind2_offline(
             service,
             outbound,
-            Uuid::from_u128(901),
-            "alice@example.test/Phone".to_owned(),
+            ReplayTarget::new(
+                replay_route(Uuid::from_u128(901), "alice@example.test/Phone"),
+                Arc::default(),
+                Arc::new(|| true),
+            ),
         ));
         assert!(futures::poll!(&mut replay).is_pending(), "{label}");
         tokio::time::advance(Duration::from_millis(500)).await;
@@ -420,3 +444,7 @@ async fn bind2_busy_recovery_retries_then_claims_and_releases_the_same_resource(
         );
     }
 }
+
+#[cfg(test)]
+#[path = "replay/authority_tests.rs"]
+mod authority;

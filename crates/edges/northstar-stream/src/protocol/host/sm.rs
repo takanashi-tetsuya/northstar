@@ -7,7 +7,9 @@ use std::sync::Arc;
 /// Stream management services, policy, route ownership, and recovery.
 pub trait SessionSmHost: Send + Sync + 'static {
     /// The repository behind [`SessionSmHost::replay_service`].
-    type ReplayStore: northstar_session_application::replay::ReplayRepository + Clone + 'static;
+    type ReplayStore: northstar_session_application::replay::ReplayAuthorityRepository
+        + Clone
+        + 'static;
     /// The repository behind [`SessionSmHost::sm_service`].
     type SmStore: northstar_session_application::sm::SmRepository + 'static;
     /// See `ServerNode::replay_service`.

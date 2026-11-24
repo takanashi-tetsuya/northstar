@@ -743,19 +743,14 @@ impl<H: RosterSessionHost + PresenceRouting> PresenceHandlers for ProtocolSessio
             deliver_service_messages(&*self, &from).await?;
             let replay_service = self.host().replay_service().clone();
             let outbound = self.outbound.clone();
-            let active_privacy_list = self
-                .privacy_active
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone();
+            let replay_target =
+                northstar_stream::replay::ReplayTarget::for_session(self, user, &from);
             let available = self
                 .available
                 .as_ref()
                 .expect("a bound resource has availability state")
                 .clone();
             let generation = self.presence.availability_generation.clone();
-            let recipient_id = user.id;
-            let full_jid = from.clone();
             let account = format!(
                 "{}@{}",
                 user.username,
@@ -767,10 +762,8 @@ impl<H: RosterSessionHost + PresenceRouting> PresenceHandlers for ProtocolSessio
                 northstar_stream::replay::replay_newly_available_resource(
                     replay_service,
                     outbound,
-                    recipient_id,
+                    replay_target,
                     account,
-                    full_jid,
-                    active_privacy_list,
                     bind2_mam_catchup,
                     include_offline,
                     available,
@@ -789,28 +782,21 @@ impl<H: RosterSessionHost + PresenceRouting> PresenceHandlers for ProtocolSessio
         } else if newly_offline_eligible && !self.bind2_mam_catchup {
             let replay_service = self.host().replay_service().clone();
             let outbound = self.outbound.clone();
-            let active_privacy_list = self
-                .privacy_active
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone();
+            let replay_target =
+                northstar_stream::replay::ReplayTarget::for_session(self, user, &from);
             let available = self
                 .available
                 .as_ref()
                 .expect("a bound resource has availability state")
                 .clone();
             let generation = self.presence.availability_generation.clone();
-            let recipient_id = user.id;
-            let full_jid = from.clone();
             let offline_replay_cutoff = offline_replay_cutoff
                 .expect("newly eligible legacy replay captured a database cutoff");
             self.defer_after_transport("nonnegative-offline-replay", async move {
                 northstar_stream::replay::replay_newly_nonnegative_resource(
                     replay_service,
                     outbound,
-                    recipient_id,
-                    full_jid,
-                    active_privacy_list,
+                    replay_target,
                     available,
                     generation,
                     availability_generation,

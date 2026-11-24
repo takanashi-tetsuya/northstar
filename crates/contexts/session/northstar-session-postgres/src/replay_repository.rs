@@ -93,6 +93,33 @@ impl PostgresReplayRepository {
         Self { pool }
     }
 }
+
+impl ReplayAuthorityRepository for PostgresReplayRepository {
+    async fn claim_current_page(
+        &self,
+        session: &ReplaySession,
+        authority: ReplayPageAuthority<'_>,
+        bind2_mam_catchup: bool,
+        offline_ttl_days: i64,
+    ) -> Result<AuthorizedReplayClaim> {
+        crate::replay::claim_current_page(
+            &self.pool,
+            session,
+            authority,
+            bind2_mam_catchup,
+            offline_ttl_days,
+        )
+        .await
+    }
+
+    async fn prepare_current_message(
+        &self,
+        session: &ReplaySession,
+        authority: ReplayMessageAuthority<'_>,
+    ) -> Result<ReplayPreparation> {
+        crate::replay::prepare_current_message(&self.pool, session, authority).await
+    }
+}
 impl ReplayLeaseRepository for PostgresReplayRepository {
     async fn username(&self, recipient_id: Uuid) -> Result<Option<String>> {
         sqlx::query_scalar("SELECT username FROM users WHERE id=$1")

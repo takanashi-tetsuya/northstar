@@ -610,17 +610,11 @@ impl<H: SessionHost> ProtocolSession<H> {
                 // until the resource is successfully active, and never convert a
                 // post-acceptance cleanup outage into a false SASL failure.
                 let replay_service = self.host.replay_service().clone();
-                let user_id = user.id;
                 let outbound = self.outbound.clone();
-                let replay_full_jid = jid.clone();
+                let replay_target = crate::replay::ReplayTarget::for_session(self, &user, &jid);
                 self.defer_after_transport("bind2-offline-replay", async move {
-                    crate::replay::replay_bind2_offline(
-                        replay_service,
-                        outbound,
-                        user_id,
-                        replay_full_jid,
-                    )
-                    .await;
+                    crate::replay::replay_bind2_offline(replay_service, outbound, replay_target)
+                        .await;
                 })?;
             }
             bound_xml = XmlElement::namespaced("bound", BIND2_NS)

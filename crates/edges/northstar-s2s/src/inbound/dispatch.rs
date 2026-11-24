@@ -314,7 +314,23 @@ pub(super) async fn route_inbound_scoped<H: InboundHost>(
         // local user and must never be converted into one implicitly.
         return Ok(Some(s2s_stanza_error(root, "auth", "not-authorized")));
     }
-    if from_is_authenticated && state.s2s_component_domain_configured(to_domain) {
+    let to_is_local_domain = same_s2s_domain(to_domain, state.local_domain());
+    let to_is_pubsub_service = matches!(root.tag_name().name(), "iq" | "message")
+        && to_jid.localpart().is_none()
+        && same_s2s_domain(to_domain, &format!("pubsub.{}", state.local_domain()));
+    let to_is_component = from_is_authenticated && state.s2s_component_domain_configured(to_domain);
+    if from_is_authenticated
+        && (to_is_component || to_is_pubsub_service)
+        && root.tag_name().name() == "message"
+        && matches!(
+            northstar_message_core::retraction::personal_retraction_command(root),
+            Err(northstar_message_core::retraction::InvalidPersonalRetraction::NoStore)
+        )
+    {
+        return Ok((root.attribute("type") != Some("error"))
+            .then(|| s2s_stanza_error(root, "wait", "service-unavailable")));
+    }
+    if to_is_component {
         return if state.send_to_component(to_domain, client_raw.clone()).await {
             Ok(None)
         } else {
@@ -325,10 +341,6 @@ pub(super) async fn route_inbound_scoped<H: InboundHost>(
             )))
         };
     }
-    let to_is_local_domain = same_s2s_domain(to_domain, state.local_domain());
-    let to_is_pubsub_service = matches!(root.tag_name().name(), "iq" | "message")
-        && to_jid.localpart().is_none()
-        && same_s2s_domain(to_domain, &format!("pubsub.{}", state.local_domain()));
     if !from_is_authenticated || (!to_is_local_domain && !to_is_pubsub_service) {
         return Ok(Some(s2s_stanza_error(root, "auth", "not-authorized")));
     }

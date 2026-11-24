@@ -871,6 +871,7 @@ pub fn classify_target(
     stanza: &str,
     sender: &str,
     action_id: &str,
+    now: northstar_time::DateTime<northstar_time::Utc>,
 ) -> Result<TargetClassification> {
     let document = match Document::parse(stanza) {
         Ok(document) => document,
@@ -903,7 +904,7 @@ pub fn classify_target(
         return Ok(TargetClassification::Irrelevant);
     }
     Ok(TargetClassification::OwnedOriginal(tombstone_message(
-        root, action_id,
+        root, action_id, now,
     )))
 }
 
@@ -942,7 +943,11 @@ pub fn retractable_message(root: Node<'_, '_>) -> bool {
     })
 }
 
-pub fn tombstone_message(original: Node<'_, '_>, retraction_id: &str) -> String {
+pub fn tombstone_message(
+    original: Node<'_, '_>,
+    retraction_id: &str,
+    now: northstar_time::DateTime<northstar_time::Utc>,
+) -> String {
     let envelope = RetractionEnvelope {
         from: original.attribute("from"),
         to: original.attribute("to"),
@@ -981,7 +986,7 @@ pub fn tombstone_message(original: Node<'_, '_>, retraction_id: &str) -> String 
         }
         Some((id, by))
     });
-    let stamp = northstar_time::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+    let stamp = now.format("%Y-%m-%dT%H:%M:%SZ");
     render_retraction_tombstone(envelope, stanza_ids, retraction_id, &stamp.to_string())
 }
 

@@ -158,7 +158,11 @@ mod tests {
             "<message from='a@example.test/device' to='b@example.test' id='m1'><body>secret</body></message>",
         )
         .unwrap();
-        let tombstone = tombstone_message(document.root_element(), "retract-1");
+        let tombstone = tombstone_message(
+            document.root_element(),
+            "retract-1",
+            northstar_time::DateTime::UNIX_EPOCH,
+        );
         assert!(!tombstone.contains("secret"));
         assert!(tombstone.contains("<retracted xmlns='urn:xmpp:message-retract:1'"));
         assert!(tombstone.contains("id='retract-1'"));

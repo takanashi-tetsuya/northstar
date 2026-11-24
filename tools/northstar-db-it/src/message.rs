@@ -8,4 +8,5 @@ mod message_repository;
 mod push;
 mod retention;
 mod retraction_conformance;
+mod retraction_lifecycle;
 mod retraction_service;

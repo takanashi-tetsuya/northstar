@@ -77,7 +77,11 @@ fn tombstone_preserves_only_structurally_valid_direct_stanza_ids() {
     )
     .unwrap();
 
-    let tombstone = tombstone_message(document.root_element(), "retraction-id");
+    let tombstone = tombstone_message(
+        document.root_element(),
+        "retraction-id",
+        northstar_time::DateTime::UNIX_EPOCH,
+    );
     let tombstone_document = Document::parse(&tombstone).unwrap();
     let root = tombstone_document.root_element();
     let stanza_ids = root

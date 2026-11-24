@@ -311,7 +311,7 @@ This script has no bootstrap secret. It refuses to continue unless:
 - it is connected to database `xmpp`.
 
 Grant application is ledger-gated. The exact manifest for this release contains
-162 migrations from `0001` through `0163`; `0021` is the sole intentional gap.
+163 migrations from `0001` through `0164`; `0021` is the sole intentional gap.
 Every listed row is identified by version, SQLx description and SHA-384 checksum.
 `bootstrap` accepts only a genuinely empty
 database with no sqlx ledger or application object. `auto` accepts either that
@@ -320,7 +320,7 @@ migrated installation. Both non-empty shapes must match the checked-in manifest
 by exact version, SQLx description and SHA-384 checksum; the intentional `0021`
 gap is part of that set. Missing, unknown, failed, duplicated or modified rows,
 one-sided 0114/0115, and post-0115-without-boundary ledgers fail closed. `exact`
-requires the complete checked-in `0001`-`0163` manifest, not merely the
+requires the complete checked-in `0001`-`0164` manifest, not merely the
 `0114`/`0115` transition boundary. Bootstrap and prepare
 leave runtime, storage, command, and backup with **zero** database, schema, object, type,
 or routine capability. Only post-migration exact reconciliation installs the
@@ -486,8 +486,8 @@ that marker before cleanup. It then:
    and separately proves empty bootstrap plus partial/tampered-ledger rejection;
    demotion;
 4. runs Northstar's real `migrate` command as `northstar_migrator`, comparing
-the successful sqlx ledger with all 162 checked-in migrations from `0001`
-through `0163` (including the intentional numbering gap at `0021`);
+the successful sqlx ledger with all 163 checked-in migrations from `0001`
+through `0164` (including the intentional numbering gap at `0021`);
 5. reapplies the shared `exact` post-migration ACL policy;
 6. removes the function/type override rows and injects missing, unknown, failed,
    and checksum/description-tampered ledger states to prove every audit fails
@@ -583,7 +583,7 @@ role also remains a true superuser by design; isolation depends on keeping its
 secret inside the PostgreSQL/bootstrap trust boundary and using it only for
 explicit maintenance.
 
-The `0001`-`0163` migration SQL and checksums used by both the one-shot migrator
+The `0001`-`0164` migration SQL and checksums used by both the one-shot migrator
 and normal startup verifier are embedded in the release binary. The checked-in
 migration directory remains an auditable source/build input, but replacing
 files beside an installed binary cannot redefine the schema that binary accepts.
@@ -699,3 +699,11 @@ adds the nullable `recipient_local_user_id` column to
 local recipients from `users`. It adds no routine or grant: runtime already
 inserts and updates both tables and reads `users`, and binding a recipient
 takes no row lock on `users`.
+[Migration `0164`](../migrations/0164_retraction_intent_account_incarnation.sql)
+adds the nullable `sender_account_id` column to `personal_retraction_intents`,
+referencing `users(id)` with `ON DELETE CASCADE`, backfills it only where
+surviving owner evidence proves one local sender, and replaces the address
+identity index with two partial unique indexes: account-scoped for local
+intents and address-scoped otherwise. It adds no routine or grant: runtime
+already inserts and reads the intents, and the foreign-key check runs as the
+table owner with only a `FOR KEY SHARE` lock on the referenced `users` row.

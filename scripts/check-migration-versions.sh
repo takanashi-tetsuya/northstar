@@ -1730,6 +1730,29 @@ if grep -Eiq 'NOT NULL|DEFAULT|REFERENCES|^[[:space:]]*(GRANT|REVOKE|DROP|DELETE
 fi
 echo "migration 0163 binds local MIX recipients to their account at migration time"
 
+retraction_account_migration="migrations/0164_retraction_intent_account_incarnation.sql"
+retraction_account_sql=$(tr -s '[:space:]' ' ' < "$retraction_account_migration")
+for required_fragment in \
+    'ALTER TABLE personal_retraction_intents ADD COLUMN sender_account_id UUID REFERENCES users(id) ON DELETE CASCADE;' \
+    'WHERE id IN (SELECT id FROM sender_candidates GROUP BY id HAVING count(*) = 1)' \
+    'DROP INDEX personal_retraction_intent_identity_key;' \
+    'ON personal_retraction_intents(sender_account_id, action_digest) WHERE sender_account_id IS NOT NULL;' \
+    'ON personal_retraction_intents(sender_bare_jid, action_digest) WHERE sender_account_id IS NULL;'
+do
+    if ! printf '%s\n' "$retraction_account_sql" | grep -Fq "$required_fragment"; then
+        echo "migration 0164 retraction intent account scope is missing: $required_fragment" >&2
+        exit 1
+    fi
+done
+# A nullable account column, an unambiguous backfill and the two partial
+# identity indexes only: unproven rows stay address-scoped and nothing is
+# granted, deleted or constrained NOT NULL.
+if grep -Eiq '^[[:space:]]*(GRANT|REVOKE|DELETE|INSERT|TRUNCATE)\b|DROP[[:space:]]+(TABLE|COLUMN)|SET[[:space:]]+NOT[[:space:]]+NULL' "$retraction_account_migration"; then
+    echo "migration 0164 must only add the nullable sender account and its partial indexes" >&2
+    exit 1
+fi
+echo "migration 0164 scopes local retraction intents to the sender account"
+
 # Versions 0001-0013 form the published 0.1.0 baseline that predates the 0.2.0
 # development line. They are immutable: SQLx will reject changed content in an
 # existing database, and this repository-side manifest catches the same mistake

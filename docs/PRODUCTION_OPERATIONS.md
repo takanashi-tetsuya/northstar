@@ -1085,11 +1085,11 @@ password files, transfers database/schema ownership to the migrator, and enters
 the empty-database `bootstrap` phase: `PUBLIC` and every workload have zero
 capability, and global plus schema-local future-object defaults are owner-only.
 The one-shot Compose `migrate` service then applies SQLx and RFC 7622 migrations.
-For this release the exact manifest contains 162 files from `0001` through
-`0163`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
+For this release the exact manifest contains 163 files from `0001` through
+`0164`, with `0021` as the sole intentional numbering gap. `0114` and `0115`
 remain the stopped-upgrade privilege-separation boundary, but they are not the
 end of the accepted ledger: `database-grants` requires every checked-in row
-through `0163`, with the exact SQLx description and SHA-384 checksum, before it
+through `0164`, with the exact SQLx description and SHA-384 checksum, before it
 grants reviewed current objects. The `xmpp` service receives independent
 `runtime_database_url`, `storage_database_url`, and `command_database_url`
 secrets; none of these identities may attempt DDL. Pending, failed, unknown,
@@ -1195,6 +1195,17 @@ them to a new account. Both `ALTER TABLE` statements hold `ACCESS EXCLUSIVE`
 until commit and the backfill rewrites every matched recipient row, so its
 duration grows with the queue. Quiesce MIX delivery on every node, migrate,
 and start only updated binaries: an older worker skips the account check.
+[Migration `0164`](../migrations/0164_retraction_intent_account_incarnation.sql)
+scopes a local personal retraction's replay identity to the sender's account
+UUID instead of the bare address: an account deleted and recreated under the
+same name starts with a fresh action-ID space, and the old account's intents
+are deleted with it. The backfill binds an existing intent only when retained
+owner evidence proves a local sender (an outbound request, or an owner archive
+or spool row whose peer differs from the sender) and exactly one account
+matches; every other row stays address-scoped until it expires. The migration
+drops the address-only identity index that older binaries name as their
+conflict target, so stop every old server process before migrating and start
+only updated binaries.
 On an existing volume, stop every old server process, generate the new storage
 password and URL secrets, reconcile the new role, run migrations and exact
 grants, then start the new binary. The older binary's exact role/ACL audit does
@@ -1368,7 +1379,7 @@ must not switch Compose files in place. Use this stopped upgrade boundary:
    the new bootstrap/workload identities, transfers application-object
    ownership, revokes all workload and `PUBLIC` capability under one advisory
    fence, and accepts only an intact stopped migration-0113 ledger;
-5. run the one-shot migration job through the complete `0001`-`0163` manifest
+5. run the one-shot migration job through the complete `0001`-`0164` manifest
    (excluding the intentional `0021` gap), run exact grant reconciliation,
    rerun role/grant audit, and prove positive
    runtime behavior plus negative DDL/write tests from an isolated copy;

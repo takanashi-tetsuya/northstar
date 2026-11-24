@@ -232,9 +232,13 @@ and Docker artifacts and their provenance. They do not repeat source CI.
   with MIX delivery quiesced on every node. Expect `ACCESS EXCLUSIVE` on both
   delivery tables for the length of the recipient backfill, then start only
   updated binaries; an older worker does not check the bound account.
+- [ ] Apply [migration `0164`](../migrations/0164_retraction_intent_account_incarnation.sql)
+  with every old server process stopped: it drops the address-only retraction
+  identity index that older binaries use as their conflict target. Start only
+  updated binaries.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 162 migrations from `0001` through the current
-  repository maximum `0163`, with `0021` as the sole intentional gap.
+  identity and verify all 163 migrations from `0001` through the current
+  repository maximum `0164`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

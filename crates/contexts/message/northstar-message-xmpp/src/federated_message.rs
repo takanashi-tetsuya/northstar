@@ -10,6 +10,7 @@ use northstar_message_application::messaging::{
     LocalRecipientDecision,
 };
 use northstar_message_application::retractions::ArchiveWrite;
+use northstar_message_core::retraction::{personal_retraction_command, InvalidPersonalRetraction};
 use northstar_message_core::validation::strip_untrusted_direct_delays;
 use northstar_xep_0359::{add_stanza_id, strip_stanza_ids_by_domain};
 use northstar_xml_builder::message_policy::{
@@ -48,11 +49,15 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
             condition,
         ));
     }
-    let personal_retraction_command =
-        match northstar_message_core::retraction::personal_retraction_command(root) {
-            Ok(command) => command,
-            Err(_) => return Ok(inbound_message_error(root, "modify", "bad-request")),
-        };
+    let personal_retraction_command = match personal_retraction_command(root) {
+        Ok(command) => command,
+        Err(InvalidPersonalRetraction::Malformed) => {
+            return Ok(inbound_message_error(root, "modify", "bad-request"));
+        }
+        Err(InvalidPersonalRetraction::NoStore) => {
+            return Ok(inbound_message_error(root, "wait", "service-unavailable"));
+        }
+    };
     let personal_retraction = personal_retraction_command.is_some();
     let from_jid = match CanonicalJid::parse(from) {
         Ok(from) => from,
@@ -436,3 +441,6 @@ fn is_remote_muc_private_message(
 #[cfg(test)]
 #[path = "federated_message_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod retraction_tests;

@@ -34,8 +34,7 @@ use northstar_xep_0280::should_copy as should_carbon;
 use northstar_xep_0359::{add_stanza_id, strip_stanza_ids_by_domain};
 use northstar_xml_builder::message_policy::{
     add_delay_from, encrypted_archive_stanza, encrypted_retraction_archive_stanza,
-    has_explicit_no_store_hint, is_abuse_rated_message, mam_storage_eligible,
-    offline_storage_permitted,
+    is_abuse_rated_message, mam_storage_eligible, offline_storage_permitted,
 };
 use northstar_xml_builder::rewrite::{set_from, set_root_attribute};
 use northstar_xml_builder::stanza::{

@@ -6,12 +6,15 @@ use northstar_archive_postgres::display_changes::{
 use northstar_message_application::retractions::*;
 use northstar_message_core::DirectSpoolEligibility;
 use northstar_message_postgres::direct_cluster::DirectCommitCluster;
+use northstar_time::{DateTime, Utc};
 use roxmltree::Document;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
+
+mod targets;
 
 #[derive(Clone)]
 pub struct PostgresRetractionRepository {
@@ -86,6 +89,11 @@ impl PostgresRetractionRepository {
 impl RetractionRepository for PostgresRetractionRepository {
     async fn apply_prepared(&self, prepared: PreparedRetraction<'_>) -> Result<RetractionOutcome> {
         match self.apply_prepared_once(&prepared).await {
+            Err(error) if error.is::<targets::BusySpoolOriginal>() => {
+                let busy = error.downcast::<targets::BusySpoolOriginal>()?;
+                busy.wait(&self.pool).await?;
+                self.apply_prepared_once(&prepared).await
+            }
             Err(error) if retryable_retraction_abort(&error) => {
                 self.apply_prepared_once(&prepared).await
             }
@@ -147,6 +155,7 @@ impl PostgresRetractionRepository {
             required_accounts.push(delivery.projection.recipient_id);
             required_accounts.extend(delivery.projection.local_actor_id);
         }
+        required_accounts.extend(command.actor_fence.map(|actor| actor.account_id));
         if !northstar_auth_postgres::users::lock_enabled_users_in_transaction(
             &mut transaction,
             &required_accounts,
@@ -175,6 +184,21 @@ impl PostgresRetractionRepository {
             ))?;
             account_bares.insert(id, bare);
         }
+        let sender_account_id = account_bares
+            .iter()
+            .find_map(|(id, bare)| (bare == canonical_sender).then_some(*id));
+        if let Some(actor) = command.actor_fence {
+            let generation_matches: bool =
+                sqlx::query_scalar("SELECT northstar_lock_auth_generation($1,$2)")
+                    .bind(actor.account_id)
+                    .bind(actor.auth_generation)
+                    .fetch_one(&mut *transaction)
+                    .await?;
+            if sender_account_id != Some(actor.account_id) || !generation_matches {
+                transaction.rollback().await?;
+                return Ok(RetractionOutcome::AccountUnavailable);
+            }
+        }
         validate_owner_authority(
             normalized_owners,
             &account_bares,
@@ -201,9 +225,13 @@ impl PostgresRetractionRepository {
               semantic_key_id,semantic_mac,
               owner_projection_key_id,owner_projection_mac,
               outbound_requested,c2s_delivery_requested,
-              c2s_projection_key_id,c2s_projection_mac)
-             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-             ON CONFLICT (sender_bare_jid,action_digest) DO NOTHING",
+              c2s_projection_key_id,c2s_projection_mac,sender_account_id)
+             SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14
+              WHERE NOT EXISTS (
+                  SELECT 1 FROM personal_retraction_intents
+                   WHERE sender_bare_jid=$2 AND action_digest=$4 AND sender_account_id IS NULL
+              )
+             ON CONFLICT DO NOTHING",
         )
         .bind(intent_id)
         .bind(canonical_sender)
@@ -218,6 +246,7 @@ impl PostgresRetractionRepository {
         .bind(normalized_delivery.is_some())
         .bind(primary_delivery.map(|authenticator| authenticator.key_id()))
         .bind(primary_delivery.map(|authenticator| authenticator.mac().as_slice()))
+        .bind(sender_account_id)
         .execute(&mut *transaction)
         .await?
         .rows_affected()
@@ -232,10 +261,12 @@ impl PostgresRetractionRepository {
                         c2s_projection_key_id,c2s_projection_mac
                    FROM personal_retraction_intents
                   WHERE sender_bare_jid=$1 AND action_digest=$2
-                  FOR UPDATE",
+                    AND (sender_account_id=$3 OR sender_account_id IS NULL)
+                  ORDER BY sender_account_id NULLS LAST LIMIT 1 FOR UPDATE",
             )
             .bind(canonical_sender)
             .bind(action_digest.as_slice())
+            .bind(sender_account_id)
             .fetch_optional(&mut *transaction)
             .await?;
             let Some(row) = row else {
@@ -477,12 +508,14 @@ impl PostgresRetractionRepository {
                        AND pg_catalog.md5(peer_jid)=pg_catalog.md5($2::TEXT)
                        AND pg_catalog.md5(stanza_id)=pg_catalog.md5($3::TEXT)
                        AND peer_jid=$2 AND stanza_id=$3
+                       AND ($4::UUID IS NULL OR created_at >= (SELECT created_at FROM users WHERE id=$4))
                      LIMIT 1
                  )",
             )
             .bind(write.write.owner_id)
             .bind(&write.peer_bare_jid)
             .bind(command.action_id)
+            .bind(sender_account_id)
             .fetch_one(&mut **display_writes.transaction())
             .await?;
             if existing {
@@ -507,20 +540,25 @@ impl PostgresRetractionRepository {
         let mut tombstones = Vec::new();
         let mut saw_same_tombstone = false;
         let mut saw_foreign_original = false;
-        for owner in normalized_owners {
-            let ids = sqlx::query_scalar::<_, Uuid>(
-                "SELECT id FROM message_archive
-                  WHERE owner_id=$1
-                    AND pg_catalog.md5(peer_jid)=pg_catalog.md5($2::TEXT)
-                    AND pg_catalog.md5(stanza_id)=pg_catalog.md5($3::TEXT)
-                    AND peer_jid=$2 AND stanza_id=$3 AND source_stanza_id IS NULL
-                  ORDER BY created_at DESC,id DESC LIMIT 3 FOR UPDATE",
-            )
-            .bind(owner.owner_id)
-            .bind(&owner.peer_bare_jid)
-            .bind(command.target_id)
-            .fetch_all(&mut **display_writes.transaction())
+        let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()")
+            .fetch_one(&mut **display_writes.transaction())
             .await?;
+        if normalized_outbound.is_none() {
+            targets::fence_spool_cancellation(display_writes.transaction()).await?;
+        }
+        let candidates = targets::lock_originals(
+            display_writes.transaction(),
+            normalized_owners,
+            command.target_id,
+        )
+        .await?;
+        for owner in normalized_owners {
+            let ids: Vec<_> = candidates
+                .iter()
+                .filter_map(|&(owner_id, archive_id)| {
+                    (owner_id == owner.owner_id).then_some(archive_id)
+                })
+                .collect();
             if ids.len() == 3 {
                 // Three exact owner/peer/stanza-id matches exhaust this
                 // deliberately bounded ambiguity probe. Fail closed instead
@@ -546,7 +584,7 @@ impl PostgresRetractionRepository {
             for row in rows {
                 let archive_id: Uuid = row.get("id");
                 let stanza: String = row.get("stanza");
-                match classify_target(&stanza, canonical_sender, command.action_id)? {
+                match classify_target(&stanza, canonical_sender, command.action_id, now)? {
                     TargetClassification::OwnedOriginal(tombstone) => {
                         owned.push((owner.owner_id, archive_id, stanza, tombstone));
                     }
@@ -595,6 +633,21 @@ impl PostgresRetractionRepository {
             if outcome == PersonalDisplayWriteOutcome::MissingOrChanged {
                 transaction.rollback().await?;
                 return Ok(RetractionOutcome::Conflict);
+            }
+            if outcome == PersonalDisplayWriteOutcome::Replaced && normalized_outbound.is_none() {
+                let cancellation = targets::cancel_unowned_original(
+                    display_writes.transaction(),
+                    *owner_id,
+                    *archive_id,
+                    &account_bares,
+                    canonical_sender,
+                    expected_stanza,
+                )
+                .await;
+                if let Err(error) = cancellation {
+                    transaction.rollback().await?;
+                    return Err(error);
+                }
             }
         }
         for write in normalized_writes {

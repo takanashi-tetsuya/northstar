@@ -52,9 +52,12 @@ pub struct PersonalRetractionCommand {
     pub semantic_payload: String,
 }
 
-/// A message whose retraction cannot be applied, which is answered as a bad request.
+/// Why a personal retraction cannot be applied.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct InvalidPersonalRetraction;
+pub enum InvalidPersonalRetraction {
+    Malformed,
+    NoStore,
+}
 
 pub fn personal_retraction_command(
     root: Node<'_, '_>,
@@ -74,15 +77,19 @@ pub fn personal_retraction_command(
             .attributes()
             .any(|attribute| attribute.namespace().is_some() || attribute.name() != "id")
     {
-        return Err(InvalidPersonalRetraction);
+        return Err(InvalidPersonalRetraction::Malformed);
     }
-    let target_id = retract.attribute("id").ok_or(InvalidPersonalRetraction)?;
-    let action_id = root.attribute("id").ok_or(InvalidPersonalRetraction)?;
+    let target_id = retract
+        .attribute("id")
+        .ok_or(InvalidPersonalRetraction::Malformed)?;
+    let action_id = root
+        .attribute("id")
+        .ok_or(InvalidPersonalRetraction::Malformed)?;
     if [target_id, action_id]
         .into_iter()
         .any(|id| id.is_empty() || id.len() > 1_024 || id.chars().any(char::is_control))
     {
-        return Err(InvalidPersonalRetraction);
+        return Err(InvalidPersonalRetraction::Malformed);
     }
     if root.children().any(|node| {
         node.is_element()
@@ -102,7 +109,10 @@ pub fn personal_retraction_command(
                     | (Some("jabber:x:conference"), "x")
             )
     }) {
-        return Err(InvalidPersonalRetraction);
+        return Err(InvalidPersonalRetraction::Malformed);
+    }
+    if northstar_xml_builder::message_policy::has_explicit_no_store_hint(root) {
+        return Err(InvalidPersonalRetraction::NoStore);
     }
     Ok(Some(PersonalRetractionCommand {
         target_id: target_id.to_owned(),
@@ -111,7 +121,7 @@ pub fn personal_retraction_command(
             .document()
             .input_text()
             .get(root.range())
-            .ok_or(InvalidPersonalRetraction)?
+            .ok_or(InvalidPersonalRetraction::Malformed)?
             .to_owned(),
     }))
 }
@@ -119,3 +129,6 @@ pub fn personal_retraction_command(
 pub fn retraction_target(root: Node<'_, '_>) -> Result<Option<String>, InvalidPersonalRetraction> {
     personal_retraction_command(root).map(|command| command.map(|command| command.target_id))
 }
+
+#[cfg(test)]
+mod tests;

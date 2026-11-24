@@ -3,6 +3,7 @@
 use super::archive_admission::archive_candidate;
 use super::*;
 use northstar_message_application::messaging::invitation_admission::DirectInvitation;
+use northstar_message_core::retraction::InvalidPersonalRetraction;
 use northstar_message_core::{ActorGenerationFence, DirectMessagePolicy, PrivacySelection};
 use std::ops::ControlFlow;
 
@@ -56,15 +57,14 @@ pub async fn message<S: MessageSession>(
     }
     let personal_retraction_target = match retraction_target(root) {
         Ok(target) => target,
-        Err(_) => return Ok(message_error(root, "modify", "bad-request")),
+        Err(InvalidPersonalRetraction::Malformed) => {
+            return Ok(message_error(root, "modify", "bad-request"));
+        }
+        Err(InvalidPersonalRetraction::NoStore) => {
+            return Ok(message_error(root, "wait", "service-unavailable"));
+        }
     };
     let personal_retraction = personal_retraction_target.is_some();
-    if personal_retraction && has_explicit_no_store_hint(root) {
-        // A personal-history retraction is itself a durable history
-        // mutation. Accepting it while promising no-store would make the
-        // stanza's persistence semantics internally contradictory.
-        return Ok(message_error(root, "wait", "service-unavailable"));
-    }
     // Read-only target parsing precedes PubSub authorization forms, PoW
     // consumption and all other message side effects. During degradation,
     // even a long-lived C2S stream cannot admit an unsupported direct.

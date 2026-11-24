@@ -123,9 +123,51 @@ impl ExactMessageRoutePort for ServerNode {
                 auth_generation: session.auth_generation,
                 connection_id: session.connection_id,
                 node_id: None,
+                priority: Some(session.priority.load(Ordering::Relaxed)),
+                available: Some(session.available.load(Ordering::Relaxed)),
             },
             enqueue,
         )
+    }
+
+    async fn capture_remote_message_routes(
+        &self,
+        jid: &str,
+        recipient_id: Uuid,
+    ) -> Option<Vec<ExactMessageRoute>> {
+        if !self.cluster.is_enabled() {
+            return None;
+        }
+        let Ok(Some(account)) =
+            northstar_auth_postgres::users::find_enabled_user_by_id(&self.pool, recipient_id).await
+        else {
+            return Some(Vec::new());
+        };
+        Some(
+            self.cluster
+                .capture_remote_message_routes(jid, recipient_id, account.auth_generation)
+                .await
+                .unwrap_or_default(),
+        )
+    }
+
+    async fn route_exact_remote_primary(
+        &self,
+        jid: &str,
+        route: &ExactMessageRoute,
+        stanza: &str,
+        delivery: Option<DurableDelivery>,
+    ) -> OnlineRouteResult {
+        self.cluster
+            .route_exact_remote_message(
+                jid,
+                std::slice::from_ref(route),
+                stanza,
+                delivery,
+                false,
+                &self.personal_message_telemetry(),
+            )
+            .await
     }
 
     async fn route_direct_remote(
@@ -137,19 +179,7 @@ impl ExactMessageRoutePort for ServerNode {
         delivery: Option<DurableDelivery>,
         deliver_all: bool,
     ) -> OnlineRouteResult {
-        if !self.cluster.is_enabled() {
-            return OnlineRouteResult::default();
-        }
-        let Ok(Some(account)) =
-            northstar_auth_postgres::users::find_enabled_user_by_id(&self.pool, recipient_id).await
-        else {
-            return OnlineRouteResult::default();
-        };
-        let Ok(mut routes) = self
-            .cluster
-            .capture_remote_message_routes(jid, recipient_id, account.auth_generation)
-            .await
-        else {
+        let Some(mut routes) = self.capture_remote_message_routes(jid, recipient_id).await else {
             return OnlineRouteResult::default();
         };
         routes.retain(|route| !excluded_full_jids.contains(&route.full_jid.as_str()));

@@ -280,6 +280,8 @@ async fn captured_route_refuses_replacement_generation_change_and_unbind() {
         auth_generation: 1,
         connection_id: ORIGINAL,
         node_id: None,
+        priority: None,
+        available: None,
     };
     let routes = LocalSessionTable::new(Arc::clone(&fixture.mix_caps.sessions));
     let offer = || {

@@ -716,6 +716,14 @@ impl<H: RosterSessionHost + PresenceRouting> PresenceHandlers for ProtocolSessio
         self.show.store(show, Ordering::Relaxed);
         let priority = announced_priority(root, kind);
         self.priority.store(priority, Ordering::Relaxed);
+        self.presence.route_presence_seq += 1;
+        self.host().publish_route_presence(
+            &from,
+            self.connection_id,
+            now_available,
+            priority,
+            self.presence.route_presence_seq,
+        );
         // XEP-0160 delivers the offline queue on the first available
         // presence whose priority is nonnegative. A resource is allowed
         // to announce priority -1 first and later raise it without an

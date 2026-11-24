@@ -235,7 +235,7 @@ impl DirectMessageRouter {
         }
         let mut routed = OnlineMessageRouter::dispatch_owned(
             port,
-            (request.target.jid(), request.recipient_id),
+            (request.target, request.recipient_id),
             payload,
             matches!(request.target, DirectRouteTarget::Bare(_))
                 && bare_message_route(request.message_type) == BareMessageRoute::All,
@@ -595,6 +595,8 @@ impl DirectMessageRouter {
     }
 }
 
+#[cfg(test)]
+mod primary_ranking_tests;
 #[cfg(test)]
 #[path = "direct_route_tests.rs"]
 mod tests;

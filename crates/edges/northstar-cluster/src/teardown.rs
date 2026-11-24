@@ -544,11 +544,13 @@ impl ClusterSessionRouteRelease {
         let bare_key = format!("{}:user_sessions:{bare}", self.key_prefix);
         let activity_key = format!("{}:session_activity", self.key_prefix);
         let instance_key = format!("{}:session_instance:{full_jid}", self.key_prefix);
+        let presence_key = format!("{}:session_presence:{full_jid}", self.key_prefix);
         let script = redis::Script::new(
             r#"
             if redis.call('get', KEYS[1]) == ARGV[1] and redis.call('get', KEYS[4]) == ARGV[3] then
                 redis.call('del', KEYS[1])
                 redis.call('del', KEYS[4])
+                redis.call('del', KEYS[5])
                 redis.call('srem', KEYS[2], ARGV[2])
                 redis.call('zrem', KEYS[3], ARGV[2])
                 return 1
@@ -561,6 +563,7 @@ impl ClusterSessionRouteRelease {
             .key(&bare_key)
             .key(&activity_key)
             .key(&instance_key)
+            .key(&presence_key)
             .arg(&self.node_id)
             .arg(&full_jid)
             .arg(connection_id.to_string())

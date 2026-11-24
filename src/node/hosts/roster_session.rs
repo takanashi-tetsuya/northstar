@@ -42,6 +42,36 @@ impl RosterSessionHost for ServerNode {
         ))
     }
 
+    fn publish_route_presence(
+        &self,
+        full_jid: &str,
+        connection_id: Uuid,
+        available: bool,
+        priority: i16,
+        seq: u64,
+    ) {
+        if !self.cluster.is_enabled() {
+            return;
+        }
+        let cluster = self.cluster.clone();
+        let telemetry = self.post_accept_failure_telemetry();
+        let full_jid = full_jid.to_owned();
+        tokio::spawn(async move {
+            let error = match tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                cluster.publish_route_presence(&full_jid, connection_id, available, priority, seq),
+            )
+            .await
+            {
+                Ok(Ok(())) => return,
+                Ok(Err(error)) => error,
+                Err(error) => error.into(),
+            };
+            telemetry.record_failure();
+            tracing::warn!(?error, %full_jid, %connection_id, "could not publish message route presence");
+        });
+    }
+
     fn roster_outbox_policy(&self) -> S2sOutboxPolicy {
         self.federation.federation_outbox.outbox_policy()
     }

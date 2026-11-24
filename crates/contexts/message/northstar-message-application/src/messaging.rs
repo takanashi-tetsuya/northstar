@@ -3,12 +3,14 @@
 mod direct_route;
 pub mod direct_workflow;
 mod exact_route;
+mod primary_ranking;
 pub use direct_route::{
     DirectMessageRoutePort, DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome,
     DirectRouteRejection, DirectRouteRequest, DirectRouteTarget,
 };
 pub use exact_route::{ExactMessageRoute, ExactMessageRoutePort};
 use northstar_xep_0016::PrivacyStanzaKind;
+pub use primary_ranking::{rank_primary_routes, PrimaryRouteCandidate};
 
 use crate::direct_commit::{CommitError as DirectCommitError, DirectCommitRepository};
 use crate::retractions::FederationOutboxPolicy;
@@ -256,9 +258,14 @@ impl OnlineMessageRouter {
         approved_targets: &[(String, P::Session)],
     ) -> OnlineRouteResult {
         let mut payload = RoutePayload::new(stanza, delivery);
+        let target = jid
+            .split_once('/')
+            .map_or(DirectRouteTarget::Bare(jid), |(bare, _)| {
+                DirectRouteTarget::Full { jid, bare }
+            });
         Self::dispatch_owned(
             port,
-            (jid, Uuid::nil()),
+            (target, Uuid::nil()),
             &mut payload,
             deliver_all,
             approved_targets,
@@ -268,11 +275,24 @@ impl OnlineMessageRouter {
 
     async fn dispatch_owned<P: DirectMessageRoutePort>(
         port: &P,
-        (jid, recipient_id): (&str, Uuid),
+        (target, recipient_id): (DirectRouteTarget<'_>, Uuid),
         payload: &mut RoutePayload<'_, P::Item>,
         deliver_all: bool,
         approved_targets: &[(String, P::Session)],
     ) -> OnlineRouteResult {
+        let jid = target.jid();
+        if !deliver_all && matches!(target, DirectRouteTarget::Bare(_)) {
+            if let Some(result) = Self::dispatch_ranked_primary_owned(
+                port,
+                (jid, recipient_id),
+                payload,
+                approved_targets,
+            )
+            .await
+            {
+                return result;
+            }
+        }
         let local =
             Self::dispatch_local_owned(port, payload, deliver_all, recipient_id, approved_targets);
         let excluded = approved_targets
@@ -287,6 +307,46 @@ impl OnlineMessageRouter {
             local,
         )
         .await
+    }
+
+    async fn dispatch_ranked_primary_owned<P: DirectMessageRoutePort>(
+        port: &P,
+        (jid, recipient_id): (&str, Uuid),
+        payload: &mut RoutePayload<'_, P::Item>,
+        approved_targets: &[(String, P::Session)],
+    ) -> Option<OnlineRouteResult> {
+        let mut remote = port
+            .capture_remote_message_routes(jid, recipient_id)
+            .await?;
+        remote.retain(|route| {
+            !approved_targets
+                .iter()
+                .any(|(key, _)| key == &route.full_jid)
+        });
+        let local = approved_targets
+            .iter()
+            .map(|target| (target, port.available_priority(&target.1)));
+        for candidate in rank_primary_routes(local, &remote) {
+            let result = match candidate {
+                PrimaryRouteCandidate::Local(target) => Self::dispatch_local_owned(
+                    port,
+                    payload,
+                    false,
+                    recipient_id,
+                    std::slice::from_ref(target),
+                ),
+                PrimaryRouteCandidate::Remote(route) => {
+                    Self::dispatch_remote_attempt(payload, |stanza, delivery| {
+                        port.route_exact_remote_primary(jid, route, stanza, delivery)
+                    })
+                    .await
+                }
+            };
+            if result.delivered || payload.binding_rejected {
+                return Some(result);
+            }
+        }
+        Some(OnlineRouteResult::default())
     }
 
     fn dispatch_local_owned<P: DirectMessageRoutePort>(
@@ -330,36 +390,47 @@ impl OnlineMessageRouter {
         if payload.binding_rejected || (!deliver_all && result.delivered) {
             return result;
         }
-        let permit = match (&payload.witness, payload.delivery) {
-            (Some(witness), Some(source)) => match witness.remote_permit(source) {
-                Ok(permit) => Some(permit),
-                Err(_) => return result,
-            },
-            _ => None,
-        };
-        let remote = port
-            .route_direct_remote(
+        let remote = Self::dispatch_remote_attempt(payload, |stanza, delivery| {
+            port.route_direct_remote(
                 recipient_id,
                 jid,
                 excluded_full_jids,
-                payload.stanza,
-                payload.delivery,
+                stanza,
+                delivery,
                 deliver_all,
             )
-            .await;
-        let positive = remote.delivered;
+        })
+        .await;
         if deliver_all {
-            result.delivered |= positive;
+            result.delivered |= remote.delivered;
+            result
         } else {
-            result = remote;
+            remote
         }
+    }
+
+    async fn dispatch_remote_attempt<'a, I: RouteItem, F: Future<Output = OnlineRouteResult>>(
+        payload: &mut RoutePayload<'a, I>,
+        send: impl FnOnce(&'a str, Option<DurableDelivery>) -> F,
+    ) -> OnlineRouteResult {
+        if payload.binding_rejected {
+            return OnlineRouteResult::default();
+        }
+        let permit = match (&payload.witness, payload.delivery) {
+            (Some(witness), Some(source)) => match witness.remote_permit(source) {
+                Ok(permit) => Some(permit),
+                Err(_) => return OnlineRouteResult::default(),
+            },
+            _ => None,
+        };
+        let remote = send(payload.stanza, payload.delivery).await;
         if let Some(permit) = permit {
-            permit.returned(positive);
+            permit.returned(remote.delivered);
         }
-        if positive {
+        if remote.delivered {
             payload.item.take();
         }
-        result
+        remote
     }
 
     /// RFC 6121 full-JID mismatch handling using the same refused item.

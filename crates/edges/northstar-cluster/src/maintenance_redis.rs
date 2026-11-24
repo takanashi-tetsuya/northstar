@@ -134,11 +134,16 @@ impl ClusterMaintenanceRedis {
         let bare_key = self.key(format!("user_sessions:{bare}"));
         let activity_key = self.key("session_activity".to_owned());
         let instance_key = self.key(format!("session_instance:{full_jid}"));
+        let presence_key = self.key(format!("session_presence:{full_jid}"));
         let script = redis::Script::new(
             r#"
             if redis.call('get', KEYS[1]) ~= ARGV[1] or redis.call('get', KEYS[4]) ~= ARGV[6] then return 0 end
             redis.call('expire', KEYS[1], ARGV[3])
             redis.call('expire', KEYS[4], ARGV[3])
+            local presence = redis.call('get', KEYS[5])
+            if presence and string.sub(presence, 1, #ARGV[6] + 1) == ARGV[6] .. '|' then
+                redis.call('expire', KEYS[5], ARGV[3])
+            end
             redis.call('sadd', KEYS[2], ARGV[2])
             redis.call('expire', KEYS[2], ARGV[4])
             local now = redis.call('time')
@@ -152,6 +157,7 @@ impl ClusterMaintenanceRedis {
             .key(bare_key)
             .key(activity_key)
             .key(instance_key)
+            .key(presence_key)
             .arg(&self.node_id)
             .arg(&full_jid)
             .arg(SESSION_TTL_SECONDS)

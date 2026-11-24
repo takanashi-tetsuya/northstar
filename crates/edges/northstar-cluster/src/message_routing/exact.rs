@@ -10,6 +10,8 @@ use redis::AsyncCommands;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
+mod presence;
+
 impl ClusterManager {
     pub async fn capture_remote_message_routes(
         &self,
@@ -57,8 +59,13 @@ impl ClusterManager {
                     auth_generation,
                     connection_id: owner.connection_uuid,
                     node_id: Some(owner.owner_node_id),
+                    priority: None,
+                    available: None,
                 });
             }
+        }
+        if let Err(error) = self.read_remote_route_presence(pool, &mut routes).await {
+            tracing::warn!(?error, "could not sample remote message route presence");
         }
         Ok(routes)
     }

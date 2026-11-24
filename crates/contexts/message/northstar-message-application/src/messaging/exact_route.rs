@@ -12,9 +12,31 @@ pub struct ExactMessageRoute {
     pub auth_generation: i64,
     pub connection_id: Uuid,
     pub node_id: Option<String>,
+    pub priority: Option<i16>,
+    pub available: Option<bool>,
 }
 
 pub trait ExactMessageRoutePort: FullJidFallbackPort {
+    /// None means the port does not offer clustered ranking; an empty capture
+    /// does not fall back to discovering a new remote audience.
+    fn capture_remote_message_routes(
+        &self,
+        _jid: &str,
+        _recipient_id: Uuid,
+    ) -> impl Future<Output = Option<Vec<ExactMessageRoute>>> + Send {
+        std::future::ready(None)
+    }
+
+    fn route_exact_remote_primary(
+        &self,
+        _jid: &str,
+        _route: &ExactMessageRoute,
+        _stanza: &str,
+        _delivery: Option<DurableDelivery>,
+    ) -> impl Future<Output = OnlineRouteResult> + Send {
+        std::future::ready(OnlineRouteResult::default())
+    }
+
     fn try_direct_local(
         &self,
         _full_jid: &str,

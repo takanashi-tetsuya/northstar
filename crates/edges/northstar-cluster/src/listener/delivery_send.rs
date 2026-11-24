@@ -49,6 +49,8 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
             auth_generation: session.auth_generation,
             connection_id: session.connection_id,
             node_id: None,
+            priority: Some(session.priority.load(Ordering::Relaxed)),
+            available: Some(session.available.load(Ordering::Relaxed)),
         };
         let table = LocalSessionTable::new(Arc::clone(&dispatch.account_routes.sessions));
         let accepted = table.with_exact_message_route(&route, |current| {

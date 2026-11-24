@@ -47,6 +47,7 @@ impl ClusterManager {
         let bare_key = self.key(format!("user_sessions:{bare}"));
         let activity_key = self.key("session_activity".to_owned());
         let instance_key = self.key(format!("session_instance:{full_jid}"));
+        let presence_key = self.key(format!("session_presence:{full_jid}"));
 
         let script = redis::Script::new(
             r#"
@@ -54,6 +55,9 @@ impl ClusterManager {
             if owner and owner ~= ARGV[1] then
                 local owner_alive = ARGV[3] .. ':node:' .. owner .. ':alive'
                 if redis.call('exists', owner_alive) == 1 then return 0 end
+            end
+            if owner ~= ARGV[1] or redis.call('get', KEYS[4]) ~= ARGV[6] then
+                redis.call('del', KEYS[5])
             end
             redis.call('set', KEYS[1], ARGV[1], 'EX', ARGV[4])
             redis.call('set', KEYS[4], ARGV[6], 'EX', ARGV[4])
@@ -69,6 +73,7 @@ impl ClusterManager {
             .key(&bare_key)
             .key(&activity_key)
             .key(&instance_key)
+            .key(&presence_key)
             .arg(&self.node_id)
             .arg(&full_jid)
             .arg(&self.key_prefix)

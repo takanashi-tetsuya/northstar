@@ -47,6 +47,14 @@ pub trait RosterSessionHost: Send + Sync {
     fn blocking_service(&self) -> &BlockingService<impl BlockingRepository>;
     /// The post-accept side-effect failure counter.
     fn post_accept_failure_telemetry(&self) -> PostAcceptFailureTelemetry;
+    fn publish_route_presence(
+        &self,
+        full_jid: &str,
+        connection_id: Uuid,
+        available: bool,
+        priority: i16,
+        seq: u64,
+    );
     /// The federation outbox admission policy of roster subscription traffic.
     fn roster_outbox_policy(&self) -> S2sOutboxPolicy;
     /// Wakes the federation outbox after a roster transition queued remote traffic.

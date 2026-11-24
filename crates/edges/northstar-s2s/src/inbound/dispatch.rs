@@ -42,7 +42,13 @@ pub async fn route_inbound_for_connection<H: InboundHost>(
     if !valid_inbound_wire_namespace(raw) {
         return Ok(InboundFederationRoute::Reply(None));
     }
-    if let Some(condition) = s2s_stream_address_error(raw, authenticated_domain, local_domain) {
+    let address_error =
+        s2s_stream_address_error(raw, authenticated_domain, local_domain).filter(|condition| {
+            !allows_configured_component_target(raw, condition, |domain| {
+                state.s2s_component_domain_configured(domain)
+            })
+        });
+    if let Some(condition) = address_error {
         return Ok(InboundFederationRoute::StreamError(condition));
     }
     let client_raw = client_namespace(raw);
@@ -89,6 +95,22 @@ pub(super) fn s2s_stream_address_error(
         return Some("host-unknown");
     }
     None
+}
+
+fn allows_configured_component_target(
+    raw: &str,
+    address_error: &str,
+    configured: impl FnOnce(&str) -> bool,
+) -> bool {
+    address_error == "host-unknown"
+        && Document::parse(raw).is_ok_and(|document| {
+            let root = document.root_element();
+            root.tag_name().name() == "message"
+                && root
+                    .attribute("to")
+                    .and_then(|target| CanonicalJid::parse(target).ok())
+                    .is_some_and(|target| configured(target.domainpart()))
+        })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -331,6 +353,11 @@ pub(super) async fn route_inbound_scoped<H: InboundHost>(
             .then(|| s2s_stanza_error(root, "wait", "service-unavailable")));
     }
     if to_is_component {
+        if root.has_tag_name(("jabber:client", "message")) {
+            return state
+                .route_inbound_message(root, &client_raw, &from, &to, authenticated_domain)
+                .await;
+        }
         return if state.send_to_component(to_domain, client_raw.clone()).await {
             Ok(None)
         } else {
@@ -443,3 +470,6 @@ pub(super) fn validate_inbound_core_stanza(root: roxmltree::Node<'_, '_>) -> Inb
         Err(condition) => InboundCoreValidation::Error(condition),
     }
 }
+
+#[cfg(test)]
+mod processing_policy_tests;

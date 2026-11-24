@@ -38,6 +38,9 @@ pub(super) async fn finish<H: FederatedMessageHost>(
     archive: &str,
     encrypted: bool,
 ) -> Result<Option<String>> {
+    if !delivered && direct_delivery_mode == DirectDeliveryMode::VolatileExplicitNoStore {
+        return Ok(inbound_message_error(root, "wait", "service-unavailable"));
+    }
     if !delivered && message_type == "headline" {
         return Ok(None);
     }
@@ -81,9 +84,6 @@ pub(super) async fn finish<H: FederatedMessageHost>(
             }
         }
         return Ok(None);
-    }
-    if direct_delivery_mode == northstar_message_core::DirectDeliveryMode::VolatileExplicitNoStore {
-        return Ok(inbound_message_error(root, "wait", "service-unavailable"));
     }
     if !persistence_allowed {
         return Ok(None);

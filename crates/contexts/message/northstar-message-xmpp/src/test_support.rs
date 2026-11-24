@@ -130,6 +130,7 @@ pub(crate) enum Event {
     PostAcceptFailed,
     History(Vec<(ArchiveDirection, Uuid, String)>),
     OutboundCommit(Vec<(ArchiveDirection, Uuid, String)>),
+    VolatileFederation,
     Retraction(Vec<Uuid>),
     WakeOutbox,
 }
@@ -628,7 +629,8 @@ impl MessageHost for Host {
         self.state.record(Event::WakeOutbox);
     }
     async fn send_volatile(&self, _: &str, _: &str, _: String) -> bool {
-        panic!("unexpected volatile federation")
+        self.state.record(Event::VolatileFederation);
+        false
     }
     async fn personal_message_remote_resource_exists(&self, _: &str) -> bool {
         false

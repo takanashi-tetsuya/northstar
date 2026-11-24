@@ -9,6 +9,7 @@ mod authority;
 pub mod direct_handoff;
 mod events;
 pub mod jingle;
+pub mod processing_policy;
 pub mod retraction;
 pub mod route_item;
 pub mod validation;
@@ -305,10 +306,9 @@ pub struct OfflineDeliveryLimits {
 /// Classify direct messages without conflating an explicit XEP-0334 privacy
 /// request with the protocol defaults for ephemeral signal-only messages.
 pub fn direct_delivery_mode(root: roxmltree::Node<'_, '_>) -> DirectDeliveryMode {
-    classify_direct_delivery(
-        northstar_xml_builder::message_policy::has_explicit_no_store_hint(root),
-        northstar_xml_builder::message_policy::offline_storage_permitted(root),
-    )
+    use processing_policy::{classify_message_effects, MessageDirection};
+
+    classify_message_effects(root, MessageDirection::Local { healthy: true }).into()
 }
 
 #[cfg(test)]

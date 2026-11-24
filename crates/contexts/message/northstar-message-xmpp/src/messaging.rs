@@ -23,6 +23,9 @@ use northstar_message_application::{
     direct_lifecycle::{OriginalAdmission, PreparationAdmission},
 };
 use northstar_message_core::direct_delivery_mode;
+use northstar_message_core::processing_policy::{
+    classify_message_effects, MessageDirection, MessageEffects,
+};
 use northstar_message_core::retraction::retraction_target;
 use northstar_message_core::validation::strip_untrusted_direct_delays;
 use northstar_message_core::{
@@ -98,39 +101,11 @@ fn degraded_local_direct_eligible(
                         && node.tag_name().namespace()
                             == Some("http://jabber.org/protocol/pubsub")))
         })
-        && !signal_only_direct_message(root)
-        && direct_delivery_mode(root) == DirectDeliveryMode::Durable
+        && matches!(
+            classify_message_effects(root, MessageDirection::Local { healthy: false }),
+            MessageEffects::Persist { .. }
+        )
         && (!archive_requires_encryption || is_encrypted(root))
-}
-
-/// An explicit store hint does not turn a receipt/chat-state signal into
-/// ordinary direct content for degraded admission.
-fn signal_only_direct_message(root: Node<'_, '_>) -> bool {
-    let mut signal = false;
-    for node in root.children().filter(|node| node.is_element()) {
-        let namespace = node.tag_name().namespace().unwrap_or_default();
-        let name = node.tag_name().name();
-        let is_signal = (namespace == "http://jabber.org/protocol/chatstates"
-            && matches!(
-                name,
-                "active" | "composing" | "paused" | "inactive" | "gone"
-            ))
-            || (namespace == "urn:xmpp:receipts" && name == "received")
-            || (namespace == "urn:xmpp:chat-markers:0" && matches!(name, "markable" | "displayed"));
-        if is_signal {
-            signal = true;
-            continue;
-        }
-        if namespace == "urn:xmpp:hints"
-            || (matches!(namespace, "" | "jabber:client") && name == "thread")
-            || namespace == "urn:xmpp:sid:0"
-            || (namespace == "urn:northstar:pow:1" && name == "pow")
-        {
-            continue;
-        }
-        return false;
-    }
-    signal
 }
 
 /// An outbox wake is only a hint to process a row that has already committed.
@@ -201,19 +176,19 @@ fn direct_origin_id(root: Node<'_, '_>) -> Option<String> {
 /// is already of type `error`. Keep that invariant at every rejection point
 /// in the message pipeline, including policy and federation failures.
 fn message_error<A: MessageOutcome>(root: Node<'_, '_>, error_type: &str, condition: &str) -> A {
+    message_refusal(root, || stanza_error(root, error_type, condition))
+}
+
+fn message_refusal<A: MessageOutcome>(root: Node<'_, '_>, reply: impl FnOnce() -> String) -> A {
     if root.attribute("type") == Some("error") {
         A::none()
     } else {
-        A::send(stanza_error(root, error_type, condition))
+        A::send(reply())
     }
 }
 
 fn message_blocked_error<A: MessageOutcome>(root: Node<'_, '_>) -> A {
-    if root.attribute("type") == Some("error") {
-        A::none()
-    } else {
-        A::send(blocked_stanza_error(root))
-    }
+    message_refusal(root, || blocked_stanza_error(root))
 }
 
 #[cfg(test)]

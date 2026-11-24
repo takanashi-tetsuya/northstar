@@ -5,6 +5,7 @@ mod cluster_live_handoff;
 mod commit_authorization;
 mod direct_spool_wake_repository;
 mod message_repository;
+mod processing_policy;
 mod push;
 mod push_authority;
 mod retention;

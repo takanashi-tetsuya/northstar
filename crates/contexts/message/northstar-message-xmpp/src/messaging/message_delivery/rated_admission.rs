@@ -47,33 +47,15 @@ pub(super) async fn begin<S: MessageSession>(
             // path. Production process_frame() always supplies an owner.
             service.begin_message_admission(&request).await
         };
-        match admission {
-            Ok(MessageAdmissionStart::Proceed { lease, requirement }) => {
-                debug_assert_eq!(requirement.action, "message");
-                *message_admission_lease = lease;
-            }
-            Ok(MessageAdmissionStart::ReplayAccepted) => return Ok(Some(S::Action::none())),
-            Ok(MessageAdmissionStart::InProgress { requirement }) => {
-                state.personal_message_telemetry().rate_limited();
-                return Ok(Some(S::Action::send(abuse_stanza_error(
-                    root,
-                    &requirement,
-                ))));
-            }
-            Ok(MessageAdmissionStart::Denied(error)) => {
-                state.personal_message_telemetry().rate_limited();
-                return Ok(Some(S::Action::send(abuse_stanza_error(
-                    root,
-                    error.requirement(),
-                ))));
-            }
-            Ok(MessageAdmissionStart::Conflict) => {
-                return Ok(Some(message_error(root, "cancel", "conflict")));
-            }
-            Ok(MessageAdmissionStart::CapacityLimited) => {
-                state.personal_message_telemetry().rate_limited();
-                return Ok(Some(message_error(root, "wait", "resource-constraint")));
-            }
+        return match admission {
+            Ok(decision) => Ok(apply_decision(
+                root,
+                decision,
+                message_admission_lease,
+                || {
+                    state.personal_message_telemetry().rate_limited();
+                },
+            )),
             Err(error) => {
                 // Fail closed before routing/archive. A backend failure may
                 // leave this admission or a separate guard transaction
@@ -85,9 +67,42 @@ pub(super) async fn begin<S: MessageSession>(
                 }
                 tracing::error!(?error, user_id = %user_id, "message anti-abuse backend failed before acceptance");
                 state.personal_message_telemetry().abuse_backend_failed();
-                return Ok(Some(message_error(root, "wait", "resource-constraint")));
+                Ok(Some(message_error(root, "wait", "resource-constraint")))
             }
-        }
+        };
     }
     Ok(None)
 }
+
+fn apply_decision<A: MessageOutcome>(
+    root: Node<'_, '_>,
+    decision: MessageAdmissionStart,
+    message_admission_lease: &mut Option<MessageAdmissionLease>,
+    rate_limited: impl FnOnce(),
+) -> Option<A> {
+    let action = match decision {
+        MessageAdmissionStart::Proceed { lease, requirement } => {
+            debug_assert_eq!(requirement.action, "message");
+            *message_admission_lease = lease;
+            return None;
+        }
+        MessageAdmissionStart::ReplayAccepted => A::none(),
+        MessageAdmissionStart::InProgress { requirement } => {
+            rate_limited();
+            message_refusal(root, || abuse_stanza_error(root, &requirement))
+        }
+        MessageAdmissionStart::Denied(error) => {
+            rate_limited();
+            message_refusal(root, || abuse_stanza_error(root, error.requirement()))
+        }
+        MessageAdmissionStart::Conflict => message_error(root, "cancel", "conflict"),
+        MessageAdmissionStart::CapacityLimited => {
+            rate_limited();
+            message_error(root, "wait", "resource-constraint")
+        }
+    };
+    Some(action)
+}
+
+#[cfg(test)]
+mod tests;

@@ -36,20 +36,19 @@ pub(super) async fn route<S: MessageSession>(
         let rewritten = set_from(routed_raw, from);
         let routed = strip_stanza_ids_by_domain(&rewritten, state.local_domain());
         let sender_archive = add_stanza_id(&rewritten, bare_jid(from), stable_id);
-        if !personal_retraction
-            && direct_delivery_mode(root) == DirectDeliveryMode::VolatileExplicitNoStore
-        {
+        let effects = classify_message_effects(
+            root,
+            MessageDirection::Federation {
+                healthy: state.message_service().direct_mode() == DirectPostCommitMode::Live,
+            },
+        );
+        let MessageEffects::Persist { permanent } = effects else {
             if grant_revision.is_some() {
                 // Granting affiliation for a members-only invitation is
                 // a durable authorization mutation. Never send an invite
                 // which the recipient could not subsequently exercise.
                 return Ok(Some(message_error(root, "wait", "service-unavailable")));
             }
-            // A persistent S2S outbox would contradict the explicit
-            // XEP-0334 no-store request. Only an already authenticated,
-            // writable S2S/Bidi stream may accept this stanza. The
-            // helper waits for the actual socket write and never creates
-            // a connection, database admission row, archive or retry.
             if !state
                 .send_volatile(state.local_domain(), domain, routed)
                 .await
@@ -57,17 +56,25 @@ pub(super) async fn route<S: MessageSession>(
                 tracing::debug!(
                     source_domain = %state.local_domain(),
                     target_domain = %domain,
-                    "volatile no-store stanza was not accepted by an authenticated S2S route"
+                    "volatile stanza was not accepted by an authenticated S2S route"
                 );
-                return Ok(Some(message_error(root, "wait", "service-unavailable")));
+                return Ok(Some(match effects.volatile_route_refusal() {
+                    Some((kind, condition)) => message_error(root, kind, condition),
+                    None => S::Action::none(),
+                }));
             }
-            finalize_admission(session, message_admission_lease, "remote-no-store").await;
+            let route = if effects == MessageEffects::NoStore {
+                "remote-no-store"
+            } else {
+                "remote-volatile"
+            };
+            finalize_admission(session, message_admission_lease, route).await;
             if should_carbon(root) {
                 send_sent_carbons(state, from, &sender_archive, None, None).await;
             }
             state.personal_message_telemetry().message_routed();
             return Ok(Some(S::Action::none()));
-        }
+        };
         let encrypted = is_encrypted(root);
         let archive = if encrypted {
             if let Some(target_id) = personal_retraction_target.as_deref() {
@@ -92,7 +99,7 @@ pub(super) async fn route<S: MessageSession>(
             !personal_retraction
                 && state
                     .message_service()
-                    .archive_content_eligible(mam_storage_eligible(root), encrypted),
+                    .archive_content_eligible(permanent, encrypted),
         );
         let policy = Some(DirectMessagePolicy {
             from,
@@ -282,3 +289,6 @@ pub(super) async fn route<S: MessageSession>(
     }
     Ok(None)
 }
+
+#[cfg(test)]
+mod tests;

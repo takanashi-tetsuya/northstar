@@ -2,12 +2,18 @@
 
 use crate::node::ServerNode;
 use anyhow::Result;
+use northstar_federation_core::wire::s2s_stanza_error;
+use northstar_message_core::processing_policy::{
+    classify_message_effects, validation_refusal, MessageDirection, MessageEffects,
+};
+use northstar_message_core::DirectPostCommitMode;
 use northstar_pubsub_application::profile::PublicVCard;
 use northstar_roster_core::PresenceAccount;
 use northstar_s2s::inbound_host::{InboundHost, InboundPepRequest, PubSubReply};
 use northstar_stream::local_routes::session::OnlineSession;
+use northstar_xmpp_types::jid::CanonicalJid;
 use roxmltree::Node;
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 use uuid::Uuid;
 
 impl InboundHost for ServerNode {
@@ -134,6 +140,28 @@ impl InboundHost for ServerNode {
         to: &str,
         authenticated_domain: &str,
     ) -> Result<Option<String>> {
+        if let Some(target) = CanonicalJid::parse(to)
+            .ok()
+            .filter(|jid| self.s2s_component_domain_configured(jid.domainpart()))
+        {
+            let domain = target.domainpart();
+            return Ok(route_component_message(
+                root,
+                northstar_message_core::validation::validate_routed_message(
+                    root,
+                    &self.config.xmpp_extensions,
+                ),
+                self.message.message_service().direct_mode() == DirectPostCommitMode::Live,
+                self.send_to_component(domain, raw.to_owned()),
+                northstar_s2s::outbound::send_volatile_on_authenticated_route(
+                    self,
+                    authenticated_domain,
+                    domain,
+                    raw.to_owned(),
+                ),
+            )
+            .await);
+        }
         northstar_message_xmpp::federated_message::route_inbound_message(
             self,
             root,
@@ -319,6 +347,31 @@ impl InboundHost for ServerNode {
     }
 }
 
+async fn route_component_message(
+    root: Node<'_, '_>,
+    validation: std::result::Result<(), &'static str>,
+    healthy: bool,
+    enqueue: impl Future<Output = bool>,
+    send_volatile: impl Future<Output = bool>,
+) -> Option<String> {
+    if let Err(condition) = validation {
+        return (root.attribute("type") != Some("error")).then(|| {
+            let (kind, condition) = validation_refusal(condition);
+            s2s_stanza_error(root, kind, condition)
+        });
+    }
+    let effects = classify_message_effects(root, MessageDirection::Component { healthy });
+    if matches!(effects, MessageEffects::Persist { .. }) {
+        return (!enqueue.await).then(|| s2s_stanza_error(root, "cancel", "service-unavailable"));
+    }
+    if send_volatile.await {
+        return None;
+    }
+    effects
+        .volatile_route_refusal()
+        .map(|(kind, condition)| s2s_stanza_error(root, kind, condition))
+}
+
 fn inbound_pubsub_reply(reply: northstar_pubsub_xmpp::pubsub::PubSubReply) -> PubSubReply {
     use northstar_pubsub_xmpp::pubsub::PubSubReply as Reply;
 
@@ -332,3 +385,6 @@ fn inbound_pubsub_reply(reply: northstar_pubsub_xmpp::pubsub::PubSubReply) -> Pu
 #[cfg(test)]
 #[path = "s2s_inbound_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod processing_policy_tests;

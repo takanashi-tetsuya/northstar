@@ -1,3 +1,6 @@
+use northstar_message_core::processing_policy::{
+    classify_message_effects, MessageDirection, MessageEffects,
+};
 use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
 use northstar_xml_builder::stanza::is_encrypted;
 
@@ -23,40 +26,11 @@ pub(super) fn degraded_inbound_direct_eligible(
                         && node.tag_name().namespace()
                             == Some("http://jabber.org/protocol/pubsub")))
         })
-        && !signal_only_inbound_direct_message(root)
-        && northstar_message_core::direct_delivery_mode(root)
-            == northstar_message_core::DirectDeliveryMode::Durable
+        && matches!(
+            classify_message_effects(root, MessageDirection::Local { healthy: false }),
+            MessageEffects::Persist { .. }
+        )
         && (!archive_requires_encryption || is_encrypted(root))
-}
-
-/// A storage hint does not turn a receipt or chat-state signal into a
-/// recoverable direct message when live delivery is unavailable.
-fn signal_only_inbound_direct_message(root: roxmltree::Node<'_, '_>) -> bool {
-    let mut signal = false;
-    for node in root.children().filter(roxmltree::Node::is_element) {
-        let namespace = node.tag_name().namespace().unwrap_or_default();
-        let name = node.tag_name().name();
-        let is_signal = (namespace == "http://jabber.org/protocol/chatstates"
-            && matches!(
-                name,
-                "active" | "composing" | "paused" | "inactive" | "gone"
-            ))
-            || (namespace == "urn:xmpp:receipts" && name == "received")
-            || (namespace == "urn:xmpp:chat-markers:0" && matches!(name, "markable" | "displayed"));
-        if is_signal {
-            signal = true;
-            continue;
-        }
-        if namespace == "urn:xmpp:hints"
-            || (matches!(namespace, "" | "jabber:client" | "jabber:server") && name == "thread")
-            || namespace == "urn:xmpp:sid:0"
-            || (namespace == "urn:northstar:pow:1" && name == "pow")
-        {
-            continue;
-        }
-        return false;
-    }
-    signal
 }
 
 pub(super) fn degraded_inbound_privacy_uses_default(

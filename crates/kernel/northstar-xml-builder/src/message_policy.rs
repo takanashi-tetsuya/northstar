@@ -160,7 +160,15 @@ pub fn message_storage_policy(root: Node<'_, '_>) -> Result<MessageStoragePolicy
         });
     }
 
-    // Pure chat states and delivery receipts are transient by default.
+    let signal_only = is_signal_only_message(root);
+    Ok(MessageStoragePolicy {
+        temporary: !signal_only,
+        permanent: !signal_only,
+    })
+}
+
+/// Standalone delivery signals can carry metadata without becoming content.
+pub fn is_signal_only_message(root: Node<'_, '_>) -> bool {
     let mut found_signal = false;
     for node in root.children().filter(|node| node.is_element()) {
         let namespace = node.tag_name().namespace().unwrap_or_default();
@@ -171,24 +179,21 @@ pub fn message_storage_policy(root: Node<'_, '_>) -> Result<MessageStoragePolicy
                 "active" | "composing" | "paused" | "inactive" | "gone"
             ))
             || (namespace == "urn:xmpp:receipts" && name == "received")
-            || (namespace == "urn:xmpp:chat-markers:0" && matches!(name, "markable" | "displayed"));
+            || (namespace == "urn:xmpp:chat-markers:0"
+                && matches!(name, "markable" | "received" | "displayed" | "acknowledged"));
         let is_signal_metadata = namespace == "urn:xmpp:hints"
-            || (matches!(namespace, "" | "jabber:client") && name == "thread")
+            || (matches!(namespace, "" | "jabber:client" | "jabber:server") && name == "thread")
             || namespace == "urn:xmpp:sid:0"
+            || (namespace == "urn:xmpp:delay" && name == "delay")
+            || (namespace == "urn:xmpp:carbons:2" && name == "private")
             || (namespace == "urn:northstar:pow:1" && name == "pow");
         if is_signal || is_signal_metadata {
             found_signal |= is_signal;
             continue;
         }
-        return Ok(MessageStoragePolicy {
-            temporary: true,
-            permanent: true,
-        });
+        return false;
     }
-    Ok(MessageStoragePolicy {
-        temporary: !found_signal,
-        permanent: !found_signal,
-    })
+    found_signal
 }
 
 pub fn encrypted_archive_stanza(stanza: &str) -> String {

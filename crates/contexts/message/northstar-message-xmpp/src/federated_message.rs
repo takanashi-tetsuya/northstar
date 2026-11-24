@@ -10,12 +10,13 @@ use northstar_message_application::messaging::{
     LocalRecipientDecision,
 };
 use northstar_message_application::retractions::ArchiveWrite;
+use northstar_message_core::processing_policy::{
+    classify_message_effects, MessageDirection, MessageEffects,
+};
 use northstar_message_core::retraction::{personal_retraction_command, InvalidPersonalRetraction};
 use northstar_message_core::validation::strip_untrusted_direct_delays;
 use northstar_xep_0359::{add_stanza_id, strip_stanza_ids_by_domain};
-use northstar_xml_builder::message_policy::{
-    encrypted_archive_stanza, mam_storage_eligible, offline_storage_permitted,
-};
+use northstar_xml_builder::message_policy::encrypted_archive_stanza;
 use northstar_xml_builder::stanza::{is_encrypted, stanza_error_type};
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
 use std::ops::ControlFlow;
@@ -59,6 +60,7 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
         }
     };
     let personal_retraction = personal_retraction_command.is_some();
+    let effects = classify_message_effects(root, MessageDirection::Local { healthy: true });
     let from_jid = match CanonicalJid::parse(from) {
         Ok(from) => from,
         Err(_) => return Ok(inbound_message_error(root, "modify", "jid-malformed")),
@@ -96,15 +98,13 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
         .await?
     {
         LocalRecipientDecision::Missing => {
-            return Ok(
-                if northstar_message_core::missing_user_message_should_error(
+            let should_error = effects == MessageEffects::NoStore
+                || northstar_message_core::missing_user_message_should_error(
                     root.attribute("type").unwrap_or("normal"),
-                ) {
-                    inbound_message_error(root, "cancel", "service-unavailable")
-                } else {
-                    None
-                },
-            );
+                );
+            return Ok(should_error
+                .then(|| inbound_message_error(root, "cancel", "service-unavailable"))
+                .flatten());
         }
         LocalRecipientDecision::Blocked => {
             return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
@@ -143,7 +143,8 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
     let annotated = add_stanza_id(&authoritative_raw, &recipient_by, stable_id);
     let encrypted = is_encrypted(root);
     let durable_content_allowed = encrypted || !state.archive_requires_encryption();
-    let persistence_allowed = personal_retraction || offline_storage_permitted(root);
+    let persistence_allowed =
+        personal_retraction || matches!(effects, MessageEffects::Persist { .. });
     let archive = if encrypted {
         if let Some(command) = personal_retraction_command.as_ref() {
             northstar_xml_builder::message_policy::encrypted_retraction_archive_stanza(
@@ -171,14 +172,15 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
         archive_write.clone(),
         ArchiveDirection::Inbound,
         !personal_retraction
-            && state
-                .message_service()
-                .archive_content_eligible(mam_storage_eligible(root), encrypted),
+            && state.message_service().archive_content_eligible(
+                matches!(effects, MessageEffects::Persist { permanent: true }),
+                encrypted,
+            ),
     );
     let mut history_committed = false;
     let mut durable_c2s_delivery = None;
     let mut live_claim_id = None;
-    let direct_delivery_mode = northstar_message_core::direct_delivery_mode(root);
+    let direct_delivery_mode = effects.into();
     let commit_policy = northstar_message_core::DirectMessagePolicy {
         from: &canonical_from,
         to,
@@ -409,7 +411,16 @@ fn inbound_message_error(
     error_type: &str,
     condition: &str,
 ) -> Option<String> {
-    (root.attribute("type") != Some("error")).then(|| s2s_stanza_error(root, error_type, condition))
+    (root.attribute("type") != Some("error")).then(|| {
+        let error_type = if condition == "service-unavailable"
+            && northstar_xml_builder::message_policy::has_explicit_no_store_hint(root)
+        {
+            "wait"
+        } else {
+            error_type
+        };
+        s2s_stanza_error(root, error_type, condition)
+    })
 }
 
 #[cfg(test)]

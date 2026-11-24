@@ -84,6 +84,32 @@ def repository_cluster_protocol_version() -> str:
 
 CLUSTER_PROTOCOL_VERSION = repository_cluster_protocol_version()
 
+
+def repository_exact_message_delivery_version() -> str:
+    """Read the exact message delivery contract version (S50, C5-21).
+
+    Message payloads that name an exact route or an initial spool reservation
+    use this version instead of the node protocol version, so the ACK probe
+    reads it from the Rust contract rather than keeping its own literal.
+    """
+
+    source = ROOT.parent / "crates" / "edges" / "northstar-cluster" / "src" / "delivery_contract.rs"
+    try:
+        text = source.read_text(encoding="utf-8")
+    except OSError as error:
+        raise RuntimeError(f"cannot read cluster delivery contract: {source}") from error
+    match = re.search(
+        r'^pub\(super\) const EXACT_MESSAGE_DELIVERY_VERSION: &str = "([0-9]+)";$',
+        text,
+        flags=re.MULTILINE,
+    )
+    if match is None or int(match.group(1)) <= int(CLUSTER_PROTOCOL_VERSION):
+        raise RuntimeError("exact message delivery contract is missing or invalid")
+    return match.group(1)
+
+
+EXACT_MESSAGE_DELIVERY_VERSION = repository_exact_message_delivery_version()
+
 SM_NAMESPACE = "urn:xmpp:sm:3"
 SASL2_NAMESPACE = "urn:xmpp:sasl:2"
 STREAM_NAMESPACE = "http://etherx.jabber.org/streams"
@@ -511,13 +537,22 @@ def paused_node_for_ack(pid: int):
             signal.signal(signal.SIGALRM, previous_handler)
 
 
-def validate_ack_probe_request(envelope: dict, target: str, stanza_id: str, previous: dict | None = None) -> dict:
+def validate_ack_probe_request(
+    envelope: dict,
+    target: str,
+    connection: str,
+    stanza_id: str,
+    previous: dict | None = None,
+) -> dict:
     payload = envelope.get("payload")
     fixture.check(isinstance(payload, dict), "ACK probe did not observe a delivery payload")
+    # A full-JID message carries the exact route captured before routing, so
+    # it uses the exact message delivery contract (S50), not the node version.
     fixture.check(
-        payload.get("protocol_version") == CLUSTER_PROTOCOL_VERSION
+        payload.get("protocol_version") == EXACT_MESSAGE_DELIVERY_VERSION
         and payload.get("delivery") == {"reliability": "volatile"}
-        and payload.get("target") == target,
+        and payload.get("target") == target
+        and payload.get("expected_connections") == {target: connection},
         "ACK probe observed the wrong delivery contract or exact target",
     )
     try:
@@ -1865,7 +1900,7 @@ def run_faults() -> None:
                 "<no-store xmlns='urn:xmpp:hints'/></message>"
             )
             request_envelope = subscriber_envelope(subscriber)
-            request = validate_ack_probe_request(request_envelope, fake_full, "forged-ack")
+            request = validate_ack_probe_request(request_envelope, fake_full, fake_connection, "forged-ack")
             request_id = request["request_id"]
             nonce = request["ack_nonce"]
             ack_channel = f"{prefix}:node:{request_envelope['source_node']}"
@@ -1934,7 +1969,9 @@ def run_faults() -> None:
                 "<no-store xmlns='urn:xmpp:hints'/></message>"
             )
             duplicate_envelope = subscriber_envelope(subscriber)
-            duplicate_request = validate_ack_probe_request(duplicate_envelope, fake_full, "duplicate-ack", request)
+            duplicate_request = validate_ack_probe_request(
+                duplicate_envelope, fake_full, fake_connection, "duplicate-ack", request
+            )
             negative_ack = {
                 "request_id": duplicate_request["request_id"],
                 "nonce": duplicate_request["ack_nonce"],

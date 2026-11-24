@@ -15,6 +15,7 @@ spec = importlib.util.spec_from_file_location("cluster_fixture", Path(__file__).
 cluster = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(cluster)
 TARGET = "bob@cluster.localhost/fake-ack-target"
+CONNECTION = "3f0c2a52-9d1e-4b7a-8c55-0d6f2e1b9a47"
 
 
 @contextmanager
@@ -47,8 +48,9 @@ def fake_pause_environment(states=None, active_timer=(0.0, 0.0)):
 def probe(stanza_id="forged-ack", request_id="request-1", nonce="nonce-1"):
     return {"payload": {
         "target": TARGET,
-        "protocol_version": cluster.CLUSTER_PROTOCOL_VERSION,
+        "protocol_version": cluster.EXACT_MESSAGE_DELIVERY_VERSION,
         "delivery": {"reliability": "volatile"},
+        "expected_connections": {TARGET: CONNECTION},
         "stanza": f"<message xmlns='jabber:client' to='{TARGET}' id='{stanza_id}'/>",
         "request_id": request_id,
         "ack_nonce": nonce,
@@ -99,26 +101,33 @@ class AckPauseTests(unittest.TestCase):
             self.assertEqual(events, [])
 
     def test_following_request_has_exact_message_and_fresh_request_and_nonce(self):
-        first = cluster.validate_ack_probe_request(probe(), TARGET, "forged-ack")
+        first = cluster.validate_ack_probe_request(probe(), TARGET, CONNECTION, "forged-ack")
         second = probe("duplicate-ack", "request-2", "nonce-2")
-        self.assertEqual(cluster.validate_ack_probe_request(second, TARGET, "duplicate-ack", first), second["payload"])
+        self.assertEqual(
+            cluster.validate_ack_probe_request(second, TARGET, CONNECTION, "duplicate-ack", first),
+            second["payload"],
+        )
         for field in ("request_id", "ack_nonce"):
             stale = copy.deepcopy(second)
             stale["payload"][field] = first[field]
             with self.subTest(field=field), self.assertRaisesRegex(AssertionError, "previous correlation"):
-                cluster.validate_ack_probe_request(stale, TARGET, "duplicate-ack", first)
+                cluster.validate_ack_probe_request(stale, TARGET, CONNECTION, "duplicate-ack", first)
 
     def test_stale_message_wrong_target_and_durable_contract_cannot_mask_ack_case(self):
         for field, value in (("target", "another@example.test/resource"),
                              ("delivery", {"reliability": "durable"}),
                              ("protocol_version", "old"),
+                             ("protocol_version", cluster.CLUSTER_PROTOCOL_VERSION),
+                             ("expected_connections", None),
+                             ("expected_connections", {TARGET: "00000000-0000-0000-0000-000000000001"}),
+                             ("expected_connections", {TARGET: CONNECTION, "bob@cluster.localhost/other": CONNECTION}),
                              ("stanza", "<message xmlns='jabber:client' id='old'/>") ):
             wrong = probe()
             wrong["payload"][field] = value
             with self.subTest(field=field), self.assertRaises(AssertionError):
-                cluster.validate_ack_probe_request(wrong, TARGET, "forged-ack")
+                cluster.validate_ack_probe_request(wrong, TARGET, CONNECTION, "forged-ack")
         with self.assertRaisesRegex(AssertionError, "different message"):
-            cluster.validate_ack_probe_request(probe(), TARGET, "duplicate-ack")
+            cluster.validate_ack_probe_request(probe(), TARGET, CONNECTION, "duplicate-ack")
 
 
 class ClusterRecoveryTests(unittest.TestCase):

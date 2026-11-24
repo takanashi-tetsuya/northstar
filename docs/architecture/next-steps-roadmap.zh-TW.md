@@ -296,7 +296,7 @@ S46  A0 契約 ─┬─ A1 重播快照
 S47  B（已完成）：4 個修正 WP 可並行（檔案大多不重疊；B-甲 與 C2-13 都碰 MUC 聯邦檔，依序整合）
 S48  D-room C3（已完成）：WP-695 契約先行，WP-696–701 平行，WP-702、703 依序，WP-715 修正 stack 溢位
 S49  D-room C4（已完成）：WP-705 只移動、WP-706 型別先行，WP-707–714 平行，WP-716 修正叢集測試
-S50  D-message C5（已完成）：WP-722 只移動、WP-723 單獨修正、WP-724 型別先行，WP-725–733 平行
+S50  D-message C5（已完成）：WP-722 只移動、WP-723 單獨修正、WP-724 型別先行，WP-725–733 平行，WP-735 修正叢集測試
 S51+ D：每個上下文先審計，再修正；審計可提前並行（唯讀），修正依順序
      E：D 的 room、message 審計已完成，可以開始
      F → G：可在 D 的空檔並行（G 的 migration 依領域逐一進行）
@@ -437,6 +437,8 @@ crate 當成最新（S44 的教訓）。不要在 codex、驗證或 cargo 正在
 - 需要專用 schema 前綴與隔離角色的資料庫測試要用自己的 runner（`repository-conformance-db-wsl.sh`）；新的 DB 腳本
   照 CI 的方式以一個共用 schema 在本機先跑一次（S50 的 `message-authority-db-wsl.sh`）。
 - 新的 Redis 指令先對照 runtime 的 ACL，能用既有指令（pipeline 的 GET 取代 MGET）就不改 ACL（S50 的 WP-732）。
+- 改變 wire 版本時，搜尋 `scripts/` 中比對 `protocol_version` 的夾具與載入它的離線測試；合成 payload 的離線測試抓不到
+  夾具過時，只有 CI 的多節點 job 會失敗（S50 的 WP-735）。
 
 ### 9.4 委派
 

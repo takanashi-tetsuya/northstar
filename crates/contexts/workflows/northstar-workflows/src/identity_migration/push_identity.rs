@@ -376,7 +376,10 @@ mod tests {
 
         assert!(northstar_message_postgres::push::enable_push_subscription(
             &pool,
-            user.id,
+            northstar_message_core::ActorGenerationFence {
+                account_id: user.id,
+                auth_generation: user.auth_generation,
+            },
             "push.example.test/Phone",
             "resource-is-not-a-service",
             None,

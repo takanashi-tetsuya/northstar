@@ -6,6 +6,7 @@ mod commit_authorization;
 mod direct_spool_wake_repository;
 mod message_repository;
 mod push;
+mod push_authority;
 mod retention;
 mod retraction_conformance;
 mod retraction_lifecycle;

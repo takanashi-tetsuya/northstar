@@ -950,13 +950,14 @@ mod push_ports {
     use super::UnusedRepository;
     use anyhow::Result;
     use northstar_message_application::push::*;
+    use northstar_message_core::ActorGenerationFence;
     use uuid::Uuid;
 
     impl PushRepository for UnusedRepository {
         #[allow(clippy::too_many_arguments)]
         async fn enable(
             &self,
-            _user_id: Uuid,
+            _actor: ActorGenerationFence,
             _service_jid: &str,
             _node: &str,
             _options: Option<&str>,
@@ -967,10 +968,10 @@ mod push_ports {
         #[allow(clippy::too_many_arguments)]
         async fn disable(
             &self,
-            _user_id: Uuid,
+            _actor: ActorGenerationFence,
             _service_jid: &str,
             _node: Option<&str>,
-        ) -> Result<u64> {
+        ) -> Result<Option<u64>> {
             panic!("unexpected port call: disable")
         }
 
@@ -1009,6 +1010,7 @@ mod push_ports {
 mod hosted_disco;
 mod invitation_stub;
 mod pam_delivery_repository;
+mod push_handoff;
 
 mod mix_ports {
     use super::UnusedRepository;

@@ -1822,8 +1822,10 @@ for (const authority of [
   'delete_user_with_roster_audited',
   'enable_push_subscription',
   'disable_push_subscriptions',
+  'disable_owned_push_subscriptions',
   'claim_push_deliveries',
   'complete_push_response',
+  'validate_push_handoff',
 ]) {
   if (new RegExp(`\\b(?:db|northstar_\\w+(?:\\s*::\\s*\\w+)*?)\\s*::\\s*${authority}\\b`).test(miscSource)) {
     throw new Error(`misc.rs bypasses its account/push application service via ${authority}`);

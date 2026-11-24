@@ -8,6 +8,7 @@ use anyhow::Result;
 use northstar_message_application::push::{
     PushEnableOutcome, PushResponseKind, PushResponseOutcome,
 };
+use northstar_message_core::AuthenticatedMessageActor;
 use northstar_xml_builder::rewrite::set_to;
 use northstar_xml_builder::stanza::{iq_error, iq_error_from, iq_result_from, stanza_error};
 use northstar_xmpp_types::jid_text::bare_jid;
@@ -100,13 +101,19 @@ impl<H: SessionHost> ProtocolSession<H> {
         let options = options_node.map(|options| &raw[options.range()]);
         let service_jid = request.service_jid().to_string();
         let node = request.node_str().to_owned();
+        let Some(actor) = self.push_actor() else {
+            return Ok(Action::Send(stanza_error(iq, "auth", "not-authorized")));
+        };
         match self
             .host
             .push_service()
-            .enable(user.id, &service_jid, &node, options)
+            .enable(&actor, &service_jid, &node, options)
             .await?
         {
             PushEnableOutcome::Enabled => Ok(Action::Send(iq_result_from(id, &own_bare, ""))),
+            PushEnableOutcome::AccountUnavailable => {
+                Ok(Action::Send(stanza_error(iq, "auth", "not-authorized")))
+            }
             PushEnableOutcome::QuotaExceeded => Ok(Action::Send(stanza_error(
                 iq,
                 "wait",
@@ -148,11 +155,31 @@ impl<H: SessionHost> ProtocolSession<H> {
         };
         let service_jid = request.service_jid.to_string();
         let node = request.node.map(northstar_xep_0357::PushNode::into_inner);
-        self.host
+        let Some(actor) = self.push_actor() else {
+            return Ok(Action::Send(stanza_error(iq, "auth", "not-authorized")));
+        };
+        if self
+            .host
             .push_service()
-            .disable(user.id, &service_jid, node.as_deref())
-            .await?;
+            .disable(&actor, &service_jid, node.as_deref())
+            .await?
+            .is_none()
+        {
+            return Ok(Action::Send(stanza_error(iq, "auth", "not-authorized")));
+        }
         Ok(Action::Send(iq_result_from(id, &own_bare, "")))
+    }
+
+    fn push_actor(&self) -> Option<AuthenticatedMessageActor> {
+        let user = self.authenticated.as_ref()?;
+        let full_jid =
+            northstar_xmpp_types::jid::CanonicalJid::parse(self.full_jid.as_deref()?).ok()?;
+        Some(AuthenticatedMessageActor {
+            account_id: user.id,
+            auth_generation: user.auth_generation,
+            connection_id: self.route_connection_id(),
+            full_jid,
+        })
     }
 }
 

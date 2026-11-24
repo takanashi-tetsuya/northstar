@@ -4,14 +4,19 @@
 //! through typed repository operations. A transport adapter owns XML and routing.
 
 use anyhow::Result;
+use northstar_message_core::{ActorGenerationFence, AuthenticatedMessageActor};
 use std::future::Future;
 use uuid::Uuid;
+
+mod handoff;
+pub use handoff::PushHandoffAuthority;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PushEnableOutcome {
     Enabled,
     QuotaExceeded,
     RateLimited,
+    AccountUnavailable,
 }
 
 #[derive(Clone, Debug)]
@@ -35,15 +40,25 @@ pub struct PushNotificationCounts {
     pub pending_subscription_count: i64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PushHandoffOutcome {
+    /// A route accepted the IQ, not a confirmation from the Push Service.
+    QueueAccepted,
+    Unroutable,
+    StaleClaim,
+}
+
 /// Transport-specific routing and telemetry for a claimed Push notification.
 /// The application service owns claim, settlement and per-item ordering.
 pub trait PushNotificationRouter: Send + Sync {
     fn route(
         &self,
+        authority: &impl PushHandoffAuthority,
+        user_id: Uuid,
         delivery: &PushDelivery,
         counts: PushNotificationCounts,
-    ) -> impl Future<Output = Result<bool>> + Send;
-    fn routed(&self);
+    ) -> impl Future<Output = Result<PushHandoffOutcome>> + Send;
+    fn queue_accepted(&self);
     fn failed(&self);
     fn attempted(&self);
 }
@@ -62,20 +77,20 @@ pub enum PushResponseOutcome {
     Unknown,
 }
 
-pub trait PushRepository: Send + Sync {
+pub trait PushRepository: PushHandoffAuthority {
     fn enable(
         &self,
-        user_id: Uuid,
+        actor: ActorGenerationFence,
         service_jid: &str,
         node: &str,
         options: Option<&str>,
     ) -> impl std::future::Future<Output = Result<PushEnableOutcome>> + Send;
     fn disable(
         &self,
-        user_id: Uuid,
+        actor: ActorGenerationFence,
         service_jid: &str,
         node: Option<&str>,
-    ) -> impl std::future::Future<Output = Result<u64>> + Send;
+    ) -> impl std::future::Future<Output = Result<Option<u64>>> + Send;
     fn claim_batch(
         &self,
         user_id: Uuid,
@@ -107,22 +122,24 @@ impl<R: PushRepository> PushService<R> {
     }
     pub async fn enable(
         &self,
-        user_id: Uuid,
+        actor: &AuthenticatedMessageActor,
         service_jid: &str,
         node: &str,
         options: Option<&str>,
     ) -> Result<PushEnableOutcome> {
         self.repository
-            .enable(user_id, service_jid, node, options)
+            .enable(actor.fence(), service_jid, node, options)
             .await
     }
     pub async fn disable(
         &self,
-        user_id: Uuid,
+        actor: &AuthenticatedMessageActor,
         service_jid: &str,
         node: Option<&str>,
-    ) -> Result<u64> {
-        self.repository.disable(user_id, service_jid, node).await
+    ) -> Result<Option<u64>> {
+        self.repository
+            .disable(actor.fence(), service_jid, node)
+            .await
     }
     /// Dispatch only after the originating message has been accepted. A route
     /// failure is settled before the next claimed subscription is attempted;
@@ -138,16 +155,21 @@ impl<R: PushRepository> PushService<R> {
             pending_subscription_count: batch.pending_subscription_count,
         };
         for delivery in batch.deliveries {
-            if router.route(&delivery, counts).await? {
-                router.routed();
-            } else {
-                self.repository.mark_unroutable(delivery.request_id).await?;
-                router.failed();
-                tracing::debug!(
-                    service = %delivery.service_jid,
-                    has_options = delivery.options.is_some(),
-                    "push service could not be routed"
-                );
+            match router
+                .route(&self.repository, user_id, &delivery, counts)
+                .await?
+            {
+                PushHandoffOutcome::QueueAccepted => router.queue_accepted(),
+                PushHandoffOutcome::Unroutable => {
+                    self.repository.mark_unroutable(delivery.request_id).await?;
+                    router.failed();
+                    tracing::debug!(
+                        service = %delivery.service_jid,
+                        has_options = delivery.options.is_some(),
+                        "push service could not be routed"
+                    );
+                }
+                PushHandoffOutcome::StaleClaim => continue,
             }
             router.attempted();
         }

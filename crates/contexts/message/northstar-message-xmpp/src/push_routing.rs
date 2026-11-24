@@ -1,9 +1,11 @@
 //! Push notification IQ construction and routing.
 
 use northstar_message_application::push::{
-    PushDelivery, PushNotificationCounts, PushNotificationRouter, PushRepository, PushService,
+    PushDelivery, PushHandoffAuthority, PushHandoffOutcome, PushNotificationCounts,
+    PushNotificationRouter, PushRepository, PushService,
 };
 use std::future::Future;
+use uuid::Uuid;
 
 pub async fn dispatch_push_notification<R: PushRepository>(
     enabled: bool,
@@ -42,9 +44,11 @@ pub trait PushNotificationRoutes: Send + Sync {
 
 pub async fn route_push_notification(
     routes: &impl PushNotificationRoutes,
+    authority: &impl PushHandoffAuthority,
+    user_id: Uuid,
     delivery: &PushDelivery,
     counts: PushNotificationCounts,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<PushHandoffOutcome> {
     let request_id = format!("push-{}", delivery.request_id);
     let summary = northstar_xep_0357::PushSummary::new()
         .with_message_count(counts.message_count as u64)
@@ -57,26 +61,42 @@ pub async fn route_push_notification(
         &summary,
         delivery.options.as_deref(),
     )?;
-    let mut delivered = false;
     let service = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&delivery.service_jid).ok();
-    if service
+    let accepted = if service
         .as_ref()
         .is_some_and(|jid| jid.domainpart() == routes.local_domain())
     {
-        delivered = routes
+        if !authority.validate_handoff(user_id, delivery).await? {
+            return Ok(PushHandoffOutcome::StaleClaim);
+        }
+        if routes
             .deliver_local(&delivery.service_jid, &notification)
-            .await;
-        if !delivered {
-            delivered = routes
-                .route_cluster(&delivery.service_jid, &notification)
-                .await;
+            .await
+        {
+            return Ok(PushHandoffOutcome::QueueAccepted);
         }
+        if !authority.validate_handoff(user_id, delivery).await? {
+            return Ok(PushHandoffOutcome::StaleClaim);
+        }
+        routes
+            .route_cluster(&delivery.service_jid, &notification)
+            .await
     } else if let Some(domain) = service.as_ref().map(|jid| jid.domainpart()) {
-        if routes.remote_domain_allowed(domain) {
-            delivered = routes.send_federation(domain, notification.clone()).await;
+        if !routes.remote_domain_allowed(domain) {
+            return Ok(PushHandoffOutcome::Unroutable);
         }
-    }
-    Ok(delivered)
+        if !authority.validate_handoff(user_id, delivery).await? {
+            return Ok(PushHandoffOutcome::StaleClaim);
+        }
+        routes.send_federation(domain, notification).await
+    } else {
+        false
+    };
+    Ok(if accepted {
+        PushHandoffOutcome::QueueAccepted
+    } else {
+        PushHandoffOutcome::Unroutable
+    })
 }
 
 #[cfg(test)]
@@ -85,6 +105,7 @@ mod tests {
     use northstar_message_application::push::{
         PushBatch, PushEnableOutcome, PushResponseKind, PushResponseOutcome,
     };
+    use northstar_message_core::ActorGenerationFence;
     use std::sync::{Arc, Mutex};
     use uuid::Uuid;
 
@@ -96,7 +117,7 @@ mod tests {
     impl PushRepository for FakePushRepository {
         async fn enable(
             &self,
-            _: Uuid,
+            _: ActorGenerationFence,
             _: &str,
             _: &str,
             _: Option<&str>,
@@ -104,7 +125,12 @@ mod tests {
             unreachable!()
         }
 
-        async fn disable(&self, _: Uuid, _: &str, _: Option<&str>) -> anyhow::Result<u64> {
+        async fn disable(
+            &self,
+            _: ActorGenerationFence,
+            _: &str,
+            _: Option<&str>,
+        ) -> anyhow::Result<Option<u64>> {
             unreachable!()
         }
 
@@ -146,18 +172,20 @@ mod tests {
     impl PushNotificationRouter for RecordingPushRouter {
         async fn route(
             &self,
+            _: &impl PushHandoffAuthority,
+            _: Uuid,
             delivery: &PushDelivery,
             counts: PushNotificationCounts,
-        ) -> anyhow::Result<bool> {
+        ) -> anyhow::Result<PushHandoffOutcome> {
             assert_eq!(delivery.request_id, Uuid::from_u128(523));
             assert_eq!(delivery.service_jid, "push@example.test");
             assert_eq!(counts.message_count, 7);
             assert_eq!(counts.pending_subscription_count, 3);
             self.calls.lock().unwrap().push("route");
-            Ok(true)
+            Ok(PushHandoffOutcome::QueueAccepted)
         }
 
-        fn routed(&self) {
+        fn queue_accepted(&self) {
             self.calls.lock().unwrap().push("routed");
         }
 
@@ -169,6 +197,8 @@ mod tests {
             self.calls.lock().unwrap().push("attempted");
         }
     }
+
+    use self::handoff::route_push_notification;
 
     #[tokio::test]
     async fn disabled_push_dispatches_nothing() {
@@ -449,4 +479,6 @@ mod tests {
         assert_eq!(error.to_string(), expected.to_string());
         assert!(routes.calls.lock().unwrap().is_empty());
     }
+
+    mod handoff;
 }

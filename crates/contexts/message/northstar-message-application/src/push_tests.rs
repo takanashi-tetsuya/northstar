@@ -7,6 +7,7 @@ enum Failure {
     Claim,
     Route,
     Mark,
+    Stale,
 }
 
 #[derive(Clone)]
@@ -18,7 +19,7 @@ struct StubRepository {
 impl PushRepository for StubRepository {
     async fn enable(
         &self,
-        _: Uuid,
+        _: ActorGenerationFence,
         _: &str,
         _: &str,
         _: Option<&str>,
@@ -26,7 +27,12 @@ impl PushRepository for StubRepository {
         unreachable!()
     }
 
-    async fn disable(&self, _: Uuid, _: &str, _: Option<&str>) -> Result<u64> {
+    async fn disable(
+        &self,
+        _: ActorGenerationFence,
+        _: &str,
+        _: Option<&str>,
+    ) -> Result<Option<u64>> {
         unreachable!()
     }
 
@@ -78,17 +84,29 @@ struct StubRouter {
 }
 
 impl PushNotificationRouter for StubRouter {
-    async fn route(&self, delivery: &PushDelivery, counts: PushNotificationCounts) -> Result<bool> {
+    async fn route(
+        &self,
+        _: &impl PushHandoffAuthority,
+        _: Uuid,
+        delivery: &PushDelivery,
+        counts: PushNotificationCounts,
+    ) -> Result<PushHandoffOutcome> {
         assert_eq!(counts.message_count, 2);
         assert_eq!(counts.pending_subscription_count, 1);
         self.events.lock().unwrap().push("route");
         if matches!(self.failure, Failure::Route) {
             anyhow::bail!("route failed");
         }
-        Ok(delivery.request_id == Uuid::from_u128(2))
+        Ok(if delivery.request_id == Uuid::from_u128(2) {
+            PushHandoffOutcome::QueueAccepted
+        } else if matches!(self.failure, Failure::Stale) {
+            PushHandoffOutcome::StaleClaim
+        } else {
+            PushHandoffOutcome::Unroutable
+        })
     }
 
-    fn routed(&self) {
+    fn queue_accepted(&self) {
         self.events.lock().unwrap().push("routed");
     }
 
@@ -149,3 +167,6 @@ async fn provider_or_settlement_error_stops_before_later_subscriptions() {
         assert_eq!(trace, expected);
     }
 }
+
+#[path = "push/tests/handoff.rs"]
+mod handoff;

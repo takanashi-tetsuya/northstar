@@ -3,7 +3,8 @@
 use crate::node::ServerNode;
 use anyhow::Result;
 use northstar_message_application::push::{
-    PushDelivery, PushNotificationCounts, PushNotificationRouter,
+    PushDelivery, PushHandoffAuthority, PushHandoffOutcome, PushNotificationCounts,
+    PushNotificationRouter,
 };
 use northstar_stream::local_routes::push_targets::deliver_to_best_local_resource;
 
@@ -65,11 +66,20 @@ impl northstar_message_xmpp::push_routing::PushNotificationRoutes for ServerNode
 }
 
 impl PushNotificationRouter for ServerNode {
-    async fn route(&self, delivery: &PushDelivery, counts: PushNotificationCounts) -> Result<bool> {
-        northstar_message_xmpp::push_routing::route_push_notification(self, delivery, counts).await
+    async fn route(
+        &self,
+        authority: &impl PushHandoffAuthority,
+        user_id: uuid::Uuid,
+        delivery: &PushDelivery,
+        counts: PushNotificationCounts,
+    ) -> Result<PushHandoffOutcome> {
+        northstar_message_xmpp::push_routing::route_push_notification(
+            self, authority, user_id, delivery, counts,
+        )
+        .await
     }
 
-    fn routed(&self) {
+    fn queue_accepted(&self) {
         self.push_delivery_telemetry().routed();
     }
 

@@ -1,3 +1,4 @@
+use northstar_message_core::ActorGenerationFence;
 use northstar_message_postgres::push::*;
 use uuid::Uuid;
 
@@ -25,11 +26,15 @@ async fn quota_upsert_and_durable_claim_are_atomic() {
     )
     .await
     .unwrap();
+    let actor = ActorGenerationFence {
+        account_id: user.id,
+        auth_generation: user.auth_generation,
+    };
     for index in 0..MAX_PUSH_SUBSCRIPTIONS_PER_USER {
         assert_eq!(
             enable_push_subscription(
                 &pool,
-                user.id,
+                actor,
                 "push.example.test",
                 &format!("node-{index}"),
                 None,
@@ -40,7 +45,7 @@ async fn quota_upsert_and_durable_claim_are_atomic() {
         );
     }
     assert_eq!(
-        enable_push_subscription(&pool, user.id, "push.example.test", "over-quota", None,)
+        enable_push_subscription(&pool, actor, "push.example.test", "over-quota", None,)
             .await
             .unwrap(),
         PushEnableOutcome::QuotaExceeded
@@ -49,7 +54,7 @@ async fn quota_upsert_and_durable_claim_are_atomic() {
     assert_eq!(
         enable_push_subscription(
             &pool,
-            user.id,
+            actor,
             "push.example.test",
             "node-0",
             Some("<x xmlns='jabber:x:data' type='submit'/>")
@@ -58,11 +63,15 @@ async fn quota_upsert_and_durable_claim_are_atomic() {
         .unwrap(),
         PushEnableOutcome::Enabled
     );
-    let first = claim_push_deliveries(&pool, user.id).await.unwrap();
+    let first = claim_push_deliveries(&pool, user.id)
+        .await
+        .unwrap()
+        .deliveries;
     assert_eq!(first.len(), MAX_PUSH_SUBSCRIPTIONS_PER_USER as usize);
     assert!(claim_push_deliveries(&pool, user.id)
         .await
         .unwrap()
+        .deliveries
         .is_empty());
     let request_id = first[0].request_id;
     assert_eq!(
@@ -79,7 +88,7 @@ async fn quota_upsert_and_durable_claim_are_atomic() {
     assert_eq!(
         enable_push_subscription(
             &pool,
-            user.id,
+            actor,
             "push.example.test",
             "node-0",
             Some("<x xmlns='jabber:x:data' type='submit'/>")
@@ -101,7 +110,10 @@ async fn quota_upsert_and_durable_claim_are_atomic() {
         .unwrap(),
         PushResponseOutcome::Unknown
     );
-    let renewed = claim_push_deliveries(&pool, user.id).await.unwrap();
+    let renewed = claim_push_deliveries(&pool, user.id)
+        .await
+        .unwrap()
+        .deliveries;
     assert_eq!(renewed.len(), 1);
     assert_eq!(renewed[0].node, "node-0");
     assert_eq!(
@@ -126,12 +138,15 @@ async fn quota_upsert_and_durable_claim_are_atomic() {
         1
     );
     assert_eq!(
-        enable_push_subscription(&pool, user.id, "push.example.test", "", None)
+        enable_push_subscription(&pool, actor, "push.example.test", "", None)
             .await
             .unwrap(),
         PushEnableOutcome::Enabled
     );
-    let optional = claim_push_deliveries(&pool, user.id).await.unwrap();
+    let optional = claim_push_deliveries(&pool, user.id)
+        .await
+        .unwrap()
+        .deliveries;
     assert_eq!(optional.len(), 1);
     assert!(optional[0].node.is_empty());
     let optional_request_id = optional[0].request_id;

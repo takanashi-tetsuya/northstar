@@ -1,5 +1,8 @@
 use super::{LocalSessionTable, OnlineSession, SessionLookup};
+use crate::outbound::{RouteEnqueue, RouteSendError};
 use dashmap::DashMap;
+use northstar_message_application::messaging::ExactMessageRoute;
+use northstar_message_core::route_item::QueueRefusal;
 use northstar_xmpp_types::jid_text::bare_jid;
 use std::sync::atomic::Ordering;
 
@@ -59,6 +62,43 @@ pub fn try_send_to_available_entries_in(
 }
 
 impl LocalSessionTable {
+    fn exact_message_session(
+        &self,
+        route: &ExactMessageRoute,
+    ) -> Option<dashmap::mapref::one::Ref<'_, String, OnlineSession>> {
+        self.0.get(&route.full_jid).filter(|session| {
+            session.routable.load(Ordering::Acquire)
+                && !session.disconnect.is_cancelled()
+                && session.user_id == route.account_id
+                && session.auth_generation == route.auth_generation
+                && session.connection_id == route.connection_id
+        })
+    }
+
+    pub fn with_exact_message_route<T>(
+        &self,
+        route: &ExactMessageRoute,
+        send: impl FnOnce(&OnlineSession) -> T,
+    ) -> Option<T> {
+        self.exact_message_session(route)
+            .map(|session| send(&session))
+    }
+
+    #[expect(
+        clippy::result_large_err,
+        reason = "return the exact refused outbound item"
+    )]
+    pub fn try_send_exact_message_route(
+        &self,
+        route: &ExactMessageRoute,
+        enqueue: RouteEnqueue,
+    ) -> Result<(), RouteSendError> {
+        match self.exact_message_session(route) {
+            Some(session) => session.sender.try_send_route_item(enqueue),
+            None => enqueue.send_with(|item| Err(QueueRefusal::Closed(item))),
+        }
+    }
+
     pub fn sessions_for(&self, jid: &str) -> Vec<OnlineSession> {
         let Some(lookup) = session_lookup(jid) else {
             return Vec::new();

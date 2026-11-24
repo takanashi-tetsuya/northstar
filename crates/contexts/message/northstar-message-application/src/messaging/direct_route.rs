@@ -5,7 +5,7 @@
 //! second admission. XML, PoW finalization, Push and Carbons stay with callers.
 
 use super::{
-    committed_live_delivery_has_fence, FullJidFallback, FullJidFallbackPlan, FullJidFallbackPort,
+    committed_live_delivery_has_fence, ExactMessageRoutePort, FullJidFallback, FullJidFallbackPlan,
     FullJidFallbackResult, OnlineMessageRouter, OnlineRouteResult, RoutePayload,
 };
 use northstar_delivery_core::DurableDelivery;
@@ -14,7 +14,7 @@ use northstar_message_core::{bare_message_route, BareMessageRoute};
 use std::future::Future;
 use uuid::Uuid;
 
-pub trait DirectMessageRoutePort: FullJidFallbackPort {
+pub trait DirectMessageRoutePort: ExactMessageRoutePort {
     fn direct_route_mode(&self) -> DirectPostCommitMode;
     fn clustered_direct_routes(&self) -> bool;
     /// Relinquish only this initial exact claim. A later transport fence wins
@@ -235,7 +235,7 @@ impl DirectMessageRouter {
         }
         let mut routed = OnlineMessageRouter::dispatch_owned(
             port,
-            request.target.jid(),
+            (request.target.jid(), request.recipient_id),
             payload,
             matches!(request.target, DirectRouteTarget::Bare(_))
                 && bare_message_route(request.message_type) == BareMessageRoute::All,
@@ -336,6 +336,7 @@ impl DirectMessageRouter {
             port,
             &mut payload,
             deliver_all,
+            request.recipient_id,
             request.approved_targets,
         );
         // This check also runs after a local acceptance: a degraded node must
@@ -351,9 +352,14 @@ impl DirectMessageRouter {
         {
             return Ok(outcome);
         }
+        let excluded = request
+            .approved_targets
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect::<Vec<_>>();
         let mut routed = OnlineMessageRouter::dispatch_remote_owned(
             port,
-            request.target.jid(),
+            (request.target.jid(), request.recipient_id, &excluded),
             &mut payload,
             deliver_all,
             local,
@@ -403,6 +409,7 @@ impl DirectMessageRouter {
                             port,
                             &mut payload,
                             false,
+                            request.recipient_id,
                             &allowed,
                         );
                         let fallback = if local.delivered {
@@ -419,9 +426,12 @@ impl DirectMessageRouter {
                             {
                                 return Ok(outcome);
                             }
+                            let excluded = std::iter::once(jid)
+                                .chain(allowed.iter().map(|(key, _)| key.as_str()))
+                                .collect::<Vec<_>>();
                             OnlineMessageRouter::dispatch_remote_owned(
                                 port,
-                                bare,
+                                (bare, request.recipient_id, &excluded),
                                 &mut payload,
                                 false,
                                 local,

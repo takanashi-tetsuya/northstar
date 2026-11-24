@@ -10,6 +10,8 @@ use northstar_room_application::muc_service::{
 };
 use uuid::Uuid;
 
+pub(crate) mod exact;
+
 impl ClusterManager {
     /// A failed route lookup supplies no evidence of an exact remote resource.
     pub async fn personal_message_remote_resource_exists(&self, jid: &str) -> bool {
@@ -79,15 +81,10 @@ impl ClusterManager {
                 if node_id == self.node_id {
                     continue;
                 }
-                let receipt = if let Some(delivery) = delivery {
-                    self.send_to_node_primary_durable(&node_id, jid, stanza, delivery)
-                        .await
-                        .unwrap_or_default()
-                } else {
-                    self.send_to_node_primary(&node_id, jid, stanza)
-                        .await
-                        .unwrap_or_default()
-                };
+                let receipt = self
+                    .send_to_node_personal_primary(&node_id, jid, stanza, delivery)
+                    .await
+                    .unwrap_or_default();
                 if crate::s2s_routing::accepted_cluster_message_delivery(
                     telemetry, &node_id, jid, &receipt,
                 ) {

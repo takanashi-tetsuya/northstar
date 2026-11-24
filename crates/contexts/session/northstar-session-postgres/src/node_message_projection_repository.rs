@@ -22,9 +22,9 @@ impl NodeMessageProjectionRepository for PostgresNodeMessageProjectionRepository
         &self,
         recipient_id: Uuid,
         message_id: Uuid,
-    ) -> Result<Option<String>> {
-        Ok(sqlx::query_scalar(
-            "SELECT stanza FROM offline_messages WHERE recipient_id=$1 AND id=$2",
+    ) -> Result<Option<(String, Option<Uuid>)>> {
+        Ok(sqlx::query_as(
+            "SELECT stanza, delivery_claim_id FROM offline_messages WHERE recipient_id=$1 AND id=$2",
         )
         .bind(recipient_id)
         .bind(message_id)

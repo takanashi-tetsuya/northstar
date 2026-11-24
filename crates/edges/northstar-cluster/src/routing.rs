@@ -559,6 +559,25 @@ impl ClusterManager {
         .await
     }
 
+    pub(super) async fn send_to_node_personal_primary(
+        &self,
+        node_id: &str,
+        target_jid: &str,
+        stanza: &str,
+        delivery: Option<northstar_stream::outbound::DurableDelivery>,
+    ) -> Result<NodeDeliveryReceipt> {
+        self.send_to_node_receipt(
+            node_id,
+            target_jid,
+            stanza,
+            NodeDeliveryOptions {
+                durable_delivery: delivery,
+                ..primary_message_options(target_jid)
+            },
+        )
+        .await
+    }
+
     /// Revoke older live logins belonging to one XEP-0388 client
     /// installation. The PostgreSQL epoch makes delayed/replayed controls
     /// harmless to a later replacement login.
@@ -617,5 +636,13 @@ impl ClusterManager {
         self.node_delivery()
             .send_to_node_receipt(node_id, target_jid, stanza, options)
             .await
+    }
+}
+
+pub(super) fn primary_message_options<'a>(target_jid: &str) -> NodeDeliveryOptions<'a> {
+    NodeDeliveryOptions {
+        primary: true,
+        available_nonnegative_only: !target_jid.contains('/'),
+        ..NodeDeliveryOptions::default()
     }
 }

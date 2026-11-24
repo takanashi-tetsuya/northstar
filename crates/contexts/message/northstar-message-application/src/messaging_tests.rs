@@ -586,3 +586,6 @@ async fn committed_offline_or_mam_recovery_attempts_push_once() {
     }
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
+
+#[path = "messaging_tests/exact_route_port.rs"]
+mod exact_route_port;

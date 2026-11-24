@@ -562,14 +562,19 @@ impl ClusterNodeDelivery {
             );
         }
         let legacy_exclude_jid = exclude_jids.first();
+        let exact_message_version = options.exact_message_routes.is_some()
+            || matches!(
+                delivery_contract,
+                Some(NodeDeliveryContract::DurableC2sReserved { .. })
+            );
         let (Some(pool), Some(_)) = (&self.pool, &self.client) else {
             return Ok(NodeDeliveryReceipt::default());
         };
         let request_id = uuid::Uuid::new_v4().to_string();
         let nonce = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
         let channel = self.key(format!("node:{node_id}"));
-        let payload = serde_json::json!({
-            "protocol_version": NODE_PROTOCOL_VERSION,
+        let mut payload = serde_json::json!({
+            "protocol_version": if exact_message_version { EXACT_MESSAGE_DELIVERY_VERSION } else { NODE_PROTOCOL_VERSION },
             "target": target_jid,
             "stanza": stanza,
             "delivery": delivery_contract,
@@ -609,6 +614,9 @@ impl ClusterNodeDelivery {
             "carbon_muc_room": carbon_muc_scope.as_ref().map(|scope| scope.0.as_str()),
             "carbon_muc_nick": carbon_muc_scope.as_ref().map(|scope| scope.1.as_str()),
         });
+        if let Some(routes) = options.exact_message_routes {
+            payload["expected_connections"] = serde_json::json!(routes);
+        }
         let mut conn = pool.get().await?;
         let peer_version: Option<String> =
             conn.get(self.key(format!("node:{node_id}:alive"))).await?;
@@ -691,21 +699,32 @@ impl ClusterNodeDelivery {
                 let Ok(ack_payload) = serde_json::to_string(&ack) else {
                     continue;
                 };
-                if let Some(receipt) = validated_delivery_ack(
-                    &ack_payload,
-                    DeliveryAckExpectation {
-                        request_id: &request_id,
-                        nonce: &nonce,
-                        node_id,
-                        target_jid: &target_jid,
-                        primary: options.primary,
-                        delivery: delivery_contract,
-                        require_delivery_contract,
-                        mix_capable_only: options.mix_capable_only,
-                        transport_receipt_required: options.transport_receipt_required,
-                        mix_transport_receipt_required: options.mix_transport_receipt_required,
-                    },
-                ) {
+                let expected = DeliveryAckExpectation {
+                    request_id: &request_id,
+                    nonce: &nonce,
+                    node_id,
+                    target_jid: &target_jid,
+                    primary: options.primary,
+                    delivery: delivery_contract,
+                    require_delivery_contract,
+                    mix_capable_only: options.mix_capable_only,
+                    transport_receipt_required: options.transport_receipt_required,
+                    mix_transport_receipt_required: options.mix_transport_receipt_required,
+                };
+                let receipt = if exact_message_version {
+                    validated_exact_message_ack(&ack_payload, expected)
+                } else {
+                    validated_delivery_ack(&ack_payload, expected)
+                };
+                if let Some(receipt) = receipt.filter(|receipt| {
+                    !receipt.delivered
+                        || options.exact_message_routes.is_none_or(|routes| {
+                            receipt
+                                .accepted_full_jid
+                                .as_ref()
+                                .is_some_and(|jid| routes.contains_key(jid))
+                        })
+                }) {
                     return Ok(receipt);
                 }
                 debug_assert!(require_correlated_ack);

@@ -3,6 +3,8 @@
 use super::*;
 pub(super) use northstar_delivery_core::node_delivery::{ClusterMixHandoff, NodeDeliveryReceipt};
 
+pub(super) const EXACT_MESSAGE_DELIVERY_VERSION: &str = "14";
+
 pub(super) fn requires_correlated_ack(peer_version: Option<&str>) -> bool {
     peer_version
         .and_then(|version| version.parse::<u16>().ok())
@@ -120,6 +122,7 @@ pub(super) struct NodeDeliveryOptions<'a> {
     /// Roster/removal delivery must not cross a delete/recreate boundary.
     pub(super) expected_user_id: Option<uuid::Uuid>,
     pub(super) expected_auth_generation: Option<i64>,
+    pub(super) exact_message_routes: Option<&'a std::collections::BTreeMap<String, uuid::Uuid>>,
     /// Immutable roster journal version used by the recipient's initial-sync
     /// gate. Present whenever `roster_requested_only` is true.
     pub(super) roster_version: Option<i64>,
@@ -251,6 +254,11 @@ pub(super) enum NodeDeliveryContract {
         recipient_id: uuid::Uuid,
         message_id: uuid::Uuid,
     },
+    DurableC2sReserved {
+        recipient_id: uuid::Uuid,
+        message_id: uuid::Uuid,
+        initial_claim_id: uuid::Uuid,
+    },
     DurableMix {
         delivery_id: uuid::Uuid,
         lease_token: uuid::Uuid,
@@ -261,14 +269,20 @@ impl NodeDeliveryContract {
     pub(super) fn from_durable(
         delivery: northstar_stream::outbound::DurableDelivery,
     ) -> Result<Self> {
-        anyhow::ensure!(
-            delivery.claim_id.is_none(),
-            "cluster live delivery cannot carry an offline replay claim"
-        );
-        Ok(Self::DurableC2s {
-            recipient_id: delivery.recipient_id,
-            message_id: delivery.message_id,
-        })
+        match delivery.claim_id {
+            None => Ok(Self::DurableC2s {
+                recipient_id: delivery.recipient_id,
+                message_id: delivery.message_id,
+            }),
+            Some(initial_claim_id) if initial_claim_id == delivery.message_id => {
+                Ok(Self::DurableC2sReserved {
+                    recipient_id: delivery.recipient_id,
+                    message_id: delivery.message_id,
+                    initial_claim_id,
+                })
+            }
+            Some(_) => anyhow::bail!("cluster live delivery cannot carry an offline replay claim"),
+        }
     }
 }
 
@@ -323,10 +337,8 @@ impl ResolvedNodeMessageDelivery {
     pub(super) fn contract(self) -> NodeDeliveryContract {
         match self {
             Self::Volatile => NodeDeliveryContract::Volatile {},
-            Self::Durable(delivery) => NodeDeliveryContract::DurableC2s {
-                recipient_id: delivery.recipient_id,
-                message_id: delivery.message_id,
-            },
+            Self::Durable(delivery) => NodeDeliveryContract::from_durable(delivery)
+                .expect("verified C2S projection has only an initial or absent claim"),
             Self::Mix(delivery) => NodeDeliveryContract::DurableMix {
                 delivery_id: delivery.delivery_id,
                 lease_token: delivery.lease_token,
@@ -348,27 +360,40 @@ pub(super) fn requested_node_message_delivery(
         ),
         Some(_) => anyhow::bail!("cluster protocol version must be a string"),
     };
-    if advertised_version.is_some_and(|version| version > DELIVERY_CONTRACT_PROTOCOL_VERSION) {
+    let exact_message_version =
+        json["protocol_version"].as_str() == Some(EXACT_MESSAGE_DELIVERY_VERSION);
+    if advertised_version.is_some_and(|version| version > DELIVERY_CONTRACT_PROTOCOL_VERSION)
+        && !exact_message_version
+    {
         anyhow::bail!("cluster delivery protocol version is newer than this node");
     }
     let delivery_value = json.get("delivery").filter(|value| !value.is_null());
     if !is_message_stanza {
         anyhow::ensure!(
-            delivery_value.is_none(),
+            delivery_value.is_none() && !exact_message_version,
             "non-message cluster stanza carried a delivery contract"
         );
         return Ok(None);
     }
     if let Some(delivery) = delivery_value {
         anyhow::ensure!(
-            advertised_version.is_some_and(|version| {
-                (DELIVERY_CONTRACT_PROTOCOL_MIN..=DELIVERY_CONTRACT_PROTOCOL_VERSION)
-                    .contains(&version)
-            }),
+            exact_message_version
+                || advertised_version.is_some_and(|version| {
+                    (DELIVERY_CONTRACT_PROTOCOL_MIN..=DELIVERY_CONTRACT_PROTOCOL_VERSION)
+                        .contains(&version)
+                }),
             "cluster delivery contract requires a delivery-contract capable protocol version"
         );
         let contract: NodeDeliveryContract = serde_json::from_value(delivery.clone())
             .context("cluster delivery contract is invalid")?;
+        let reserved = matches!(contract, NodeDeliveryContract::DurableC2sReserved { .. });
+        let has_exact_route = json
+            .get("expected_connections")
+            .is_some_and(|value| !value.is_null());
+        anyhow::ensure!(
+            exact_message_version == (reserved || has_exact_route),
+            "cluster message contract does not match its delivery version"
+        );
         if matches!(contract, NodeDeliveryContract::DurableMix { .. }) {
             anyhow::ensure!(
                 advertised_version == Some(DELIVERY_CONTRACT_PROTOCOL_VERSION),
@@ -403,6 +428,15 @@ pub(super) async fn resolve_node_message_delivery<R: NodeMessageProjectionReposi
         }) => RequestedNodeMessageProjection::DurableC2s {
             recipient_id,
             message_id,
+        },
+        RequestedNodeMessageDelivery::Explicit(NodeDeliveryContract::DurableC2sReserved {
+            recipient_id,
+            message_id,
+            initial_claim_id,
+        }) => RequestedNodeMessageProjection::DurableC2sReserved {
+            recipient_id,
+            message_id,
+            initial_claim_id,
         },
         RequestedNodeMessageDelivery::Explicit(NodeDeliveryContract::DurableMix {
             delivery_id,
@@ -487,6 +521,7 @@ impl MucOccupancyIdentity {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct DeliveryAckExpectation<'a> {
     pub(super) request_id: &'a str,
     pub(super) nonce: &'a str,
@@ -498,6 +533,26 @@ pub(super) struct DeliveryAckExpectation<'a> {
     pub(super) mix_capable_only: bool,
     pub(super) transport_receipt_required: bool,
     pub(super) mix_transport_receipt_required: bool,
+}
+
+pub(super) fn validated_exact_message_ack(
+    payload: &str,
+    expected: DeliveryAckExpectation<'_>,
+) -> Option<NodeDeliveryReceipt> {
+    let required = DeliveryAckExpectation {
+        require_delivery_contract: true,
+        ..expected
+    };
+    validated_delivery_ack(payload, required).or_else(|| {
+        validated_delivery_ack(
+            payload,
+            DeliveryAckExpectation {
+                delivery: None,
+                ..required
+            },
+        )
+        .filter(|receipt| !receipt.delivered && receipt.accepted_full_jid.is_none())
+    })
 }
 
 pub(super) fn validated_delivery_ack(

@@ -3,11 +3,14 @@
 use super::delivery::DirectDeliveryOptions;
 use super::*;
 use crate::listener_dispatch::ClusterListenerDispatch;
+use northstar_message_application::messaging::ExactMessageRoute;
+use northstar_stream::local_routes::session_table::LocalSessionTable;
 use northstar_stream::{local_routes::session::OnlineSession, outbound};
 
 pub(super) struct DirectDeliveryRecipient<'a> {
     pub(super) session: &'a OnlineSession,
     pub(super) jid: &'a str,
+    pub(super) target: &'a str,
     pub(super) delivery: &'a String,
 }
 
@@ -28,6 +31,7 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
     let DirectDeliveryRecipient {
         session,
         jid,
+        target,
         delivery,
     } = recipient;
     let DirectDeliveryOptions {
@@ -38,6 +42,30 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
         mix_request_id,
         ..
     } = *options;
+    if options.expected_connections.is_some() || durable_delivery.is_some() {
+        let route = ExactMessageRoute {
+            full_jid: jid.to_owned(),
+            account_id: session.user_id,
+            auth_generation: session.auth_generation,
+            connection_id: session.connection_id,
+            node_id: None,
+        };
+        let table = LocalSessionTable::new(Arc::clone(&dispatch.account_routes.sessions));
+        let accepted = table.with_exact_message_route(&route, |current| {
+            if !options.priority_matches(target, current) {
+                return false;
+            }
+            if let Some(durable) = durable_delivery {
+                current
+                    .sender
+                    .try_send_durable(delivery.clone(), durable)
+                    .is_ok()
+            } else {
+                current.sender.try_send(delivery.clone()).is_ok()
+            }
+        });
+        return DirectDeliverySend::Accepted(accepted == Some(true));
+    }
     let accepted = if roster_requested_only {
         let version = roster_version.expect("cluster roster shape validated before session fanout");
         let annotated = roster_annotated_stanza.map(|stanza| set_to(stanza, jid));
@@ -100,11 +128,6 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
                 false
             }
         }
-    } else if let Some(durable) = durable_delivery {
-        session
-            .sender
-            .try_send_durable(delivery.clone(), durable)
-            .is_ok()
     } else {
         session.sender.try_send(delivery.clone()).is_ok()
     };
@@ -123,6 +146,7 @@ pub(super) async fn handoff_mix_delivery<A: ClusterAdapters>(
         session,
         delivery,
         jid,
+        ..
     } = *recipient;
     let Ok(address) = northstar_room_core::mix::MixRealJid::parse(jid) else {
         return DirectDeliverySend::Accepted(false);

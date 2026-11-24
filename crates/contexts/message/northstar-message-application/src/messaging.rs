@@ -2,10 +2,12 @@
 
 mod direct_route;
 pub mod direct_workflow;
+mod exact_route;
 pub use direct_route::{
     DirectMessageRoutePort, DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome,
     DirectRouteRejection, DirectRouteRequest, DirectRouteTarget,
 };
+pub use exact_route::{ExactMessageRoute, ExactMessageRoutePort};
 use northstar_xep_0016::PrivacyStanzaKind;
 
 use crate::direct_commit::{CommitError as DirectCommitError, DirectCommitRepository};
@@ -170,7 +172,15 @@ impl<'a, I: RouteItem> RoutePayload<'a, I> {
             binding_rejected: false,
         }
     }
+    #[cfg(any(test, feature = "test-support"))]
     fn enqueue<P: OnlineRoutePort<Item = I>>(&mut self, port: &P, session: &P::Session) -> bool {
+        self.enqueue_with(|enqueue| port.try_local(session, enqueue))
+    }
+
+    fn enqueue_with(
+        &mut self,
+        send: impl FnOnce(RouteEnqueue<I>) -> Result<(), RouteSendError<I>>,
+    ) -> bool {
         if self.binding_rejected {
             return false;
         }
@@ -204,7 +214,7 @@ impl<'a, I: RouteItem> RoutePayload<'a, I> {
                 return false;
             }
         };
-        match port.try_local(session, enqueue) {
+        match send(enqueue) {
             Ok(()) => true,
             Err(RouteSendError::Binding(rejected)) => {
                 self.item = Some(rejected.0);
@@ -237,7 +247,7 @@ impl OnlineMessageRouter {
     /// Route an accepted stanza without touching its transaction owner. A
     /// durable delivery has one transport owner; headline fanout is volatile.
     #[cfg(test)]
-    pub async fn dispatch<P: OnlineRoutePort>(
+    pub async fn dispatch<P: DirectMessageRoutePort>(
         port: &P,
         jid: &str,
         stanza: &str,
@@ -246,24 +256,44 @@ impl OnlineMessageRouter {
         approved_targets: &[(String, P::Session)],
     ) -> OnlineRouteResult {
         let mut payload = RoutePayload::new(stanza, delivery);
-        Self::dispatch_owned(port, jid, &mut payload, deliver_all, approved_targets).await
+        Self::dispatch_owned(
+            port,
+            (jid, Uuid::nil()),
+            &mut payload,
+            deliver_all,
+            approved_targets,
+        )
+        .await
     }
 
-    async fn dispatch_owned<P: OnlineRoutePort>(
+    async fn dispatch_owned<P: DirectMessageRoutePort>(
         port: &P,
-        jid: &str,
+        (jid, recipient_id): (&str, Uuid),
         payload: &mut RoutePayload<'_, P::Item>,
         deliver_all: bool,
         approved_targets: &[(String, P::Session)],
     ) -> OnlineRouteResult {
-        let local = Self::dispatch_local_owned(port, payload, deliver_all, approved_targets);
-        Self::dispatch_remote_owned(port, jid, payload, deliver_all, local).await
+        let local =
+            Self::dispatch_local_owned(port, payload, deliver_all, recipient_id, approved_targets);
+        let excluded = approved_targets
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect::<Vec<_>>();
+        Self::dispatch_remote_owned(
+            port,
+            (jid, recipient_id, &excluded),
+            payload,
+            deliver_all,
+            local,
+        )
+        .await
     }
 
-    fn dispatch_local_owned<P: OnlineRoutePort>(
+    fn dispatch_local_owned<P: DirectMessageRoutePort>(
         port: &P,
         payload: &mut RoutePayload<'_, P::Item>,
         deliver_all: bool,
+        recipient_id: Uuid,
         approved_targets: &[(String, P::Session)],
     ) -> OnlineRouteResult {
         debug_assert!(
@@ -272,7 +302,9 @@ impl OnlineMessageRouter {
         );
         let mut result = OnlineRouteResult::default();
         for (key, session) in approved_targets {
-            if payload.enqueue(port, session) {
+            if payload
+                .enqueue_with(|enqueue| port.try_direct_local(key, recipient_id, session, enqueue))
+            {
                 // The real sender consumed its prevalidated positive permit
                 // synchronously before this telemetry or any later await.
                 port.record_local_accept(payload.delivery.is_some());
@@ -288,9 +320,9 @@ impl OnlineMessageRouter {
         result
     }
 
-    async fn dispatch_remote_owned<P: OnlineRoutePort>(
+    async fn dispatch_remote_owned<P: DirectMessageRoutePort>(
         port: &P,
-        jid: &str,
+        (jid, recipient_id, excluded_full_jids): (&str, Uuid, &[&str]),
         payload: &mut RoutePayload<'_, P::Item>,
         deliver_all: bool,
         mut result: OnlineRouteResult,
@@ -305,18 +337,22 @@ impl OnlineMessageRouter {
             },
             _ => None,
         };
-        let positive = if deliver_all {
-            let accepted = port
-                .route_available_remote(jid, payload.stanza, payload.delivery)
-                .await;
-            result.delivered |= accepted;
-            accepted
+        let remote = port
+            .route_direct_remote(
+                recipient_id,
+                jid,
+                excluded_full_jids,
+                payload.stanza,
+                payload.delivery,
+                deliver_all,
+            )
+            .await;
+        let positive = remote.delivered;
+        if deliver_all {
+            result.delivered |= positive;
         } else {
-            result = port
-                .route_remote_primary(jid, payload.stanza, payload.delivery)
-                .await;
-            result.delivered
-        };
+            result = remote;
+        }
         if let Some(permit) = permit {
             permit.returned(positive);
         }
@@ -328,18 +364,33 @@ impl OnlineMessageRouter {
 
     /// RFC 6121 full-JID mismatch handling using the same refused item.
     /// Privacy for every candidate is checked before any fallback enqueue.
-    async fn full_jid_fallback_owned<P: FullJidFallbackPort>(
+    async fn full_jid_fallback_owned<P: DirectMessageRoutePort>(
         port: &P,
         request: FullJidFallback<'_>,
         payload: &mut RoutePayload<'_, P::Item>,
     ) -> Result<FullJidFallbackResult> {
-        let bare_target = request.bare_target;
+        let FullJidFallback {
+            bare_target,
+            recipient_id,
+            full_target,
+            ..
+        } = request;
         let allowed = match Self::prepare_full_jid_fallback(port, request).await? {
             FullJidFallbackPlan::Finished(result) => return Ok(result),
             FullJidFallbackPlan::Targets(allowed) => allowed,
         };
-        let local = Self::dispatch_local_owned(port, payload, false, &allowed);
-        let result = Self::dispatch_remote_owned(port, bare_target, payload, false, local).await;
+        let local = Self::dispatch_local_owned(port, payload, false, recipient_id, &allowed);
+        let excluded = std::iter::once(full_target)
+            .chain(allowed.iter().map(|(key, _)| key.as_str()))
+            .collect::<Vec<_>>();
+        let result = Self::dispatch_remote_owned(
+            port,
+            (bare_target, recipient_id, &excluded),
+            payload,
+            false,
+            local,
+        )
+        .await;
         Ok(if result.delivered {
             FullJidFallbackResult::Delivered(result.accepted_full_jid)
         } else {
@@ -391,7 +442,9 @@ impl OnlineMessageRouter {
         }
 
         let mut candidates = port.fallback_sessions(bare_target);
-        candidates.retain(|(_, session)| port.available_priority(session).is_some());
+        candidates.retain(|(key, session)| {
+            key != full_target && port.available_priority(session).is_some()
+        });
         candidates.sort_by(|(left_jid, left), (right_jid, right)| {
             port.priority(right)
                 .cmp(&port.priority(left))

@@ -379,3 +379,6 @@ impl DirectMessageRoutePort for RoutePort<'_> {
         self.log.route.lock().unwrap().rearm_calls[index].returned = true;
     }
 }
+
+#[path = "ports/exact_route_port.rs"]
+mod exact_route_port;

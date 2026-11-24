@@ -37,16 +37,16 @@ const DURABLE: NodeDeliveryContract = NodeDeliveryContract::DurableC2s {
     message_id: MESSAGE,
 };
 
-pub(super) struct Projection;
+pub(super) struct Projection(Arc<Mutex<Option<Uuid>>>);
 
 impl NodeMessageProjectionRepository for Projection {
     async fn durable_c2s_stanza(
         &self,
         recipient_id: Uuid,
         message_id: Uuid,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<(String, Option<Uuid>)>> {
         assert_eq!((recipient_id, message_id), (ORIGINAL, MESSAGE));
-        Ok(Some(STANZA.to_owned()))
+        Ok(Some((STANZA.to_owned(), *self.0.lock().unwrap())))
     }
 
     async fn durable_mix_projection(
@@ -78,6 +78,10 @@ struct DirectDeliveryFixture {
 
 impl DirectDeliveryFixture {
     fn new() -> Self {
+        Self::with_claim(Arc::default())
+    }
+
+    fn with_claim(claim: Arc<Mutex<Option<Uuid>>>) -> Self {
         let namespace = "durable-recipient.test";
         let (_, security) = northstar_security::cluster_bus::test_configuration_pair(namespace);
         let cluster = verification_manager(namespace, security);
@@ -111,7 +115,7 @@ impl DirectDeliveryFixture {
                     "public".into(),
                 )
                 .unwrap(),
-                verifier: NodeMessageContractVerifier::new(Projection),
+                verifier: NodeMessageContractVerifier::new(Projection(claim)),
                 metrics: Arc::default(),
             },
             message_ports,
@@ -233,3 +237,6 @@ async fn volatile_primary_keeps_priority_order_unlike_durable_primary() {
         (1, Some(ORIGINAL_JID.into()))
     );
 }
+
+#[path = "cluster_live_handoff.rs"]
+mod cluster_live_handoff;

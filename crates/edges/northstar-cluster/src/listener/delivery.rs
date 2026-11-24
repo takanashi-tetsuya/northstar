@@ -107,6 +107,7 @@ pub(super) struct DirectDeliveryOptions<'a> {
     pub(super) roster_requested_only: bool,
     expected_user_id: Option<uuid::Uuid>,
     expected_auth_generation: Option<i64>,
+    pub(super) expected_connections: Option<std::collections::BTreeMap<String, uuid::Uuid>>,
     pub(super) roster_version: Option<i64>,
     pub(super) roster_annotated_stanza: Option<&'a str>,
     privacy_requested_only: bool,
@@ -309,11 +310,48 @@ pub(super) fn validate_direct_delivery<'a>(
     } else {
         None
     };
+    let expected_connections = match json.get("expected_connections") {
+        None => None,
+        Some(value) => {
+            let Ok(routes) = serde_json::from_value::<std::collections::BTreeMap<String, uuid::Uuid>>(
+                value.clone(),
+            ) else {
+                return ListenerStep::Continue;
+            };
+            let Ok(target_jid) = northstar_xmpp_types::jid::CanonicalJid::parse(target) else {
+                return ListenerStep::Continue;
+            };
+            if json["protocol_version"].as_str() != Some(EXACT_MESSAGE_DELIVERY_VERSION)
+                || !is_message_stanza
+                || expected_user_id.is_none_or(|id| id.is_nil())
+                || expected_auth_generation.is_none()
+                || routes.is_empty()
+                || blocklist_requested_only
+                || roster_requested_only
+                || privacy_requested_only
+                || mix_capable_only
+                || transport_receipt_required
+                || routes.iter().any(|(key, connection_id)| {
+                    connection_id.is_nil()
+                        || northstar_xmpp_types::jid::CanonicalJid::parse(key).map_or(true, |jid| {
+                            jid.resourcepart().is_none()
+                                || jid.to_string() != *key
+                                || jid.bare() != target_jid.bare()
+                                || (target_jid.resourcepart().is_some() && key != target)
+                        })
+                })
+            {
+                return ListenerStep::Continue;
+            }
+            Some(routes)
+        }
+    };
     ListenerStep::Next(DirectDeliveryOptions {
         blocklist_requested_only,
         roster_requested_only,
         expected_user_id,
         expected_auth_generation,
+        expected_connections,
         roster_version,
         roster_annotated_stanza,
         privacy_requested_only,
@@ -350,13 +388,12 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
         roster_requested_only,
         expected_user_id,
         expected_auth_generation,
+        ref expected_connections,
         privacy_requested_only,
         mix_capable_only,
         ref exclude_jids,
         ref carbon_muc_scope,
         primary_one_to_one,
-        available_only,
-        available_nonnegative_only,
         ..
     } = *options;
     let ListenerTurn {
@@ -369,13 +406,12 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
         ..
     } = turn;
     let mut targets = dispatch.session_entries_for(target);
-    if (primary_one_to_one || available_only || available_nonnegative_only) && !target.contains('/')
-    {
-        targets.retain(|(_, session)| {
-            session.available.load(Ordering::Relaxed)
-                && (!available_nonnegative_only || session.priority.load(Ordering::Relaxed) >= 0)
-        });
-    }
+    targets.retain(|(jid, session)| {
+        expected_connections
+            .as_ref()
+            .is_none_or(|routes| routes.get(jid) == Some(&session.connection_id))
+            && options.priority_matches(target, session)
+    });
     if primary_one_to_one && !target.contains('/') {
         targets.sort_by(|(left_jid, left), (right_jid, right)| {
             right
@@ -493,6 +529,7 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
             DirectDeliveryRecipient {
                 session: &session,
                 jid: &jid,
+                target,
                 delivery: &delivery,
             },
             options,
@@ -516,6 +553,22 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
                 break;
             }
         }
+    }
+}
+
+impl DirectDeliveryOptions<'_> {
+    pub(super) fn priority_matches(
+        &self,
+        target: &str,
+        session: &northstar_stream::local_routes::session::OnlineSession,
+    ) -> bool {
+        target.contains('/')
+            || if self.available_nonnegative_only {
+                session.available_priority().is_some()
+            } else {
+                !(self.primary_one_to_one || self.available_only)
+                    || session.available.load(Ordering::Relaxed)
+            }
     }
 }
 

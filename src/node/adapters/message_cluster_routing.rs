@@ -3,8 +3,10 @@
 use crate::node::{OnlineSession, ServerNode};
 use anyhow::Result;
 use northstar_message_application::messaging::{
-    DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
+    DirectMessageRoutePort, ExactMessageRoute, ExactMessageRoutePort, FullJidFallbackPort,
+    OnlineRoutePort, OnlineRouteResult,
 };
+use northstar_message_core::route_item::QueueRefusal;
 use northstar_message_xmpp::ports::MessageHost;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_stream::outbound::DurableDelivery;
@@ -96,6 +98,71 @@ impl DirectMessageRoutePort for ServerNode {
             .message_service()
             .rearm_unrouted_live_direct(delivery.recipient_id, delivery.message_id, &mut claim_id)
             .await;
+    }
+}
+
+impl ExactMessageRoutePort for ServerNode {
+    #[expect(
+        clippy::result_large_err,
+        reason = "return the exact refused outbound item"
+    )]
+    fn try_direct_local(
+        &self,
+        full_jid: &str,
+        recipient_id: Uuid,
+        session: &Self::Session,
+        enqueue: northstar_stream::outbound::RouteEnqueue,
+    ) -> Result<(), northstar_stream::outbound::RouteSendError> {
+        if session.user_id != recipient_id {
+            return enqueue.send_with(|item| Err(QueueRefusal::Closed(item)));
+        }
+        self.session.live().sessions().try_send_exact_message_route(
+            &ExactMessageRoute {
+                full_jid: full_jid.to_owned(),
+                account_id: session.user_id,
+                auth_generation: session.auth_generation,
+                connection_id: session.connection_id,
+                node_id: None,
+            },
+            enqueue,
+        )
+    }
+
+    async fn route_direct_remote(
+        &self,
+        recipient_id: Uuid,
+        jid: &str,
+        excluded_full_jids: &[&str],
+        stanza: &str,
+        delivery: Option<DurableDelivery>,
+        deliver_all: bool,
+    ) -> OnlineRouteResult {
+        if !self.cluster.is_enabled() {
+            return OnlineRouteResult::default();
+        }
+        let Ok(Some(account)) =
+            northstar_auth_postgres::users::find_enabled_user_by_id(&self.pool, recipient_id).await
+        else {
+            return OnlineRouteResult::default();
+        };
+        let Ok(mut routes) = self
+            .cluster
+            .capture_remote_message_routes(jid, recipient_id, account.auth_generation)
+            .await
+        else {
+            return OnlineRouteResult::default();
+        };
+        routes.retain(|route| !excluded_full_jids.contains(&route.full_jid.as_str()));
+        self.cluster
+            .route_exact_remote_message(
+                jid,
+                &routes,
+                stanza,
+                delivery,
+                deliver_all,
+                &self.personal_message_telemetry(),
+            )
+            .await
     }
 }
 

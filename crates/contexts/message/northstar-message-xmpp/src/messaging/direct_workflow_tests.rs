@@ -663,3 +663,6 @@ fn held_enqueue_permit_cannot_start_after_frame_retirement() {
     assert_eq!(owner.snapshot(), before);
     assert!(rx.try_recv().is_err());
 }
+
+#[path = "direct_workflow_tests/exact_route_port.rs"]
+mod exact_route_port;

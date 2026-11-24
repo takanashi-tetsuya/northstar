@@ -1,5 +1,5 @@
 use super::*;
-use crate::messaging::{OnlineRoutePort, OnlineRouteResult};
+use crate::messaging::{FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult};
 use crate::test_queue::TestItem;
 use northstar_message_core::route_item::RouteItem as _;
 use std::{
@@ -1487,3 +1487,6 @@ async fn federation_correlated_remote_receipt_preserves_exact_carbon_exclusion_k
         }
     }
 }
+
+#[path = "direct_route_tests/exact_route_port.rs"]
+mod exact_route_port;

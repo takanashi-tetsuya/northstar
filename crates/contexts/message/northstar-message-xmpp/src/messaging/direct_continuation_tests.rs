@@ -1043,3 +1043,6 @@ async fn continuation_rejection_never_turns_known_storage_into_live_route() {
         "northstar_server::xmpp::protocol::messaging"
     );
 }
+
+#[path = "direct_continuation_tests/exact_route_port.rs"]
+mod exact_route_port;

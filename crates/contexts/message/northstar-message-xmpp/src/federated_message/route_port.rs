@@ -1,11 +1,13 @@
 use crate::ports::FederatedMessageHost;
 use anyhow::Result;
 use northstar_message_application::messaging::{
-    DirectMessageRoutePort, FullJidFallbackPort, OnlineRoutePort, OnlineRouteResult,
+    DirectMessageRoutePort, ExactMessageRoutePort, FullJidFallbackPort, OnlineRoutePort,
+    OnlineRouteResult,
 };
 use northstar_message_core::DirectPostCommitMode;
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::outbound::{DurableDelivery, OutboundItem};
+use uuid::Uuid;
 
 /// Federation-origin transport and telemetry for the shared direct route owner. Admission, XML errors, history,
 /// Push and Carbons stay in this module.
@@ -83,5 +85,17 @@ impl<H: FederatedMessageHost> DirectMessageRoutePort for FederatedDirectRoute<'_
 
     async fn rearm_direct_route(&self, delivery: DurableDelivery) {
         DirectMessageRoutePort::rearm_direct_route(self.0, delivery).await;
+    }
+}
+
+impl<H: FederatedMessageHost> ExactMessageRoutePort for FederatedDirectRoute<'_, H> {
+    fn try_direct_local(
+        &self,
+        full_jid: &str,
+        recipient_id: Uuid,
+        session: &Self::Session,
+        enqueue: northstar_stream::outbound::RouteEnqueue,
+    ) -> Result<(), northstar_stream::outbound::RouteSendError> {
+        ExactMessageRoutePort::try_direct_local(self.0, full_jid, recipient_id, session, enqueue)
     }
 }

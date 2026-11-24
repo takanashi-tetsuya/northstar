@@ -11,6 +11,11 @@ pub enum RequestedNodeMessageProjection {
         recipient_id: Uuid,
         message_id: Uuid,
     },
+    DurableC2sReserved {
+        recipient_id: Uuid,
+        message_id: Uuid,
+        initial_claim_id: Uuid,
+    },
     DurableMix {
         delivery_id: Uuid,
         lease_token: Uuid,
@@ -37,7 +42,7 @@ pub trait NodeMessageProjectionRepository: Send + Sync {
         &self,
         recipient_id: Uuid,
         message_id: Uuid,
-    ) -> impl Future<Output = Result<Option<String>>> + Send;
+    ) -> impl Future<Output = Result<Option<(String, Option<Uuid>)>>> + Send;
 
     fn durable_mix_projection(
         &self,
@@ -74,30 +79,26 @@ impl<R: NodeMessageProjectionRepository> NodeMessageContractVerifier<R> {
                 recipient_id,
                 message_id,
             } => {
-                anyhow::ensure!(
-                    !matches!(
-                        recipient_delivery_identity(stanza, target_jid),
-                        RecipientDeliveryIdentity::Missing | RecipientDeliveryIdentity::Invalid
-                    ),
-                    "durable cluster message lacks an unambiguous recipient stanza-id"
-                );
-                let stored_stanza = self
-                    .repository
-                    .durable_c2s_stanza(recipient_id, message_id)
+                self.resolve_c2s(recipient_id, message_id, None, stanza, target_jid)
                     .await
-                    .context("failed to verify clustered durable C2S projection")?
-                    .context("cluster durable delivery projection is missing")?;
+            }
+            RequestedNodeMessageProjection::DurableC2sReserved {
+                recipient_id,
+                message_id,
+                initial_claim_id,
+            } => {
                 anyhow::ensure!(
-                    durable_projection_matches(&stored_stanza, stanza),
-                    "cluster durable delivery payload does not match its PostgreSQL projection"
+                    initial_claim_id == message_id,
+                    "invalid initial cluster claim"
                 );
-                Ok(VerifiedNodeMessageProjection::Durable(
-                    northstar_delivery_core::DurableDelivery {
-                        recipient_id,
-                        message_id,
-                        claim_id: None,
-                    },
-                ))
+                self.resolve_c2s(
+                    recipient_id,
+                    message_id,
+                    Some(initial_claim_id),
+                    stanza,
+                    target_jid,
+                )
+                .await
             }
             RequestedNodeMessageProjection::DurableMix {
                 delivery_id,
@@ -166,6 +167,45 @@ impl<R: NodeMessageProjectionRepository> NodeMessageContractVerifier<R> {
             }
         }
     }
+    async fn resolve_c2s(
+        &self,
+        recipient_id: Uuid,
+        message_id: Uuid,
+        claim_id: Option<Uuid>,
+        stanza: &str,
+        target_jid: &str,
+    ) -> Result<VerifiedNodeMessageProjection> {
+        use northstar_delivery_core::{recipient_delivery_identity, RecipientDeliveryIdentity};
+
+        anyhow::ensure!(
+            !matches!(
+                recipient_delivery_identity(stanza, target_jid),
+                RecipientDeliveryIdentity::Missing | RecipientDeliveryIdentity::Invalid
+            ),
+            "durable cluster message lacks an unambiguous recipient stanza-id"
+        );
+        let (stored_stanza, stored_claim_id) = self
+            .repository
+            .durable_c2s_stanza(recipient_id, message_id)
+            .await
+            .context("failed to verify clustered durable C2S projection")?
+            .context("cluster durable delivery projection is missing")?;
+        anyhow::ensure!(
+            stored_claim_id == claim_id,
+            "cluster durable delivery claim changed"
+        );
+        anyhow::ensure!(
+            durable_projection_matches(&stored_stanza, stanza),
+            "cluster durable delivery payload does not match its PostgreSQL projection"
+        );
+        Ok(VerifiedNodeMessageProjection::Durable(
+            northstar_delivery_core::DurableDelivery {
+                recipient_id,
+                message_id,
+                claim_id,
+            },
+        ))
+    }
 }
 
 pub fn durable_projection_matches(stored_stanza: &str, routed_stanza: &str) -> bool {
@@ -207,9 +247,9 @@ mod tests {
             &self,
             _recipient_id: Uuid,
             _message_id: Uuid,
-        ) -> Result<Option<String>> {
+        ) -> Result<Option<(String, Option<Uuid>)>> {
             self.calls.lock().unwrap().push("c2s");
-            Ok(self.c2s.clone())
+            Ok(self.c2s.clone().map(|stanza| (stanza, None)))
         }
 
         async fn durable_mix_projection(

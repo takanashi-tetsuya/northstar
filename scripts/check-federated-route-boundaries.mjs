@@ -87,7 +87,8 @@ export function verifyFederatedRouteBoundaries(sources) {
   const invocation = /\bDirectMessageRouter::route_federated\s*\(\s*&FederatedDirectRoute\s*\(\s*state\s*\)\s*,/.exec(caller);
   const argumentsBody = balancedBody(caller, caller.indexOf('(', invocation.index), '(', ')');
   requireMatch(argumentsBody, /\bhistory_committed\s*,?\s*$/, 'S2S route must preserve independent committed-history input');
-  if (/\.\s*(?:try_send(?:_durable)?|route_s2s_message_to_[a-z_]+)\s*\(/.test(caller)) {
+  const callerBodies = [caller, ...['select', 'commit', 'apply', 'finish'].map(name => functionBody(inbound, name))];
+  if (callerBodies.some(body => /\.\s*(?:try_send(?:_durable)?|route_s2s_message_to_[a-z_]+)\s*\(/.test(body))) {
     throw new Error('S2S caller regained inline queue/remote routing outside the direct owner');
   }
 

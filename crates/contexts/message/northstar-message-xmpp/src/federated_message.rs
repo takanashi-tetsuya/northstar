@@ -5,206 +5,33 @@ use crate::ports::FederatedMessageHost;
 use anyhow::Result;
 use northstar_federation_core::wire::{s2s_stanza_error, same_s2s_domain};
 use northstar_message_application::messaging::{
-    ArchiveCandidate, ArchiveDirection, DirectMessageRoutePort, DirectMessageRouter,
-    DirectRouteDelivery, DirectRouteOutcome, DirectRouteRejection, DirectRouteRequest,
-    DirectRouteTarget, DurableAdmissionOutcome, FullJidFallbackPort, IdentityAuthority,
-    LocalDelivery, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
-    OfflineAdmissionOutcome, OfflineMessageAdmission, OnlineRoutePort, OnlineRouteResult,
-    PersonalMessageDestination, ValidatedPersonalMessage,
+    ArchiveDirection, DirectMessageRouter, DirectRouteDelivery, DirectRouteOutcome,
+    DirectRouteRejection, DirectRouteRequest, DirectRouteTarget, FullJidFallbackPort,
+    LocalRecipientDecision,
 };
-use northstar_message_application::retractions::{
-    ArchiveWrite, DeliveryProjection, OwnerProjection, RetractionCommand, RetractionOutcome,
-};
+use northstar_message_application::retractions::ArchiveWrite;
 use northstar_message_core::validation::strip_untrusted_direct_delays;
-use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
-use northstar_stream::local_routes::session::OnlineSession;
-use northstar_stream::outbound::{DurableDelivery, OutboundItem};
-use northstar_xep_0280::should_copy as should_carbon;
 use northstar_xep_0359::{add_stanza_id, strip_stanza_ids_by_domain};
 use northstar_xml_builder::message_policy::{
-    add_delay_from, encrypted_archive_stanza, mam_storage_eligible, offline_storage_permitted,
+    encrypted_archive_stanza, mam_storage_eligible, offline_storage_permitted,
 };
 use northstar_xml_builder::stanza::{is_encrypted, stanza_error_type};
 use northstar_xmpp_types::jid::{prepare_domainpart, CanonicalJid};
+use std::ops::ControlFlow;
 use std::sync::atomic::Ordering;
 
-/// Federation-origin transport and telemetry for the shared direct route owner. Admission, XML errors, history,
-/// Push and Carbons stay in this module.
-struct FederatedDirectRoute<'a, H>(&'a H);
+use self::degraded::{
+    degraded_inbound_direct_eligible, degraded_inbound_privacy_uses_default, inbound_live_effect,
+    InboundLiveEffect,
+};
+use self::route_port::FederatedDirectRoute;
 
-impl<H: FederatedMessageHost> OnlineRoutePort for FederatedDirectRoute<'_, H> {
-    type Item = OutboundItem;
-    type Session = OnlineSession;
-
-    fn try_local(
-        &self,
-        session: &Self::Session,
-        enqueue: northstar_stream::outbound::RouteEnqueue,
-    ) -> Result<(), northstar_stream::outbound::RouteSendError> {
-        OnlineRoutePort::try_local(self.0, session, enqueue)
-    }
-
-    fn record_local_accept(&self, durable: bool) {
-        self.0.record_s2s_online_accept(durable);
-    }
-
-    async fn route_available_remote(
-        &self,
-        jid: &str,
-        stanza: &str,
-        delivery: Option<DurableDelivery>,
-    ) -> bool {
-        self.0
-            .route_s2s_message_to_available_remote_resources(jid, stanza, delivery)
-            .await
-    }
-
-    async fn route_remote_primary(
-        &self,
-        jid: &str,
-        stanza: &str,
-        delivery: Option<DurableDelivery>,
-    ) -> OnlineRouteResult {
-        self.0
-            .route_s2s_message_to_remote_primary(jid, stanza, delivery)
-            .await
-    }
-}
-
-impl<H: FederatedMessageHost> FullJidFallbackPort for FederatedDirectRoute<'_, H> {
-    fn fallback_sessions(&self, bare: &str) -> Vec<(String, Self::Session)> {
-        FullJidFallbackPort::fallback_sessions(self.0, bare)
-    }
-
-    fn available_priority(&self, session: &Self::Session) -> Option<i16> {
-        FullJidFallbackPort::available_priority(self.0, session)
-    }
-
-    fn priority(&self, session: &Self::Session) -> i16 {
-        FullJidFallbackPort::priority(self.0, session)
-    }
-
-    async fn privacy_allows_fallback(&self, session: &Self::Session, sender: &str) -> Result<bool> {
-        FullJidFallbackPort::privacy_allows_fallback(self.0, session, sender).await
-    }
-
-    fn post_accept_failed(&self) {
-        self.0.record_s2s_post_accept_failure();
-    }
-}
-
-impl<H: FederatedMessageHost> DirectMessageRoutePort for FederatedDirectRoute<'_, H> {
-    fn direct_route_mode(&self) -> DirectPostCommitMode {
-        DirectMessageRoutePort::direct_route_mode(self.0)
-    }
-
-    fn clustered_direct_routes(&self) -> bool {
-        DirectMessageRoutePort::clustered_direct_routes(self.0)
-    }
-
-    async fn rearm_direct_route(&self, delivery: DurableDelivery) {
-        DirectMessageRoutePort::rearm_direct_route(self.0, delivery).await;
-    }
-}
-
-/// A degraded node can accept only an account-scoped, recoverable direct
-/// message. Resource-affine and transient stanzas require a live route.
-fn degraded_inbound_direct_eligible(
-    root: roxmltree::Node<'_, '_>,
-    bare_target: bool,
-    personal_retraction: bool,
-    archive_requires_encryption: bool,
-) -> bool {
-    bare_target
-        && matches!(
-            root.attribute("type").unwrap_or("normal"),
-            "normal" | "chat"
-        )
-        && !personal_retraction
-        && !root.children().any(|node| {
-            node.is_element()
-                && ((node.tag_name().name() == "x"
-                    && node.tag_name().namespace() == Some("jabber:x:conference"))
-                    || (node.tag_name().name() == "pubsub"
-                        && node.tag_name().namespace()
-                            == Some("http://jabber.org/protocol/pubsub")))
-        })
-        && !signal_only_inbound_direct_message(root)
-        && northstar_message_core::direct_delivery_mode(root)
-            == northstar_message_core::DirectDeliveryMode::Durable
-        && (!archive_requires_encryption || is_encrypted(root))
-}
-
-/// A storage hint does not turn a receipt or chat-state signal into a
-/// recoverable direct message when live delivery is unavailable.
-fn signal_only_inbound_direct_message(root: roxmltree::Node<'_, '_>) -> bool {
-    let mut signal = false;
-    for node in root.children().filter(roxmltree::Node::is_element) {
-        let namespace = node.tag_name().namespace().unwrap_or_default();
-        let name = node.tag_name().name();
-        let is_signal = (namespace == "http://jabber.org/protocol/chatstates"
-            && matches!(
-                name,
-                "active" | "composing" | "paused" | "inactive" | "gone"
-            ))
-            || (namespace == "urn:xmpp:receipts" && name == "received")
-            || (namespace == "urn:xmpp:chat-markers:0" && matches!(name, "markable" | "displayed"));
-        if is_signal {
-            signal = true;
-            continue;
-        }
-        if namespace == "urn:xmpp:hints"
-            || (matches!(namespace, "" | "jabber:client" | "jabber:server") && name == "thread")
-            || namespace == "urn:xmpp:sid:0"
-            || (namespace == "urn:northstar:pow:1" && name == "pow")
-        {
-            continue;
-        }
-        return false;
-    }
-    signal
-}
-
-fn degraded_inbound_privacy_uses_default(
-    mode: DirectPostCommitMode,
-    spool_eligible: bool,
-) -> Option<bool> {
-    match mode {
-        DirectPostCommitMode::Live => Some(false),
-        DirectPostCommitMode::SpoolOnly if spool_eligible => Some(true),
-        DirectPostCommitMode::SpoolOnly | DirectPostCommitMode::Rejected => None,
-    }
-}
-
-fn inbound_direct_spool_eligibility(
-    statically_eligible: bool,
-    default_privacy_denied: bool,
-) -> DirectSpoolEligibility {
-    if statically_eligible && !default_privacy_denied {
-        DirectSpoolEligibility::Eligible
-    } else {
-        DirectSpoolEligibility::LiveOnly
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum InboundLiveEffect {
-    Proceed,
-    AcceptedSpool,
-    Reject,
-}
-
-fn inbound_live_effect(mode: DirectPostCommitMode, committed: bool) -> InboundLiveEffect {
-    match mode {
-        DirectPostCommitMode::Live => InboundLiveEffect::Proceed,
-        DirectPostCommitMode::SpoolOnly | DirectPostCommitMode::Rejected if committed => {
-            InboundLiveEffect::AcceptedSpool
-        }
-        DirectPostCommitMode::SpoolOnly | DirectPostCommitMode::Rejected => {
-            InboundLiveEffect::Reject
-        }
-    }
-}
+mod continuation;
+mod degraded;
+mod durable_commit;
+mod recipient_policy;
+mod retraction;
+mod route_port;
 
 pub async fn route_inbound_message<H: FederatedMessageHost>(
     state: &H,
@@ -284,88 +111,25 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
     if personal_retraction && !matches!(message_type, "normal" | "chat") {
         return Ok(inbound_message_error(root, "modify", "bad-request"));
     }
-    if bare_target {
-        match northstar_message_core::bare_message_route(message_type) {
-            northstar_message_core::BareMessageRoute::Reject => {
-                return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
-            }
-            northstar_message_core::BareMessageRoute::Ignore => return Ok(None),
-            northstar_message_core::BareMessageRoute::Primary
-            | northstar_message_core::BareMessageRoute::All => {}
-        }
-    }
-    // Resolve local per-resource privacy policy before any archive or delivery
-    // admission.  A resource's active list replaces the account default; if
-    // there is no online route, the durable default governs offline storage.
-    // A degraded node cannot trust cached sessions or a Redis route to choose
-    // a resource policy, so use the account default for the spool admission.
-    let Some(spool_only_privacy) = degraded_inbound_privacy_uses_default(
-        state.message_service().direct_mode(),
+    let recipient_policy::RecipientPolicy {
+        privacy_candidates: _privacy_candidates,
+        remote_route_exists,
+        default_privacy_denied,
+    } = match recipient_policy::select(
+        state,
+        root,
+        from,
+        to,
+        &recipient,
+        message_type,
+        bare_target,
         degraded_spool_eligible,
-    ) else {
-        return Ok(inbound_message_error(root, "wait", "service-unavailable"));
+    )
+    .await?
+    {
+        ControlFlow::Continue(policy) => policy,
+        ControlFlow::Break(action) => return Ok(action),
     };
-    let mut privacy_candidates = if spool_only_privacy {
-        Vec::new()
-    } else {
-        state.session_entries_for(to)
-    };
-    if bare_target {
-        privacy_candidates.retain(|(_, session)| {
-            session.available.load(Ordering::Relaxed)
-                && session.priority.load(Ordering::Relaxed) >= 0
-        });
-    }
-    let unfiltered_privacy_candidates = privacy_candidates.len();
-    let mut privacy_allowed = false;
-    for (_, target) in &privacy_candidates {
-        if FullJidFallbackPort::privacy_allows_fallback(state, target, from).await? {
-            privacy_allowed = true;
-            break;
-        }
-    }
-    if unfiltered_privacy_candidates > 0 && !privacy_allowed {
-        return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
-    }
-    let remote_route_exists =
-        !spool_only_privacy && state.s2s_remote_recipient_route_exists(to).await;
-    // Even with a healthy resource route, a statically spoolable message
-    // might enter SpoolOnly during its PostgreSQL transaction. Bind that
-    // transition to the account-default privacy decision before admission.
-    let no_live_route = unfiltered_privacy_candidates == 0 && !remote_route_exists;
-    let default_privacy_denied = if degraded_spool_eligible || no_live_route {
-        match state
-            .message_service()
-            .default_recipient_privacy_denies(recipient.id, from)
-            .await
-        {
-            Ok(denied) => denied,
-            Err(error) if !no_live_route => {
-                tracing::warn!(?error, recipient_id = %recipient.id,
-                    "account-default privacy unavailable; S2S message remains live-only");
-                true
-            }
-            Err(error) => return Err(error),
-        }
-    } else {
-        false
-    };
-    if no_live_route && default_privacy_denied {
-        return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
-    }
-    // Deterministic full-resource failure is still a truthful stanza error
-    // before admission. After the durable transaction commits, the same
-    // condition can only be a routing race and must be recovered from the
-    // resource-affine outbox without returning an error.
-    if !bare_target && unfiltered_privacy_candidates == 0 && !remote_route_exists {
-        match northstar_message_core::full_no_match_route(message_type) {
-            northstar_message_core::FullNoMatchRoute::Ignore => return Ok(None),
-            northstar_message_core::FullNoMatchRoute::Reject => {
-                return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
-            }
-            northstar_message_core::FullNoMatchRoute::FallbackChat => {}
-        }
-    }
     let stable_id = uuid::Uuid::new_v4();
     let recipient_by = format!("{}@{}", recipient.username, state.local_domain());
     let authoritative_raw = strip_stanza_ids_by_domain(
@@ -411,98 +175,32 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
     let mut durable_c2s_delivery = None;
     let mut live_claim_id = None;
     let direct_delivery_mode = northstar_message_core::direct_delivery_mode(root);
-    if !personal_retraction
-        && matches!(message_type, "normal" | "chat")
-        && northstar_message_core::durable_direct_delivery_allowed(
-            direct_delivery_mode,
-            durable_content_allowed,
-        )
+    if let ControlFlow::Break(action) = durable_commit::commit(
+        state,
+        root,
+        &recipient,
+        personal_retraction,
+        message_type,
+        direct_delivery_mode,
+        durable_content_allowed,
+        persistence_allowed,
+        authenticated_domain,
+        &recipient_bare,
+        &authoritative_raw,
+        &annotated,
+        &candidate,
+        stable_id,
+        &canonical_from,
+        encrypted,
+        degraded_spool_eligible,
+        default_privacy_denied,
+        &mut history_committed,
+        &mut durable_c2s_delivery,
+        &mut live_claim_id,
+    )
+    .await?
     {
-        if !persistence_allowed {
-            // DirectDeliveryMode::Durable is defined by this condition. Keep
-            // this assertion close to the admission boundary so future policy
-            // changes cannot accidentally create a non-recoverable write.
-            anyhow::bail!("durable inbound message lost its persistence projection");
-        }
-        let identity_parts = authoritative_remote_stanza_identity(root, authenticated_domain);
-        let identity =
-            identity_parts
-                .as_ref()
-                .map(
-                    |(actor_scope_raw, actor_scope, identity_value)| MessageIdentity {
-                        authority: IdentityAuthority::AuthenticatedRemoteStanza,
-                        actor_scope_raw,
-                        actor_scope,
-                        target_scope: &recipient_bare,
-                        value: identity_value,
-                        payload: &authoritative_raw,
-                    },
-                );
-        let delayed = add_delay_from(
-            &annotated,
-            northstar_time::Utc::now(),
-            Some(state.local_domain()),
-        );
-        let delivery = ValidatedPersonalMessage {
-            local_actor_id: None,
-            identity,
-            archives: candidate.as_slice(),
-            destination: PersonalMessageDestination::Local(LocalDelivery {
-                delivery_id: stable_id,
-                recipient_id: recipient.id,
-                recipient_bare_jid: &recipient_bare,
-                sender_jid: &canonical_from,
-                stanza: &delayed,
-                encrypted,
-            }),
-        };
-        let eligibility =
-            inbound_direct_spool_eligibility(degraded_spool_eligible, default_privacy_denied);
-        match state
-            .message_service()
-            .admit_personal_message_with_mode(&delivery, eligibility)
-            .await
-            .map(|admitted| (admitted.commit, admitted.mode, admitted.live_claim_id))
-        {
-            Ok((
-                DurableAdmissionOutcome::Stored {
-                    archive_written,
-                    post_commit,
-                },
-                post_commit_mode,
-                admitted_claim_id,
-            )) => {
-                history_committed = archive_written;
-                let MessagePostCommit::RouteLocalDelivery { delivery_id, .. } = post_commit else {
-                    state.record_s2s_post_accept_failure();
-                    tracing::warn!(%stable_id, "committed S2S ingress returned a non-local delivery plan");
-                    return Ok(None);
-                };
-                durable_c2s_delivery = Some(delivery_id);
-                live_claim_id = admitted_claim_id;
-                // A committed spool row has no safe live owner during Redis
-                // degradation. A second read covers a mode change after the
-                // PostgreSQL commit; neither case may trigger local/cluster
-                // routing, Carbons, Push, or an offline fallback.
-                if post_commit_mode != DirectPostCommitMode::Live
-                    || state.message_service().direct_mode() != DirectPostCommitMode::Live
-                {
-                    state
-                        .message_service()
-                        .rearm_unrouted_live_direct(recipient.id, delivery_id, &mut live_claim_id)
-                        .await;
-                    tracing::debug!(%stable_id, recipient_id = %recipient.id,
-                        "S2S direct committed to PostgreSQL spool for recovery");
-                    return Ok(None);
-                }
-            }
-            Ok((DurableAdmissionOutcome::Replay, _, _)) => return Ok(None),
-            Ok((DurableAdmissionOutcome::AccountUnavailable, _, _)) => return Ok(None),
-            Err(error) => {
-                tracing::warn!(?error, %authenticated_domain, "inbound message history/C2S admission failed atomically");
-                return Ok(inbound_message_error(root, "wait", "resource-constraint"));
-            }
-        }
+        return Ok(action);
     }
     // The remaining paths are live-only. The durable branch above already
     // returned for a committed spool, while a race into degradation before
@@ -553,83 +251,28 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
         }
     }
     let targets = allowed_targets;
-    if let Some(command) = personal_retraction_command.as_ref() {
-        if state.message_service().direct_mode() != DirectPostCommitMode::Live {
-            return Ok(inbound_message_error(root, "wait", "service-unavailable"));
-        }
-        // A full-JID route that is deterministically invalid must be rejected
-        // before creating a durable projection. Chat fallback remains valid;
-        // a bare target may recover through the offline outbox.
-        if !bare_target && targets.is_empty() && !remote_route_exists {
-            match northstar_message_core::full_no_match_route(message_type) {
-                northstar_message_core::FullNoMatchRoute::Ignore => return Ok(None),
-                northstar_message_core::FullNoMatchRoute::Reject => {
-                    return Ok(inbound_message_error(root, "cancel", "service-unavailable"));
-                }
-                northstar_message_core::FullNoMatchRoute::FallbackChat => {}
-            }
-        }
-        let delayed = add_delay_from(
-            &annotated,
-            northstar_time::Utc::now(),
-            Some(state.local_domain()),
-        );
-        let limits = state.offline_delivery_limits();
-        let delivery = DeliveryProjection {
-            id: stable_id,
-            recipient_id: recipient.id,
-            local_actor_id: None,
-            sender_jid: &canonical_from,
-            stanza: &delayed,
-            encrypted,
-            max_messages: limits.max_messages,
-            max_bytes: limits.max_bytes,
-            ttl_days: limits.ttl_days,
-            mam_backed: true,
-        };
-        match state
-            .retraction_service()
-            .apply_with_delivery(
-                &[OwnerProjection {
-                    owner_id: recipient.id,
-                    peer_jid: &canonical_from,
-                }],
-                &canonical_from,
-                &RetractionCommand {
-                    target_id: &command.target_id,
-                    action_id: &command.action_id,
-                    semantic_payload: &command.semantic_payload,
-                },
-                std::slice::from_ref(&archive_write),
-                Some(&delivery),
-                None,
-            )
-            .await
-        {
-            Ok(RetractionOutcome::Applied {
-                live_claim_id: admitted_claim_id,
-                ..
-            }) => {
-                history_committed = true;
-                durable_c2s_delivery = Some(stable_id);
-                live_claim_id = admitted_claim_id;
-            }
-            Ok(RetractionOutcome::Replay) => return Ok(None),
-            Ok(RetractionOutcome::Conflict) => {
-                return Ok(inbound_message_error(root, "cancel", "conflict"));
-            }
-            Ok(RetractionOutcome::Forbidden) => {
-                return Ok(inbound_message_error(root, "auth", "forbidden"));
-            }
-            Ok(RetractionOutcome::AccountUnavailable) => return Ok(None),
-            Ok(RetractionOutcome::CapacityExceeded) => {
-                return Ok(inbound_message_error(root, "wait", "resource-constraint"));
-            }
-            Err(error) => {
-                tracing::warn!(?error, %authenticated_domain, "inbound retraction admission failed atomically before delivery");
-                return Ok(inbound_message_error(root, "wait", "resource-constraint"));
-            }
-        }
+    if let ControlFlow::Break(action) = retraction::apply(
+        state,
+        root,
+        personal_retraction_command.as_ref(),
+        bare_target,
+        &targets,
+        remote_route_exists,
+        message_type,
+        &annotated,
+        stable_id,
+        &recipient,
+        &canonical_from,
+        encrypted,
+        &archive_write,
+        authenticated_domain,
+        &mut history_committed,
+        &mut durable_c2s_delivery,
+        &mut live_claim_id,
+    )
+    .await?
+    {
+        return Ok(action);
     }
     let delivery = durable_c2s_delivery.map_or(DirectRouteDelivery::Volatile, |message_id| {
         DirectRouteDelivery::Committed(northstar_stream::outbound::DurableDelivery {
@@ -683,136 +326,28 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
         }
     };
 
-    if !delivered && message_type == "headline" {
-        return Ok(None);
-    }
-
-    if delivered {
-        if durable_c2s_delivery.is_none() {
-            finalize_accepted_inbound_history(state, root, candidate.as_ref(), "s2s-online").await;
-        }
-        let remote_muc_private_message =
-            is_remote_muc_private_message(root, from, authenticated_domain);
-        if state.message_service().direct_mode() == DirectPostCommitMode::Live
-            && should_carbon(root)
-            && !remote_muc_private_message
-        {
-            if let Some(delivered_key) = delivered_key.as_deref() {
-                northstar_message_application::message_carbons::send_received_carbons(
-                    state,
-                    &recipient_by,
-                    Some(delivered_key),
-                    &annotated,
-                )
-                .await;
-            }
-        }
-        state.record_s2s_message_routed();
-        return Ok(None);
-    }
-    if durable_c2s_delivery.is_some() {
-        if state.message_service().direct_mode() == DirectPostCommitMode::Live {
-            if let Err(error) = state.dispatch_push_notification(recipient.id).await {
-                state.record_s2s_post_accept_failure();
-                tracing::warn!(?error, %stable_id, recipient_id = %recipient.id, "durable inbound C2S message was accepted but push notification failed");
-            }
-        }
-        return Ok(None);
-    }
-    if direct_delivery_mode == northstar_message_core::DirectDeliveryMode::VolatileExplicitNoStore {
-        return Ok(inbound_message_error(root, "wait", "service-unavailable"));
-    }
-    if !persistence_allowed {
-        return Ok(None);
-    }
-    if persistence_allowed
-        && matches!(
-            root.attribute("type").unwrap_or("normal"),
-            "normal" | "chat"
-        )
-        && durable_content_allowed
-    {
-        match inbound_live_effect(state.message_service().direct_mode(), history_committed) {
-            InboundLiveEffect::Proceed => {}
-            InboundLiveEffect::AcceptedSpool => return Ok(None),
-            InboundLiveEffect::Reject => {
-                return Ok(inbound_message_error(root, "wait", "service-unavailable"));
-            }
-        }
-        let delayed = add_delay_from(
-            &archive,
-            northstar_time::Utc::now(),
-            Some(state.local_domain()),
-        );
-        let offline_outcome = state
-            .message_service()
-            .store_offline(OfflineMessageAdmission {
-                recipient_id: recipient.id,
-                recipient_bare_jid: &recipient_by,
-                sender_jid: from,
-                stanza: &delayed,
-                encrypted,
-                // No durable history admission preceded this fallback.
-                mam_backed: false,
-                identity: None,
-            })
-            .await?;
-        if offline_outcome == OfflineAdmissionOutcome::RecipientUnavailable {
-            return Ok(None);
-        }
-        if offline_outcome == OfflineAdmissionOutcome::QuotaExceeded {
-            if history_committed {
-                if state.message_service().direct_mode() == DirectPostCommitMode::Live {
-                    if let Err(error) = state.dispatch_push_notification(recipient.id).await {
-                        state.record_s2s_post_accept_failure();
-                        tracing::warn!(?error, %stable_id, recipient_id = %recipient.id, "MAM-backed inbound message was accepted but offline quota and push delivery both failed");
-                    }
-                }
-                return Ok(None);
-            }
-            return Ok(inbound_message_error(root, "wait", "resource-constraint"));
-        }
-        finalize_accepted_inbound_history(state, root, candidate.as_ref(), "s2s-offline").await;
-        if state.message_service().direct_mode() == DirectPostCommitMode::Live {
-            if let Err(error) = state.dispatch_push_notification(recipient.id).await {
-                state.record_s2s_post_accept_failure();
-                tracing::warn!(?error, %stable_id, recipient_id = %recipient.id, "inbound offline message was accepted but push notification failed");
-            }
-        }
-        return Ok(None);
-    }
-    Ok(inbound_message_error(root, "wait", "recipient-unavailable"))
-}
-
-/// Complete ordinary best-effort history after a legacy online/offline route.
-/// Personal retractions are deliberately excluded: their authorization,
-/// tombstones, action MAM, and delivery outbox commit before fanout.
-async fn finalize_accepted_inbound_history<H: FederatedMessageHost>(
-    state: &H,
-    root: roxmltree::Node<'_, '_>,
-    candidate: Option<&ArchiveCandidate<'_>>,
-    route: &'static str,
-) {
-    debug_assert!(
-        northstar_message_core::retraction::personal_retraction_command(root)
-            .ok()
-            .flatten()
-            .is_none(),
-        "personal retraction reached post-delivery history finalization"
-    );
-    let Some(candidate) = candidate else {
-        return;
-    };
-    let stable_id = candidate.projection.id;
-    let recipient_id = candidate.projection.owner_id;
-    let history_result = state
-        .message_service()
-        .admit_history(std::slice::from_ref(candidate))
-        .await;
-    if let Err(error) = history_result {
-        state.record_s2s_post_accept_failure();
-        tracing::warn!(?error, %stable_id, %route, %recipient_id, "accepted inbound message history transaction failed");
-    }
+    continuation::finish(
+        state,
+        root,
+        delivered,
+        &delivered_key,
+        message_type,
+        durable_c2s_delivery,
+        &candidate,
+        from,
+        authenticated_domain,
+        &recipient_by,
+        &annotated,
+        &recipient,
+        stable_id,
+        direct_delivery_mode,
+        persistence_allowed,
+        durable_content_allowed,
+        history_committed,
+        &archive,
+        encrypted,
+    )
+    .await
 }
 
 /// Select a single XEP-0359 identity asserted by the exact domain

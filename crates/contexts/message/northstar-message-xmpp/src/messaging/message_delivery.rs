@@ -2,13 +2,19 @@
 
 use super::archive_admission::archive_candidate;
 use super::*;
-use northstar_message_application::messaging::invitation_admission::{
-    DirectInvitation, DirectInvitationOutcome, DirectInvitationRefusal,
-};
+use northstar_message_application::messaging::invitation_admission::DirectInvitation;
+use std::ops::ControlFlow;
 
 use self::invitation_admission::GrantDelivery;
 
+mod carbons;
+mod durable_commit;
 mod invitation_admission;
+mod local_targets;
+mod offline_fallback;
+mod outbound_remote;
+mod rated_admission;
+mod retraction;
 
 pub async fn message<S: MessageSession>(
     session: &S,
@@ -113,73 +119,22 @@ pub async fn message<S: MessageSession>(
     let pow_intent_payload = message_pow_intent_payload(client_raw);
     let original_direct = OriginalDirectMessage::capture(root, user_id, from, to, &routed_raw);
     let mut message_admission_lease = None;
-    if let Some(normalized_admission_payload) = original_direct.rated_payload() {
-        let subject = format!("message:{}", user_id);
-        session.enter_frame_stage(MessageFrameStage::Admission);
-        let request = MessageAdmissionRequest {
-            actor_id: user_id,
-            account_bare: bare_jid(from),
-            normalized_target: to,
-            origin_id: original_direct.origin_id.as_deref(),
-            normalized_payload: normalized_admission_payload,
-            pow_intent_payload: &pow_intent_payload,
-            subject: &subject,
-            actors: &actors,
-            proof: proof.as_ref(),
-        };
-        let service = state.message_admission_service();
-        let admission = if let Some(operation) = session.message_operation() {
-            match operation.begin(&request) {
-                Ok(retained) => {
-                    service
-                        .begin_message_admission_retained(&request, &retained)
-                        .await
-                }
-                Err(error) => Err(error),
-            }
-        } else {
-            // Direct handle() callers retain the established convenience
-            // path. Production process_frame() always supplies an owner.
-            service.begin_message_admission(&request).await
-        };
-        match admission {
-            Ok(MessageAdmissionStart::Proceed { lease, requirement }) => {
-                debug_assert_eq!(requirement.action, "message");
-                message_admission_lease = lease;
-            }
-            Ok(MessageAdmissionStart::ReplayAccepted) => return Ok(S::Action::none()),
-            Ok(MessageAdmissionStart::InProgress { requirement }) => {
-                state.personal_message_telemetry().rate_limited();
-                return Ok(S::Action::send(abuse_stanza_error(root, &requirement)));
-            }
-            Ok(MessageAdmissionStart::Denied(error)) => {
-                state.personal_message_telemetry().rate_limited();
-                return Ok(S::Action::send(abuse_stanza_error(
-                    root,
-                    error.requirement(),
-                )));
-            }
-            Ok(MessageAdmissionStart::Conflict) => {
-                return Ok(message_error(root, "cancel", "conflict"));
-            }
-            Ok(MessageAdmissionStart::CapacityLimited) => {
-                state.personal_message_telemetry().rate_limited();
-                return Ok(message_error(root, "wait", "resource-constraint"));
-            }
-            Err(error) => {
-                // Fail closed before routing/archive. A backend failure may
-                // leave this admission or a separate guard transaction
-                // unconfirmed; it does not prove rollback or permit retry.
-                if northstar_abuse_policy::message_admission::is_abuse_state_busy(&error) {
-                    tracing::warn!(user_id = %user_id, "message anti-abuse actor state was busy; rejected without waiting on a database connection lock");
-                    state.personal_message_telemetry().rate_limited();
-                    return Ok(message_error(root, "wait", "resource-constraint"));
-                }
-                tracing::error!(?error, user_id = %user_id, "message anti-abuse backend failed before acceptance");
-                state.personal_message_telemetry().abuse_backend_failed();
-                return Ok(message_error(root, "wait", "resource-constraint"));
-            }
-        }
+    if let Some(action) = rated_admission::begin(
+        session,
+        state,
+        root,
+        user_id,
+        from,
+        to,
+        &original_direct,
+        &pow_intent_payload,
+        &actors,
+        &proof,
+        &mut message_admission_lease,
+    )
+    .await?
+    {
+        return Ok(action);
     }
     session.enter_frame_stage(MessageFrameStage::Policy);
     let invitation_room = direct_invite_admission(session, root);
@@ -196,60 +151,29 @@ pub async fn message<S: MessageSession>(
         local_recipient_name: target_jid.localpart().filter(|_| local_invitee),
         active_privacy: active_privacy.as_deref(),
     });
-    let invitation_outcome = match &invitation {
-        Some(invitation) => Some(
-            state
-                .message_service()
-                .admit_direct_invitation(invitation, None)
-                .await?,
-        ),
-        None => None,
+    let invitation_outcome = match invitation_admission::check(state, root, &invitation).await? {
+        ControlFlow::Continue(outcome) => outcome,
+        ControlFlow::Break(action) => return Ok(action),
     };
-    if matches!(
-        invitation_outcome,
-        Some(DirectInvitationOutcome::Refused(
-            DirectInvitationRefusal::Forbidden
-        ))
-    ) {
-        return Ok(invitation_admission::refused(
-            root,
-            DirectInvitationRefusal::Forbidden,
-        ));
-    }
     if session.push_disable_message(root, from, to).await? {
         return Ok(S::Action::none());
     }
-    // XEP-0191 is account scoped and applies to every outbound stanza,
-    // including local service addresses such as MUC and MIX. The service
-    // always evaluates that non-overridable rule before XEP-0016.
-    let (invitation_recipient, grant_revision) = if let Some(admission) = invitation_outcome {
-        match admission {
-            DirectInvitationOutcome::Open { recipient } => (recipient, None),
-            DirectInvitationOutcome::GrantRequired {
-                recipient,
-                room_epoch,
-                config_version,
-            } => (recipient, Some((room_epoch, config_version))),
-            DirectInvitationOutcome::Refused(refusal) => {
-                return Ok(invitation_admission::refused(root, refusal));
-            }
-            DirectInvitationOutcome::Granted { .. } | DirectInvitationOutcome::Replay => {
-                unreachable!("an invitation without a grant projection cannot grant access")
-            }
-        }
-    } else {
-        match state
-            .message_service()
-            .authorize_outbound_message(user_id, bare_jid(from), active_privacy.as_deref(), to)
-            .await?
-        {
-            OutboundPolicyDecision::Allowed => {}
-            OutboundPolicyDecision::Blocked => return Ok(message_blocked_error(root)),
-            OutboundPolicyDecision::PrivacyDenied => {
-                return Ok(message_error(root, "cancel", "service-unavailable"));
-            }
-        }
-        (None, None)
+    let invitation_admission::OutboundAuthorization {
+        invitation_recipient,
+        grant_revision,
+    } = match invitation_admission::authorize(
+        state,
+        root,
+        invitation_outcome,
+        user_id,
+        from,
+        &active_privacy,
+        to,
+    )
+    .await?
+    {
+        ControlFlow::Continue(authorization) => authorization,
+        ControlFlow::Break(action) => return Ok(action),
     };
     session.enter_frame_stage(MessageFrameStage::Handler);
     if let Some(action) = session.try_mix_message(root, &routed_raw).await? {
@@ -295,246 +219,25 @@ pub async fn message<S: MessageSession>(
         && target_domain != session.upload_domain()
         && target_domain != session.pubsub_domain())
     .then_some(target_domain);
-    if let Some(domain) = remote_domain {
-        if !state.xmpp_external_route_domain_allowed(domain) {
-            return Ok(message_error(root, "cancel", "remote-server-not-found"));
-        }
-        let stable_id = uuid::Uuid::new_v4();
-        let rewritten = set_from(&routed_raw, from);
-        let routed = strip_stanza_ids_by_domain(&rewritten, state.local_domain());
-        let sender_archive = add_stanza_id(&rewritten, bare_jid(from), stable_id);
-        if !personal_retraction
-            && direct_delivery_mode(root) == DirectDeliveryMode::VolatileExplicitNoStore
-        {
-            if grant_revision.is_some() {
-                // Granting affiliation for a members-only invitation is
-                // a durable authorization mutation. Never send an invite
-                // which the recipient could not subsequently exercise.
-                return Ok(message_error(root, "wait", "service-unavailable"));
-            }
-            // A persistent S2S outbox would contradict the explicit
-            // XEP-0334 no-store request. Only an already authenticated,
-            // writable S2S/Bidi stream may accept this stanza. The
-            // helper waits for the actual socket write and never creates
-            // a connection, database admission row, archive or retry.
-            if !state
-                .send_volatile(state.local_domain(), domain, routed)
-                .await
-            {
-                tracing::debug!(
-                    source_domain = %state.local_domain(),
-                    target_domain = %domain,
-                    "volatile no-store stanza was not accepted by an authenticated S2S route"
-                );
-                return Ok(message_error(root, "wait", "service-unavailable"));
-            }
-            finalize_message_admission(session, &mut message_admission_lease, "remote-no-store")
-                .await;
-            if should_carbon(root) {
-                send_sent_carbons(state, from, &sender_archive, None, None).await;
-            }
-            state.personal_message_telemetry().message_routed();
-            return Ok(S::Action::none());
-        }
-        let encrypted = is_encrypted(root);
-        let archive = if encrypted {
-            if let Some(target_id) = personal_retraction_target.as_deref() {
-                encrypted_retraction_archive_stanza(&sender_archive, target_id)
-            } else {
-                encrypted_archive_stanza(&sender_archive)
-            }
-        } else {
-            sender_archive.clone()
-        };
-        let archive_write = ArchiveWrite {
-            id: stable_id,
-            owner_id: user_id,
-            peer_jid: to,
-            stanza: &archive,
-            encrypted,
-            stanza_id: root.attribute("id"),
-        };
-        let candidate = archive_candidate(
-            archive_write.clone(),
-            ArchiveDirection::Outbound,
-            !personal_retraction
-                && state
-                    .message_service()
-                    .archive_content_eligible(mam_storage_eligible(root), encrypted),
-        );
-        let invitation_sent = if let (Some(invitation), Some(revision)) =
-            (&invitation, grant_revision)
-        {
-            let actor_scope = bare_jid(from);
-            let target_scope = bare_jid(to);
-            let origin_id = direct_origin_id(root);
-            let identity = origin_id.as_deref().map(|id| MessageIdentity {
-                authority: IdentityAuthority::LocalOrigin,
-                actor_scope_raw: actor_scope,
-                actor_scope,
-                target_scope,
-                value: id,
-                payload: &rewritten,
-            });
-            let admission = ValidatedPersonalMessage {
-                local_actor_id: Some(user_id),
-                identity,
-                archives: candidate.as_slice(),
-                destination: PersonalMessageDestination::Federation(FederationDelivery {
-                    local_actor_id: user_id,
-                    target_domain: domain,
-                    stanza: &routed,
-                    bounce_to: Some(from),
-                    limits: state.federation_outbox_policy(),
-                }),
-            };
-            let grant = invitation_admission::prepare_grant(
-                state, invitation, revision, stable_id, &admission,
-            )?;
-            session.enter_frame_stage(MessageFrameStage::Admission);
-            match grant.admit(state).await {
-                Ok(Ok(GrantDelivery::Open)) => false,
-                Ok(Ok(GrantDelivery::Granted { wake_operation, .. })) => {
-                    state.wake_federation_outbox();
-                    if wake_operation {
-                        if let Err(error) = state.wake_committed_direct_muc_invite(stable_id).await
-                        {
-                            state.personal_message_telemetry().post_accept_failed();
-                            tracing::warn!(?error, %stable_id, "accepted federated direct MUC invite cluster wake failed");
-                        }
-                    }
-                    true
-                }
-                Ok(Ok(GrantDelivery::Replay)) => {
-                    finalize_message_admission(
-                        session,
-                        &mut message_admission_lease,
-                        "remote-muc-invite-replay",
-                    )
-                    .await;
-                    return Ok(S::Action::none());
-                }
-                Ok(Err(refusal)) => {
-                    return Ok(invitation_admission::refused(root, refusal));
-                }
-                Err(error) => {
-                    tracing::warn!(?error, invitee = %target_jid.bare(), "federated direct MUC invite admission failed atomically");
-                    return Ok(message_error(root, "wait", "resource-constraint"));
-                }
-            }
-        } else {
-            false
-        };
-        if personal_retraction {
-            session.enter_frame_stage(MessageFrameStage::Admission);
-            match apply_outbound_personal_retraction(
-                state,
-                user_id,
-                from,
-                to,
-                root,
-                std::slice::from_ref(&archive_write),
-                domain,
-                &routed,
-            )
-            .await
-            {
-                Ok(RetractionOutcome::Applied { .. }) => {
-                    state.wake_federation_outbox();
-                }
-                Ok(RetractionOutcome::Replay) => {
-                    finalize_message_admission(
-                        session,
-                        &mut message_admission_lease,
-                        "remote-retraction-replay",
-                    )
-                    .await;
-                    return Ok(S::Action::none());
-                }
-                Ok(RetractionOutcome::Conflict) => {
-                    return Ok(message_error(root, "cancel", "conflict"));
-                }
-                Ok(RetractionOutcome::Forbidden) => {
-                    return Ok(message_error(root, "auth", "forbidden"));
-                }
-                Ok(RetractionOutcome::AccountUnavailable) => {
-                    return Ok(message_error(root, "cancel", "service-unavailable"));
-                }
-                Ok(RetractionOutcome::CapacityExceeded) => {
-                    return Ok(message_error(root, "wait", "resource-constraint"));
-                }
-                Err(error) => {
-                    tracing::warn!(?error, %domain, "remote retraction history/outbox admission failed atomically");
-                    return Ok(message_error(root, "wait", "remote-server-timeout"));
-                }
-            }
-        } else if !invitation_sent {
-            let actor_scope = bare_jid(from);
-            let target_scope = bare_jid(to);
-            let origin_id = direct_origin_id(root);
-            // The S2S outbox is itself the recoverable projection for a
-            // federated message.  Keep the trusted origin-id even when
-            // REQUIRE_ENCRYPTED_ARCHIVE suppresses the plaintext MAM
-            // projection; otherwise an exact retry can enqueue twice and
-            // a changed payload can reuse the same origin-id.
-            let identity = origin_id.as_deref().map(|id| MessageIdentity {
-                authority: IdentityAuthority::LocalOrigin,
-                actor_scope_raw: actor_scope,
-                actor_scope,
-                target_scope,
-                value: id,
-                payload: &rewritten,
-            });
-            let admission = ValidatedPersonalMessage {
-                local_actor_id: Some(user_id),
-                identity,
-                archives: candidate.as_slice(),
-                destination: PersonalMessageDestination::Federation(FederationDelivery {
-                    local_actor_id: user_id,
-                    target_domain: domain,
-                    stanza: &routed,
-                    bounce_to: Some(from),
-                    limits: state.federation_outbox_policy(),
-                }),
-            };
-            session.enter_frame_stage(MessageFrameStage::Admission);
-            match wake_federation_outbox_after_commit(
-                state.message_service().admit_personal_message(&admission),
-                || state.wake_federation_outbox(),
-            )
-            .await
-            {
-                Ok(DurableAdmissionOutcome::Stored { post_commit, .. }) => {
-                    debug_assert_eq!(post_commit, MessagePostCommit::WakeFederationOutbox);
-                }
-                Ok(DurableAdmissionOutcome::Replay) => {
-                    finalize_message_admission(
-                        session,
-                        &mut message_admission_lease,
-                        "remote-replay",
-                    )
-                    .await;
-                    return Ok(S::Action::none());
-                }
-                Ok(DurableAdmissionOutcome::AccountUnavailable) => {
-                    return Ok(message_error(root, "cancel", "service-unavailable"));
-                }
-                Err(error) => {
-                    tracing::warn!(?error, %domain, "remote message history/outbox admission failed atomically");
-                    return Ok(message_error(root, "wait", "remote-server-timeout"));
-                }
-            }
-        }
-        finalize_message_admission(session, &mut message_admission_lease, "remote-outbox").await;
-        // Every durable remote path above commits its sender MAM/retraction
-        // projection and S2S outbox in the same transaction. There is no
-        // post-accept history write here that could fail and invite an
-        // unsafe client retry.
-        if should_carbon(root) {
-            send_sent_carbons(state, from, &sender_archive, None, None).await;
-        }
-        state.personal_message_telemetry().message_routed();
-        return Ok(S::Action::none());
+    if let Some(action) = outbound_remote::route(
+        session,
+        state,
+        root,
+        remote_domain,
+        &routed_raw,
+        from,
+        personal_retraction,
+        grant_revision,
+        &mut message_admission_lease,
+        &personal_retraction_target,
+        user_id,
+        to,
+        &invitation,
+        &target_jid,
+    )
+    .await?
+    {
+        return Ok(action);
     }
     let Some(recipient_local) = target_jid.localpart() else {
         return Ok(message_error(root, "cancel", "service-unavailable"));
@@ -619,81 +322,27 @@ pub async fn message<S: MessageSession>(
         recipient_eligible: archive_eligible,
     };
     let candidates = local_projection.archive_candidates(archive_eligibility);
-    let spool_only_now = if local_direct {
-        match state.message_service().direct_mode() {
-            DirectPostCommitMode::Live => false,
-            DirectPostCommitMode::SpoolOnly if degraded_spool_eligible => true,
-            DirectPostCommitMode::SpoolOnly | DirectPostCommitMode::Rejected => {
-                return Ok(message_error(root, "wait", "service-unavailable"));
-            }
-        }
-    } else {
-        false
+    let local_targets::LocalTargets {
+        spool_only_now,
+        targets,
+        default_privacy_for_spool: _default_privacy_for_spool,
+        spool_privacy_permits,
+    } = match local_targets::select::<S>(
+        state,
+        root,
+        local_direct,
+        degraded_spool_eligible,
+        to,
+        bare_target,
+        message_type,
+        from,
+        &recipient,
+    )
+    .await?
+    {
+        ControlFlow::Continue(targets) => targets,
+        ControlFlow::Break(action) => return Ok(action),
     };
-    // The degraded destination is the PostgreSQL recipient spool. Redis
-    // session discovery cannot establish a live route in this mode.
-    let mut targets = if spool_only_now {
-        Vec::new()
-    } else {
-        state.fallback_sessions(to)
-    };
-    if bare_target {
-        targets.retain(|(_, target)| state.available_priority(target).is_some());
-        if message_type != "headline" {
-            targets.sort_by(|(left_jid, left), (right_jid, right)| {
-                state
-                    .priority(right)
-                    .cmp(&state.priority(left))
-                    .then_with(|| left_jid.cmp(right_jid))
-            });
-        }
-    }
-    let unfiltered_local_targets = targets.len();
-    let mut privacy_allowed_targets = Vec::with_capacity(targets.len());
-    for target in targets {
-        if state.privacy_allows_fallback(&target.1, from).await? {
-            privacy_allowed_targets.push(target);
-        }
-    }
-    let targets = privacy_allowed_targets;
-    if unfiltered_local_targets > 0 && targets.is_empty() {
-        return Ok(message_error(root, "cancel", "service-unavailable"));
-    }
-    let remote_route_exists = if spool_only_now {
-        false
-    } else {
-        state.personal_message_remote_resource_exists(to).await
-    };
-    // A live resource's active privacy list may override the account
-    // default. If mode changes to SpoolOnly inside the PG transaction,
-    // however, the delivery becomes account-scoped. Read that default
-    // even when a live resource exists so the transaction can be marked
-    // LiveOnly when an account spool would violate recipient privacy.
-    let default_privacy_for_spool = if degraded_spool_eligible {
-        Some(
-            state
-                .message_service()
-                .default_recipient_privacy_denies(recipient.id, from)
-                .await,
-        )
-    } else {
-        None
-    };
-    let spool_privacy_permits = matches!(&default_privacy_for_spool, Some(Ok(false)));
-    if targets.is_empty() && !remote_route_exists {
-        let default_denies = match default_privacy_for_spool {
-            Some(result) => result?,
-            None => {
-                state
-                    .message_service()
-                    .default_recipient_privacy_denies(recipient.id, from)
-                    .await?
-            }
-        };
-        if default_denies {
-            return Ok(message_error(root, "cancel", "service-unavailable"));
-        }
-    }
     // A trusted client origin-id is account scoped. Commit the durable
     // delivery and any selected archives before fanout. A retried origin-id is
     // consumed before any resource can observe a duplicate. The exact
@@ -708,363 +357,93 @@ pub async fn message<S: MessageSession>(
     let mut durable_c2s_delivery = None;
     let mut prepared_live = None;
     let mut live_claim_id = None;
-    let durable_direct_invite = if let (Some(invitation), Some(revision)) =
-        (&invitation, grant_revision)
+    let durable_direct_invite = match invitation_admission::commit_local(
+        session,
+        state,
+        root,
+        &invitation,
+        grant_revision,
+        message_type,
+        persistence_allowed,
+        exact_full_target_can_route,
+        recipient_delivery,
+        from,
+        origin_id,
+        to,
+        rewritten,
+        user_id,
+        &candidates,
+        recipient_stable_id,
+        &recipient,
+        &recipient_by,
+        encrypted,
+        &mut live_claim_id,
+        &mut message_admission_lease,
+    )
+    .await?
     {
-        if !matches!(message_type, "normal" | "chat") {
-            return Ok(message_error(root, "modify", "bad-request"));
-        }
-        if !persistence_allowed {
-            return Ok(message_error(root, "wait", "service-unavailable"));
-        }
-        if !exact_full_target_can_route {
-            return Ok(message_error(root, "cancel", "service-unavailable"));
-        }
-        let delayed = add_delay_from(
-            recipient_delivery,
-            northstar_time::Utc::now(),
-            Some(bare_jid(from)),
-        );
-        let identity = origin_id.map(|identity_value| {
-            let actor_scope = bare_jid(from);
-            MessageIdentity {
-                authority: IdentityAuthority::LocalOrigin,
-                actor_scope_raw: actor_scope,
-                actor_scope,
-                target_scope: bare_jid(to),
-                value: identity_value,
-                payload: rewritten,
-            }
-        });
-        let grant = ValidatedPersonalMessage {
-            local_actor_id: Some(user_id),
-            identity,
-            archives: &candidates,
-            destination: PersonalMessageDestination::Local(LocalDelivery {
-                delivery_id: recipient_stable_id,
-                recipient_id: recipient.id,
-                recipient_bare_jid: &recipient_by,
-                sender_jid: from,
-                stanza: &delayed,
-                encrypted,
-            }),
-        };
-        let grant = invitation_admission::prepare_grant(
-            state,
-            invitation,
-            revision,
-            recipient_stable_id,
-            &grant,
-        )?;
-        session.enter_frame_stage(MessageFrameStage::Admission);
-        match grant.admit(state).await? {
-            Ok(GrantDelivery::Open) => None,
-            Ok(GrantDelivery::Granted {
-                live_claim_id: admitted_claim_id,
-                wake_operation,
-            }) => {
-                live_claim_id = admitted_claim_id;
-                if wake_operation {
-                    if let Err(error) = state
-                        .wake_committed_direct_muc_invite(recipient_stable_id)
-                        .await
-                    {
-                        state.personal_message_telemetry().post_accept_failed();
-                        tracing::warn!(?error, %recipient_stable_id, "accepted local direct MUC invite cluster wake failed");
-                    }
-                }
-                finalize_message_admission(
-                    session,
-                    &mut message_admission_lease,
-                    "local-muc-invite",
-                )
-                .await;
-                Some(recipient_stable_id)
-            }
-            Ok(GrantDelivery::Replay) => {
-                finalize_message_admission(
-                    session,
-                    &mut message_admission_lease,
-                    "local-muc-invite-replay",
-                )
-                .await;
-                return Ok(S::Action::none());
-            }
-            Err(refusal) => return Ok(invitation_admission::refused(root, refusal)),
-        }
-    } else {
-        None
+        ControlFlow::Continue(delivery) => delivery,
+        ControlFlow::Break(action) => return Ok(action),
     };
     let direct_delivery_candidate = durable_direct_invite.is_none()
         && matches!(message_type, "normal" | "chat")
         && exact_full_target_can_route
         && !personal_retraction;
     let direct_delivery_mode = direct_delivery_mode(root);
-    if direct_delivery_candidate
-        && durable_direct_delivery_allowed(direct_delivery_mode, durable_content_allowed)
+    if let Some(action) = durable_commit::commit(
+        session,
+        state,
+        root,
+        direct_delivery_candidate,
+        direct_delivery_mode,
+        durable_content_allowed,
+        origin_id,
+        from,
+        to,
+        rewritten,
+        &local_projection,
+        archive_eligibility,
+        user_id,
+        &candidates,
+        recipient_stable_id,
+        &recipient,
+        &recipient_by,
+        encrypted,
+        degraded_spool_eligible,
+        spool_privacy_permits,
+        &mut message_admission_lease,
+        &mut history_committed,
+        &mut durable_c2s_delivery,
+        &mut live_claim_id,
+        &mut prepared_live,
+    )
+    .await?
     {
-        let identity = origin_id.map(|identity_value| {
-            let actor_scope = bare_jid(from);
-            let target_scope = bare_jid(to);
-            MessageIdentity {
-                authority: IdentityAuthority::LocalOrigin,
-                actor_scope_raw: actor_scope,
-                actor_scope,
-                target_scope,
-                value: identity_value,
-                payload: rewritten,
-            }
-        });
-        let delayed_projection =
-            local_projection.delayed(northstar_time::Utc::now(), archive_eligibility);
-        let admission = ValidatedPersonalMessage {
-            local_actor_id: Some(user_id),
-            identity,
-            archives: &candidates,
-            destination: PersonalMessageDestination::Local(LocalDelivery {
-                delivery_id: recipient_stable_id,
-                recipient_id: recipient.id,
-                recipient_bare_jid: &recipient_by,
-                sender_jid: from,
-                stanza: &delayed_projection.stanza,
-                encrypted,
-            }),
-        };
-        let eligibility = direct_spool_eligibility(degraded_spool_eligible, spool_privacy_permits);
-        session.enter_frame_stage(MessageFrameStage::Admission);
-        let service = state.message_service();
-        if let Some(operation) = session.message_operation() {
-            let prepared = match delayed_projection.bind(operation, admission, eligibility) {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    tracing::warn!(?error, recipient_id = %recipient.id, "local history/C2S admission did not return a confirmed result");
-                    return Ok(message_error(root, "wait", "resource-constraint"));
-                }
-            };
-            let applied = service
-                .admit_prepared_personal_message_with_mode(prepared)
-                .await;
-            match continue_prepared_local_direct(
-                applied,
-                &mut message_admission_lease,
-                state.message_admission_service(),
-                state,
-                || session.enter_frame_stage(MessageFrameStage::Followup),
-            )
-            .await
-            {
-                ContinuedLocalDirect::Accepted => return Ok(S::Action::none()),
-                ContinuedLocalDirect::Reject(error) => {
-                    let (kind, condition) = error.stanza_error();
-                    return Ok(message_error(root, kind, condition));
-                }
-                ContinuedLocalDirect::Live(live) => {
-                    history_committed = live.archive_written();
-                    let source = live.source();
-                    durable_c2s_delivery = Some(source.message_id);
-                    live_claim_id = source.claim_id;
-                    prepared_live = Some(live);
-                }
-            }
-        } else {
-            // Compatibility callers without a frame owner retain their
-            // original application and post-commit behavior.
-            let admitted = service
-                .admit_personal_message_with_mode(&admission, eligibility)
-                .await;
-            match admitted.map(|result| (result.commit, result.mode, result.live_claim_id)) {
-                Ok((
-                    DurableAdmissionOutcome::Stored {
-                        archive_written,
-                        post_commit,
-                    },
-                    post_commit_mode,
-                    admitted_claim_id,
-                )) => {
-                    history_committed = archive_written;
-                    let MessagePostCommit::RouteLocalDelivery { delivery_id, .. } = post_commit
-                    else {
-                        return Ok(message_error(root, "wait", "internal-server-error"));
-                    };
-                    durable_c2s_delivery = Some(delivery_id);
-                    live_claim_id = admitted_claim_id;
-                    tracing::debug!(
-                        recipient_id = %recipient.id,
-                        message_id = %recipient_stable_id,
-                        target = %to,
-                        "committed durable C2S delivery before route attempt"
-                    );
-                    finalize_message_admission(
-                        session,
-                        &mut message_admission_lease,
-                        if post_commit_mode == DirectPostCommitMode::Live {
-                            "local-durable-c2s"
-                        } else {
-                            "local-durable-c2s-spooled"
-                        },
-                    )
-                    .await;
-                    if post_commit_mode != DirectPostCommitMode::Live
-                        || state.message_service().direct_mode() != DirectPostCommitMode::Live
-                    {
-                        service
-                            .rearm_unrouted_live_direct(
-                                recipient.id,
-                                delivery_id,
-                                &mut live_claim_id,
-                            )
-                            .await;
-                        tracing::debug!(
-                            recipient_id = %recipient.id,
-                            message_id = %recipient_stable_id,
-                            "C2S direct committed to PostgreSQL spool for recovery"
-                        );
-                        return Ok(S::Action::none());
-                    }
-                }
-                Ok((DurableAdmissionOutcome::Replay, _, _)) => {
-                    finalize_message_admission(
-                        session,
-                        &mut message_admission_lease,
-                        "local-durable-c2s-replay",
-                    )
-                    .await;
-                    return Ok(S::Action::none());
-                }
-                Ok((DurableAdmissionOutcome::AccountUnavailable, _, _)) => {
-                    return Ok(message_error(root, "cancel", "service-unavailable"));
-                }
-                Err(error) => {
-                    if let Some(confirmed) = preserved_transaction(&error) {
-                        match confirmed {
-                            TransactionOutcome::Stored {
-                                recipient_id,
-                                delivery_id,
-                                live_claim_id,
-                                ..
-                            } => {
-                                state.personal_message_telemetry().post_accept_failed();
-                                finalize_message_admission(
-                                    session,
-                                    &mut message_admission_lease,
-                                    "local-durable-c2s-continuation-unknown",
-                                )
-                                .await;
-                                let mut claim = *live_claim_id;
-                                service
-                                    .rearm_unrouted_live_direct(
-                                        *recipient_id,
-                                        *delivery_id,
-                                        &mut claim,
-                                    )
-                                    .await;
-                                return Ok(S::Action::none());
-                            }
-                            TransactionOutcome::Replay { .. } => {
-                                finalize_message_admission(
-                                    session,
-                                    &mut message_admission_lease,
-                                    "local-durable-c2s-replay-continuation-unknown",
-                                )
-                                .await;
-                                return Ok(S::Action::none());
-                            }
-                            TransactionOutcome::AccountUnavailable => {
-                                return Ok(message_error(root, "cancel", "service-unavailable"))
-                            }
-                        }
-                    }
-                    tracing::warn!(?error, recipient_id = %recipient.id, "local history/C2S admission did not return a confirmed result");
-                    return Ok(message_error(root, "wait", "resource-constraint"));
-                }
-            }
-        }
+        return Ok(action);
     }
-    if personal_retraction {
-        // Retractions mutate durable history and therefore always use the
-        // recoverable C2S projection. They must never share a stanza with
-        // an invitation or enter a volatile message-type route.
-        if !matches!(message_type, "normal" | "chat") {
-            return Ok(message_error(root, "modify", "bad-request"));
-        }
-        if !exact_full_target_can_route {
-            return Ok(message_error(root, "cancel", "service-unavailable"));
-        }
-        let writes = local_projection
-            .archive_projections()
-            .map(|(_, write)| write)
-            .collect::<Vec<_>>();
-        let delayed_delivery = add_delay_from(
-            recipient_delivery,
-            northstar_time::Utc::now(),
-            Some(state.local_domain()),
-        );
-        let offline_limits = state.offline_delivery_limits();
-        let delivery = DeliveryProjection {
-            id: recipient_stable_id,
-            recipient_id: recipient.id,
-            local_actor_id: Some(user_id),
-            sender_jid: from,
-            stanza: &delayed_delivery,
-            encrypted,
-            max_messages: offline_limits.max_messages,
-            max_bytes: offline_limits.max_bytes,
-            ttl_days: offline_limits.ttl_days,
-            mam_backed: writes.iter().any(|write| write.owner_id == recipient.id),
-        };
-        session.enter_frame_stage(MessageFrameStage::Admission);
-        match apply_personal_retraction(
-            state,
-            user_id,
-            from,
-            Some(recipient.id),
-            to,
-            root,
-            &writes,
-            &delivery,
-        )
-        .await
-        {
-            Ok(RetractionOutcome::Applied {
-                live_claim_id: admitted_claim_id,
-                ..
-            }) => {
-                history_committed = true;
-                durable_c2s_delivery = Some(recipient_stable_id);
-                live_claim_id = admitted_claim_id;
-                finalize_message_admission(
-                    session,
-                    &mut message_admission_lease,
-                    "local-retraction-durable-c2s",
-                )
-                .await;
-            }
-            Ok(RetractionOutcome::Replay) => {
-                finalize_message_admission(
-                    session,
-                    &mut message_admission_lease,
-                    "local-retraction-replay",
-                )
-                .await;
-                return Ok(S::Action::none());
-            }
-            Ok(RetractionOutcome::Conflict) => {
-                return Ok(message_error(root, "cancel", "conflict"));
-            }
-            Ok(RetractionOutcome::Forbidden) => {
-                return Ok(message_error(root, "auth", "forbidden"));
-            }
-            Ok(RetractionOutcome::AccountUnavailable) => {
-                return Ok(message_error(root, "cancel", "service-unavailable"));
-            }
-            Ok(RetractionOutcome::CapacityExceeded) => {
-                return Ok(message_error(root, "wait", "resource-constraint"));
-            }
-            Err(error) => {
-                tracing::warn!(?error, recipient_id = %recipient.id, "local retraction admission failed atomically before delivery");
-                return Ok(message_error(root, "wait", "resource-constraint"));
-            }
-        }
+    if let Some(action) = retraction::apply(
+        session,
+        state,
+        root,
+        personal_retraction,
+        message_type,
+        exact_full_target_can_route,
+        &local_projection,
+        recipient_delivery,
+        recipient_stable_id,
+        &recipient,
+        user_id,
+        from,
+        encrypted,
+        to,
+        &mut history_committed,
+        &mut durable_c2s_delivery,
+        &mut live_claim_id,
+        &mut message_admission_lease,
+    )
+    .await?
+    {
+        return Ok(action);
     }
     let live_delivery_id = durable_direct_invite.or(durable_c2s_delivery);
     let delivery = match live_delivery_id {
@@ -1136,124 +515,34 @@ pub async fn message<S: MessageSession>(
 
     session.enter_frame_stage(MessageFrameStage::Followup);
     let mut stored_offline = false;
-    if !delivered {
-        if direct_delivery_mode == DirectDeliveryMode::VolatileExplicitNoStore {
-            // XEP-0334 no-store forbids every durable fallback, but it
-            // does not forbid an online volatile delivery. Only report a
-            // failure after local and cluster routes have actually
-            // declined the stanza.
-            return Ok(message_error(root, "wait", "service-unavailable"));
-        }
-        if live_delivery_id.is_some() {
-            stored_offline = true;
-            if local_direct && state.message_service().direct_mode() != DirectPostCommitMode::Live {
-                return Ok(S::Action::none());
-            }
-            // This check precedes the Push call; a provider request
-            // already in flight cannot be recalled by a later transition.
-            if let Err(error) = state.dispatch_push_notification(recipient.id).await {
-                state.personal_message_telemetry().post_accept_failed();
-                tracing::warn!(?error, recipient_id = %recipient.id, %recipient_stable_id, "durable direct MUC invite was accepted but push notification failed");
-            }
-        } else {
-            match undelivered_disposition(
-                message_type,
-                persistence_allowed,
-                durable_content_allowed,
-            ) {
-                UndeliveredDisposition::Drop => {
-                    finalize_message_admission(
-                        session,
-                        &mut message_admission_lease,
-                        "undelivered-drop",
-                    )
-                    .await;
-                    return Ok(S::Action::none());
-                }
-                UndeliveredDisposition::RejectCancel => {
-                    return Ok(message_error(root, "cancel", "service-unavailable"));
-                }
-                UndeliveredDisposition::RejectWait => {
-                    return Ok(message_error(root, "wait", "service-unavailable"));
-                }
-                UndeliveredDisposition::StoreOffline => {
-                    let delayed = add_delay_from(
-                        recipient_archive_stanza,
-                        northstar_time::Utc::now(),
-                        Some(state.local_domain()),
-                    );
-                    let offline = admit_offline_then_push(
-                        state.message_service().store_offline(
-                            northstar_message_application::messaging::OfflineMessageAdmission {
-                                recipient_id: recipient.id,
-                                recipient_bare_jid: &recipient_by,
-                                sender_jid: from,
-                                stanza: &delayed,
-                                encrypted,
-                                // No durable history admission preceded this fallback.
-                                mam_backed: false,
-                                identity: message_admission_lease
-                                    .as_ref()
-                                    .map(|lease| &lease.offline_dedupe),
-                            },
-                        ),
-                        history_committed,
-                        async {
-                            if local_direct
-                                && state.message_service().direct_mode()
-                                    != DirectPostCommitMode::Live
-                            {
-                                Ok(())
-                            } else {
-                                state.dispatch_push_notification(recipient.id).await
-                            }
-                        },
-                    )
-                    .await?;
-                    match offline.admission {
-                        OfflineAdmissionOutcome::QuotaExceeded if history_committed => {
-                            // A pre-admitted recipient MAM row is durable
-                            // recovery. Returning an error here would invite a
-                            // duplicate retry after the server already
-                            // accepted the origin-id.
-                            if let Some(error) = offline.push_error {
-                                state.personal_message_telemetry().post_accept_failed();
-                                tracing::warn!(?error, recipient_id = %recipient.id, %recipient_stable_id, "MAM-backed message was accepted but offline quota and push delivery both failed");
-                            }
-                            stored_offline = true;
-                        }
-                        OfflineAdmissionOutcome::QuotaExceeded => {
-                            return Ok(message_error(root, "wait", "service-unavailable"));
-                        }
-                        OfflineAdmissionOutcome::Stored => {
-                            stored_offline = true;
-                            if let Some(error) = offline.push_error {
-                                state.personal_message_telemetry().post_accept_failed();
-                                tracing::warn!(?error, recipient_id = %recipient.id, %recipient_stable_id, "offline message was accepted but push notification failed");
-                            }
-                        }
-                        OfflineAdmissionOutcome::Replay => {
-                            // The content row may already have been delivered
-                            // and deleted. The compact tombstone is the
-                            // terminal acceptance record; do not enqueue or
-                            // notify a second time.
-                            stored_offline = true;
-                        }
-                        OfflineAdmissionOutcome::RecipientUnavailable => {
-                            return Ok(message_error(root, "cancel", "service-unavailable"));
-                        }
-                    }
-                }
-            }
-        }
-    } else if should_carbon(root)
-        && recipient.id != user_id
-        && (!local_direct || state.message_service().direct_mode() == DirectPostCommitMode::Live)
+    if let Some(action) = offline_fallback::finish(
+        session,
+        state,
+        root,
+        delivered,
+        direct_delivery_mode,
+        live_delivery_id,
+        &mut stored_offline,
+        local_direct,
+        &recipient,
+        recipient_stable_id,
+        message_type,
+        persistence_allowed,
+        durable_content_allowed,
+        &mut message_admission_lease,
+        recipient_archive_stanza,
+        &recipient_by,
+        from,
+        encrypted,
+        history_committed,
+        user_id,
+        to,
+        &delivered_key,
+        recipient_delivery,
+    )
+    .await?
     {
-        if let Some(delivered_key) = delivered_key.as_deref() {
-            send_received_carbons(state, bare_jid(to), Some(delivered_key), recipient_delivery)
-                .await;
-        }
+        return Ok(action);
     }
 
     // Durable deliveries have already decided their archive projections.
@@ -1271,14 +560,25 @@ pub async fn message<S: MessageSession>(
             tracing::warn!(?error, %sender_stable_id, route = accepted_route, "accepted message history transaction failed atomically");
         }
     }
-    if should_carbon(root)
-        && (!local_direct || state.message_service().direct_mode() == DirectPostCommitMode::Live)
-    {
-        let delivered_self = (recipient.id == user_id)
-            .then_some(delivered_key.as_deref())
-            .flatten();
-        send_sent_carbons(state, from, sender_archive, delivered_self, None).await;
-    }
+    carbons::send(
+        state,
+        root,
+        local_direct,
+        &recipient,
+        user_id,
+        &delivered_key,
+        from,
+        sender_archive,
+    )
+    .await;
     state.personal_message_telemetry().message_routed();
     Ok(S::Action::none())
+}
+
+async fn finalize_admission<S: MessageSession>(
+    session: &S,
+    message_admission_lease: &mut Option<MessageAdmissionLease>,
+    route: &'static str,
+) {
+    finalize_message_admission(session, message_admission_lease, route).await;
 }

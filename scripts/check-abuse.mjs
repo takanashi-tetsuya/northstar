@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
-import { readModuleParts, readProductionModule, readRoleSplitFile } from './lib/source-module.mjs';
+import { readModuleParts, readProductionModule, readRoleSplitFile, rustItemBody } from './lib/source-module.mjs';
 
 const root = new URL('../', import.meta.url);
 const read = (path) => readFile(new URL(path, root), 'utf8');
@@ -65,6 +65,14 @@ assert.match(messaging, /pub async fn message<S: MessageSession>\([\s\S]*client_
   'message admission must receive the original client frame separately from the authoritative routed stanza');
 assert.doesNotMatch(messaging, /pow_intent_payload:\s*&routed_raw/,
   'server-injected from/xml:lang bytes must never become part of the client PoW commitment');
+const messageHandler = rustItemBody(messaging, 'pub async fn message<S: MessageSession>');
+const ratedAdmission = rustItemBody(messaging, 'pub(super) async fn begin<S: MessageSession>');
+assert.match(messageHandler, /\blet pow_intent_payload = message_pow_intent_payload\(client_raw\);/,
+  'the client PoW commitment must come from the original client frame');
+assert.match(messageHandler, /\brated_admission::begin\(\s*session,\s*state,\s*root,\s*user_id,\s*from,\s*to,\s*&original_direct,\s*&pow_intent_payload\s*,/,
+  'the handler must pass that commitment to the rated-admission leaf');
+assert.match(ratedAdmission, /\blet request = MessageAdmissionRequest \{[^{}]*\bpow_intent_payload\s*,/,
+  'the rated-admission leaf must use the passed commitment in the request');
 assert.match(powIntentMigration, /protocol_version SMALLINT NOT NULL DEFAULT 1/);
 assert.match(powIntentMigration, /intent_method[\s\S]*intent_path[\s\S]*body_sha256[\s\S]*server_nonce[\s\S]*issued_at/,
   'durable challenges must store every v2 intent/time/nonce component');

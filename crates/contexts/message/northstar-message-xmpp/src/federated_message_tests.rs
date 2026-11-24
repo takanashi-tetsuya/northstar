@@ -1,4 +1,10 @@
+use super::degraded::inbound_direct_spool_eligibility;
 use super::*;
+use northstar_message_application::messaging::{
+    DirectMessageRoutePort, OnlineRoutePort, OnlineRouteResult,
+};
+use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
+use northstar_stream::outbound::{DurableDelivery, OutboundItem};
 use roxmltree::Document;
 
 #[test]

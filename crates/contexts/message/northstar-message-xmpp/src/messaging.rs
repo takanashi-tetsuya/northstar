@@ -15,8 +15,7 @@ use northstar_message_application::messaging::{
     DirectRouteDelivery, DirectRouteOutcome, DirectRouteRejection, DirectRouteRequest,
     DirectRouteTarget, DurableAdmissionOutcome, FederationDelivery, FullJidFallbackPort,
     IdentityAuthority, LocalDelivery, LocalRecipientDecision, MessageIdentity, MessagePostCommit,
-    OfflineAdmissionOutcome, OutboundPolicyDecision, PersonalMessageDestination,
-    ValidatedPersonalMessage,
+    OfflineAdmissionOutcome, PersonalMessageDestination, ValidatedPersonalMessage,
 };
 use northstar_message_application::retractions::{DeliveryProjection, RetractionOutcome};
 use northstar_message_application::{

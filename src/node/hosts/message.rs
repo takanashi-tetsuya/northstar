@@ -7,7 +7,8 @@ use northstar_message_application::message_admission::MessageAdmissionService;
 use northstar_message_application::messaging::{MessageService, OnlineRouteResult};
 use northstar_message_application::retractions::RetractionService;
 use northstar_message_application::telemetry::PersonalMessageTelemetry;
-use northstar_message_core::OfflineDeliveryLimits;
+use northstar_message_application::SystemMessageEvents;
+use northstar_message_core::{MessageEventSource, OfflineDeliveryLimits};
 use northstar_message_xmpp::extdisco::ExtDiscoHost;
 use northstar_message_xmpp::ports::{DirectInviteRoom, FederatedMessageHost, MessageHost};
 use northstar_room_core::{ClusterMucAffiliationSubject, ClusterMucInviteAuthority};
@@ -153,6 +154,11 @@ impl MessageHost for ServerNode {
 
     async fn wake_committed_direct_muc_invite(&self, operation_id: uuid::Uuid) -> Result<()> {
         ServerNode::wake_committed_direct_muc_invite(self, operation_id).await
+    }
+
+    fn message_events(&self) -> &dyn MessageEventSource {
+        static SYSTEM: SystemMessageEvents = SystemMessageEvents;
+        &SYSTEM
     }
 }
 

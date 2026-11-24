@@ -387,6 +387,7 @@ pub(super) async fn run_original(
             });
             let command = ValidatedPersonalMessage {
                 local_actor_id: Some(source.actor_id),
+                local_actor_fence: None,
                 identity,
                 archives: &archives,
                 destination: PersonalMessageDestination::Local(LocalDelivery {

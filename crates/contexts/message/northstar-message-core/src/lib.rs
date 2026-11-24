@@ -5,12 +5,16 @@
 //! server application service commits it through the matching repository
 //! transaction.
 
+mod authority;
 pub mod direct_handoff;
+mod events;
 pub mod jingle;
 pub mod retraction;
 pub mod route_item;
 pub mod validation;
 
+pub use authority::{ActorGenerationFence, AuthenticatedMessageActor};
+pub use events::MessageEventSource;
 use uuid::Uuid;
 
 /// One enabled personal-history projection of an accepted stanza.
@@ -111,6 +115,7 @@ pub enum PersonalMessageDestination<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ValidatedPersonalMessage<'a> {
     pub local_actor_id: Option<Uuid>,
+    pub local_actor_fence: Option<ActorGenerationFence>,
     pub identity: Option<MessageIdentity<'a>>,
     pub archives: &'a [ArchiveCandidate<'a>],
     pub destination: PersonalMessageDestination<'a>,
@@ -331,6 +336,7 @@ mod tests {
         };
         let command = ValidatedPersonalMessage {
             local_actor_id: Some(Uuid::nil()),
+            local_actor_fence: None,
             identity: None,
             archives: &[],
             destination: PersonalMessageDestination::Local(local),

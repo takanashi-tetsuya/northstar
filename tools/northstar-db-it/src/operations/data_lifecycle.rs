@@ -599,6 +599,7 @@ async fn legal_hold_retractions_succeed_without_replacing_evidence() {
                 }],
                 &sender_jid,
                 &RetractionCommand {
+                    actor_fence: None,
                     target_id: "personal-original",
                     action_id: "personal-action",
                     semantic_payload: &personal_action_xml,

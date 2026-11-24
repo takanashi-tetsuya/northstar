@@ -41,7 +41,8 @@ use northstar_message_application::telemetry::{
 use northstar_message_application::PersonalMessageCommitRepository;
 use northstar_message_core::route_item::QueueRefusal;
 use northstar_message_core::{
-    DirectPersonalMessageAdmission, DirectPostCommitMode, DirectSpoolEligibility, MessageCommit,
+    ActorGenerationFence, AuthenticatedMessageActor, DirectPersonalMessageAdmission,
+    DirectPostCommitMode, DirectSpoolEligibility, MessageCommit, MessageEventSource,
     MessagePostCommit, OfflineDeliveryLimits, PersonalMessageDestination, ValidatedPersonalMessage,
 };
 use northstar_room_core::{
@@ -51,7 +52,9 @@ use northstar_stream::local_routes::session::{test_online_session, OnlineSession
 use northstar_stream::outbound::{DurableDelivery, OutboundItem, RouteEnqueue, RouteSendError};
 use northstar_stream::transport::Action;
 use northstar_telemetry::metrics::DurationHistogram;
+use northstar_time::{DateTime, Utc};
 use northstar_xep_0016::PrivacyStanzaKind;
+use northstar_xmpp_types::jid::CanonicalJid;
 use roxmltree::Node;
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr};
@@ -65,6 +68,8 @@ use tokio::sync::oneshot;
 use uuid::Uuid;
 
 pub(crate) const ACTOR: Uuid = Uuid::from_u128(1);
+pub(crate) const ACTOR_GENERATION: i64 = 17;
+pub(crate) const ACTOR_CONNECTION: Uuid = Uuid::from_u128(5);
 pub(crate) const RECIPIENT: Uuid = Uuid::from_u128(2);
 pub(crate) const CLAIM: Uuid = Uuid::from_u128(3);
 pub(crate) const OPERATION: Uuid = Uuid::from_u128(4);
@@ -90,6 +95,7 @@ pub(crate) enum QueueAnswer {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StoredEnvelope {
     pub actor: Option<Uuid>,
+    pub actor_fence: Option<ActorGenerationFence>,
     pub source: DurableDelivery,
     pub sender: String,
     pub recipient: String,
@@ -210,6 +216,7 @@ impl DirectCommitRepository for Repository {
         };
         let envelope = StoredEnvelope {
             actor: command.local_actor_id,
+            actor_fence: command.local_actor_fence,
             source: DurableDelivery {
                 recipient_id: local.recipient_id,
                 message_id: local.delivery_id,
@@ -486,11 +493,27 @@ impl RetractionRepository for Repository {
     }
 }
 
+#[derive(Default)]
+struct TestMessageEvents {
+    next_id: AtomicU64,
+}
+
+impl MessageEventSource for TestMessageEvents {
+    fn now(&self) -> DateTime<Utc> {
+        DateTime::from_timestamp(978_307_200, 0).expect("fixed test timestamp")
+    }
+
+    fn new_stanza_id(&self) -> Uuid {
+        Uuid::from_u128(0x100 + u128::from(self.next_id.fetch_add(1, Ordering::Relaxed)))
+    }
+}
+
 pub(crate) struct Host {
     pub state: Arc<State>,
     messages: MessageService<Repository>,
     admissions: MessageAdmissionService<Repository>,
     retractions: RetractionService<Repository>,
+    message_events: TestMessageEvents,
     histogram: DurationHistogram,
     pub counters: [AtomicU64; 9],
 }
@@ -509,6 +532,7 @@ impl Host {
                 PersonalRetractionContentKeyring::new(Arc::default()),
                 "example.test",
             ),
+            message_events: TestMessageEvents::default(),
             state,
             histogram: DurationHistogram::default(),
             counters: std::array::from_fn(|_| AtomicU64::new(0)),
@@ -631,6 +655,9 @@ impl MessageHost for Host {
     }
     async fn wake_committed_direct_muc_invite(&self, _: Uuid) -> Result<()> {
         panic!("unexpected invite wake")
+    }
+    fn message_events(&self) -> &dyn MessageEventSource {
+        &self.message_events
     }
 }
 
@@ -892,6 +919,14 @@ impl MessageSession for Session {
     }
     async fn muc_message(&self, _: Node<'_, '_>, _: &str) -> Result<Action> {
         panic!("unexpected MUC dispatch")
+    }
+    fn message_actor(&self) -> Option<AuthenticatedMessageActor> {
+        Some(AuthenticatedMessageActor {
+            account_id: self.account_id()?,
+            auth_generation: ACTOR_GENERATION,
+            connection_id: ACTOR_CONNECTION,
+            full_jid: CanonicalJid::parse(self.full_jid()?).ok()?,
+        })
     }
 }
 

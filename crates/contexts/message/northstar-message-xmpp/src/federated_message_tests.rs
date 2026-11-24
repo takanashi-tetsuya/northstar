@@ -229,6 +229,53 @@ fn remote_muc_private_messages_are_not_carbon_copied() {
 }
 
 #[tokio::test]
+async fn federated_delivery_uses_the_hosts_event_source() {
+    use crate::test_support::{Host, State, TARGET};
+    use uuid::Uuid;
+
+    let host = Host::new(State::default());
+    let sender = "alice@remote.test/phone";
+    let raw = format!(
+        "<message from='{sender}' to='{TARGET}' type='chat'><body>event source</body></message>"
+    );
+    let document = Document::parse(&raw).unwrap();
+    let result = route_inbound_message(
+        &host,
+        document.root_element(),
+        &raw,
+        sender,
+        TARGET,
+        "remote.test",
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, None);
+
+    let committed = host.state.committed.lock().unwrap();
+    let delivery = committed.as_ref().expect("committed federated delivery");
+    assert_eq!(delivery.actor_fence, None);
+    let expected_id = Uuid::from_u128(0x100);
+    assert_eq!(delivery.source.message_id, expected_id);
+    let stanza = Document::parse(&delivery.stanza).unwrap();
+    let stanza_id = stanza
+        .root_element()
+        .children()
+        .find(|child| child.has_tag_name(("urn:xmpp:sid:0", "stanza-id")))
+        .unwrap();
+    assert_eq!(stanza_id.attribute("by"), Some(TARGET));
+    assert_eq!(
+        stanza_id.attribute("id"),
+        Some(expected_id.to_string().as_str())
+    );
+    let delay = stanza
+        .root_element()
+        .children()
+        .find(|child| child.has_tag_name(("urn:xmpp:delay", "delay")))
+        .unwrap();
+    assert_eq!(delay.attribute("stamp"), Some("2001-01-01T00:00:00Z"));
+}
+
+#[tokio::test]
 async fn federated_routes_preserve_envelopes_refusals_and_acceptance() {
     use crate::test_support::{
         poll_once, Event, Host, QueueAnswer, State, CLAIM, RECIPIENT, TARGET,

@@ -33,6 +33,7 @@ async fn validation_precedes_persistence_and_repository_failure_remains_an_error
         "local.test",
     );
     let command = RetractionCommand {
+        actor_fence: None,
         target_id: "original",
         action_id: "action",
         semantic_payload: "<message from='alice@local.test/Phone' to='bob@remote.test' id='action'><retract xmlns='urn:xmpp:message-retract:1' id='original'/></message>",
@@ -191,6 +192,7 @@ fn c2s_missing_to_uses_effective_self_recipient_without_rewriting_xml() {
     let actor_id = Uuid::new_v4();
     let stanza = "<message from='alice@local.test/Phone' id='self-action'><retract xmlns='urn:xmpp:message-retract:1' id='self-target'/></message>";
     let command = RetractionCommand {
+        actor_fence: None,
         target_id: "self-target",
         action_id: "self-action",
         semantic_payload: stanza,
@@ -266,6 +268,7 @@ fn inbound_s2s_full_normal_delivery_identity_binds_the_exact_resource() {
     let phone_stanza = "<message from='alice@remote.test/Phone' to='bob@local.test/Phone' id='remote-action'><retract xmlns='urn:xmpp:message-retract:1' id='remote-target'/></message>";
     let tablet_stanza = "<message from='alice@remote.test/Tablet' to='bob@local.test/Tablet' id='remote-action'><retract xmlns='urn:xmpp:message-retract:1' id='remote-target'/></message>";
     let phone_command = RetractionCommand {
+        actor_fence: None,
         target_id: "remote-target",
         action_id: "remote-action",
         semantic_payload: phone_stanza,
@@ -313,6 +316,7 @@ fn inbound_s2s_full_normal_delivery_identity_binds_the_exact_resource() {
 #[test]
 fn outbound_projection_rejects_a_configured_local_target() {
     let command = RetractionCommand {
+        actor_fence: None,
         target_id: "target",
         action_id: "action",
         semantic_payload: "<message from='alice@local.test/Phone' to='bob@local.test' id='action'><retract xmlns='urn:xmpp:message-retract:1' id='target'/></message>",
@@ -378,6 +382,7 @@ fn personal_retraction_invocation_dto_contract() {
         peer_jid: "bob@example.com",
     }];
     let cmd = RetractionCommand {
+        actor_fence: None,
         target_id: "target-1",
         action_id: "action-1",
         semantic_payload: "<message id='action-1'><retract xmlns='urn:xmpp:message-retract:1' id='target-1'/></message>",

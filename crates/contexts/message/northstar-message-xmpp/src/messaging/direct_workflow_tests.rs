@@ -16,6 +16,7 @@ fn prepared() -> (DirectOperationHandle, PreparedLocalDirect<'static, 'static>) 
     let owner = DirectOperationHandle::new(Uuid::new_v4());
     let command = ValidatedPersonalMessage {
         local_actor_id: Some(Uuid::from_u128(1)),
+        local_actor_fence: None,
         identity: None,
         archives: &[],
         destination: PersonalMessageDestination::Local(LocalDelivery {

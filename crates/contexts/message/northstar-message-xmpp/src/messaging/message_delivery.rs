@@ -3,6 +3,7 @@
 use super::archive_admission::archive_candidate;
 use super::*;
 use northstar_message_application::messaging::invitation_admission::DirectInvitation;
+use northstar_message_core::ActorGenerationFence;
 use std::ops::ControlFlow;
 
 use self::invitation_admission::GrantDelivery;
@@ -32,6 +33,7 @@ pub async fn message<S: MessageSession>(
     let Some(from) = session.full_jid() else {
         return Ok(message_error(root, "cancel", "not-authorized"));
     };
+    let local_actor_fence = session.message_actor().map(|actor| actor.fence());
     if let Err(condition) = state.validate_routed_message(root) {
         // RFC 6120 section 8.3.1: never answer an error stanza with a
         // second stanza error. This validation boundary runs before every
@@ -231,6 +233,7 @@ pub async fn message<S: MessageSession>(
         &mut message_admission_lease,
         &personal_retraction_target,
         user_id,
+        local_actor_fence,
         to,
         &invitation,
         &target_jid,
@@ -288,11 +291,11 @@ pub async fn message<S: MessageSession>(
             BareMessageRoute::Primary | BareMessageRoute::All => {}
         }
     }
-    let sender_stable_id = uuid::Uuid::new_v4();
+    let sender_stable_id = state.message_events().new_stanza_id();
     let recipient_stable_id = if recipient.id == user_id {
         sender_stable_id
     } else {
-        uuid::Uuid::new_v4()
+        state.message_events().new_stanza_id()
     };
     let recipient_by = format!("{}@{}", recipient.username, state.local_domain());
     let encrypted = is_encrypted(root);
@@ -372,6 +375,7 @@ pub async fn message<S: MessageSession>(
         to,
         rewritten,
         user_id,
+        local_actor_fence,
         &candidates,
         recipient_stable_id,
         &recipient,
@@ -404,6 +408,7 @@ pub async fn message<S: MessageSession>(
         &local_projection,
         archive_eligibility,
         user_id,
+        local_actor_fence,
         &candidates,
         recipient_stable_id,
         &recipient,
@@ -433,6 +438,7 @@ pub async fn message<S: MessageSession>(
         recipient_stable_id,
         &recipient,
         user_id,
+        local_actor_fence,
         from,
         encrypted,
         to,

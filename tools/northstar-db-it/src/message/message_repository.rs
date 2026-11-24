@@ -538,6 +538,7 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     };
     let concurrent_message = ValidatedPersonalMessage {
         local_actor_id: Some(sender_id),
+        local_actor_fence: None,
         identity: Some(MessageIdentity {
             authority: IdentityAuthority::LocalOrigin,
             actor_scope_raw: &sender,

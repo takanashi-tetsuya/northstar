@@ -69,7 +69,7 @@ pub(super) async fn finish<S: MessageSession>(
                 UndeliveredDisposition::StoreOffline => {
                     let delayed = add_delay_from(
                         recipient_archive_stanza,
-                        northstar_time::Utc::now(),
+                        state.message_events().now(),
                         Some(state.local_domain()),
                     );
                     let offline = admit_offline_then_push(

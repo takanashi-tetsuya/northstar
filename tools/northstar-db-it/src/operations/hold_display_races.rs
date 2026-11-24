@@ -358,6 +358,7 @@ impl Fixture {
                 }],
                 full,
                 &RetractionCommand {
+                    actor_fence: None,
                     target_id: "original",
                     action_id: &client_id,
                     semantic_payload: &action,

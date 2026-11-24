@@ -128,6 +128,7 @@ async fn c2s_projection_is_atomic_idempotent_and_retains_replay_intent() {
     .unwrap();
     let action = "<message from='alice@local.test/Laptop' to='alice@local.test/Phone' id='delivery-action'><retract xmlns='urn:xmpp:message-retract:1' id='delivery-target'/></message>";
     let command = RetractionCommand {
+        actor_fence: None,
         target_id: "delivery-target",
         action_id: "delivery-action",
         semantic_payload: action,
@@ -465,6 +466,7 @@ async fn c2s_projection_is_atomic_idempotent_and_retains_replay_intent() {
     .unwrap();
     let capacity_action = "<message from='alice@local.test/Laptop' to='alice@local.test/Phone' id='capacity-action'><retract xmlns='urn:xmpp:message-retract:1' id='capacity-target'/></message>";
     let capacity_command = RetractionCommand {
+        actor_fence: None,
         target_id: "capacity-target",
         action_id: "capacity-action",
         semantic_payload: capacity_action,
@@ -521,6 +523,7 @@ async fn c2s_projection_is_atomic_idempotent_and_retains_replay_intent() {
     .unwrap();
     let forbidden_action = "<message from='alice@local.test/Laptop' to='alice@local.test/Phone' id='forbidden-action'><retract xmlns='urn:xmpp:message-retract:1' id='foreign-target'/></message>";
     let forbidden_command = RetractionCommand {
+        actor_fence: None,
         target_id: "foreign-target",
         action_id: "forbidden-action",
         semantic_payload: forbidden_action,
@@ -586,6 +589,7 @@ async fn c2s_projection_is_atomic_idempotent_and_retains_replay_intent() {
     .unwrap();
     let failure_action = "<message from='alice@local.test/Laptop' to='alice@local.test/Phone' id='failure-action'><retract xmlns='urn:xmpp:message-retract:1' id='failure-target'/></message>";
     let failure_command = RetractionCommand {
+        actor_fence: None,
         target_id: "failure-target",
         action_id: "failure-action",
         semantic_payload: failure_action,
@@ -669,6 +673,7 @@ async fn exact_replay_conflict_and_outbox_failure_are_atomic() {
     let accepted = "<message from='alice@local.test/Laptop' to='bob@remote.test/Phone' id='action-1'><body>message removed</body><retract xmlns='urn:xmpp:message-retract:1' id='target-1'/></message>";
     let archived = "<message xmlns='jabber:client' from='alice@local.test/Laptop' to='bob@remote.test/Phone' id='action-1'><body>message removed</body><retract xmlns='urn:xmpp:message-retract:1' id='target-1'/><stanza-id xmlns='urn:xmpp:sid:0' by='local.test' id='server-one'/></message>";
     let command = RetractionCommand {
+        actor_fence: None,
         target_id: "target-1",
         action_id: "action-1",
         semantic_payload: accepted,
@@ -812,6 +817,7 @@ async fn exact_replay_conflict_and_outbox_failure_are_atomic() {
     archive_original(&pool, owner_id, zero_target_id, "zero-target").await;
     let zero_action = "<message from='alice@local.test/Laptop' id='zero-action'><body>private fallback must not be stored</body><retract xmlns='urn:xmpp:message-retract:1' id='zero-target'/></message>";
     let zero_command = RetractionCommand {
+        actor_fence: None,
         target_id: "zero-target",
         action_id: "zero-action",
         semantic_payload: zero_action,
@@ -904,6 +910,7 @@ async fn exact_replay_conflict_and_outbox_failure_are_atomic() {
     // by the immutable database fence.
     let legacy_owner_action = "<message from='alice@local.test/Laptop' id='legacy-owner-action'><retract xmlns='urn:xmpp:message-retract:1' id='legacy-owner-target'/></message>";
     let legacy_owner_command = RetractionCommand {
+        actor_fence: None,
         target_id: "legacy-owner-target",
         action_id: "legacy-owner-action",
         semantic_payload: legacy_owner_action,
@@ -1224,6 +1231,7 @@ async fn exact_replay_conflict_and_outbox_failure_are_atomic() {
     ];
     let partial_action = "<message from='alice@local.test/Laptop' id='partial-action'><retract xmlns='urn:xmpp:message-retract:1' id='partial-target'/></message>";
     let partial_command = RetractionCommand {
+        actor_fence: None,
         target_id: "partial-target",
         action_id: "partial-action",
         semantic_payload: partial_action,
@@ -1327,6 +1335,7 @@ async fn exact_replay_conflict_and_outbox_failure_are_atomic() {
     .unwrap();
     let rollback_action = "<message from='alice@local.test/Laptop' to='bob@remote.test/Phone' id='rollback-action'><retract xmlns='urn:xmpp:message-retract:1' id='rollback-target'/></message>";
     let rollback_command = RetractionCommand {
+        actor_fence: None,
         target_id: "rollback-target",
         action_id: "rollback-action",
         semantic_payload: rollback_action,
@@ -1408,6 +1417,7 @@ async fn apply_personal_retraction_atomic(
         &owners,
         sender_jid,
         &RetractionCommand {
+            actor_fence: None,
             target_id: &command.target_id,
             action_id: &command.action_id,
             semantic_payload: &command.semantic_payload,

@@ -22,6 +22,7 @@ pub(super) async fn commit<'live, S: MessageSession>(
     local_projection: &'live LocalOriginalProjection<'_, '_>,
     archive_eligibility: LocalArchiveEligibility,
     user_id: Uuid,
+    local_actor_fence: Option<ActorGenerationFence>,
     candidates: &[ArchiveCandidate<'_>],
     recipient_stable_id: Uuid,
     recipient: &LocalRecipient,
@@ -51,9 +52,10 @@ pub(super) async fn commit<'live, S: MessageSession>(
             }
         });
         let delayed_projection =
-            local_projection.delayed(northstar_time::Utc::now(), archive_eligibility);
+            local_projection.delayed(state.message_events().now(), archive_eligibility);
         let admission = ValidatedPersonalMessage {
             local_actor_id: Some(user_id),
+            local_actor_fence,
             identity,
             archives: candidates,
             destination: PersonalMessageDestination::Local(LocalDelivery {

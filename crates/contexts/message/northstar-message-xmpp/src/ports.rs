@@ -12,7 +12,9 @@ use northstar_message_application::messaging::{
 };
 use northstar_message_application::retractions::{RetractionRepository, RetractionService};
 use northstar_message_application::telemetry::PersonalMessageTelemetry;
-use northstar_message_core::OfflineDeliveryLimits;
+use northstar_message_core::{
+    AuthenticatedMessageActor, MessageEventSource, OfflineDeliveryLimits,
+};
 use northstar_room_core::{ClusterMucAffiliationSubject, ClusterMucInviteAuthority};
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::outbound::{DurableDelivery, OutboundItem};
@@ -117,6 +119,7 @@ pub trait MessageHost: DirectMessageRoutePort + CarbonDeliveryPort + Send + Sync
         &self,
         operation_id: Uuid,
     ) -> impl Future<Output = Result<()>> + Send;
+    fn message_events(&self) -> &dyn MessageEventSource;
 }
 
 /// The node as federated message delivery (an S2S inbound `<message/>`) sees it.
@@ -194,4 +197,5 @@ pub trait MessageSession: Send + Sync {
         root: Node<'_, '_>,
         raw: &str,
     ) -> impl Future<Output = Result<Self::Action>> + Send;
+    fn message_actor(&self) -> Option<AuthenticatedMessageActor>;
 }

@@ -18,6 +18,7 @@ pub(super) async fn route<S: MessageSession>(
     message_admission_lease: &mut Option<MessageAdmissionLease>,
     personal_retraction_target: &Option<String>,
     user_id: Uuid,
+    local_actor_fence: Option<ActorGenerationFence>,
     to: &str,
     invitation: &Option<DirectInvitation<'_>>,
     target_jid: &CanonicalJid,
@@ -30,7 +31,7 @@ pub(super) async fn route<S: MessageSession>(
                 "remote-server-not-found",
             )));
         }
-        let stable_id = uuid::Uuid::new_v4();
+        let stable_id = state.message_events().new_stanza_id();
         let rewritten = set_from(routed_raw, from);
         let routed = strip_stanza_ids_by_domain(&rewritten, state.local_domain());
         let sender_archive = add_stanza_id(&rewritten, bare_jid(from), stable_id);
@@ -108,6 +109,7 @@ pub(super) async fn route<S: MessageSession>(
             });
             let admission = ValidatedPersonalMessage {
                 local_actor_id: Some(user_id),
+                local_actor_fence,
                 identity,
                 archives: candidate.as_slice(),
                 destination: PersonalMessageDestination::Federation(FederationDelivery {
@@ -160,6 +162,7 @@ pub(super) async fn route<S: MessageSession>(
             match apply_outbound_personal_retraction(
                 state,
                 user_id,
+                local_actor_fence,
                 from,
                 to,
                 root,
@@ -217,6 +220,7 @@ pub(super) async fn route<S: MessageSession>(
             });
             let admission = ValidatedPersonalMessage {
                 local_actor_id: Some(user_id),
+                local_actor_fence,
                 identity,
                 archives: candidate.as_slice(),
                 destination: PersonalMessageDestination::Federation(FederationDelivery {

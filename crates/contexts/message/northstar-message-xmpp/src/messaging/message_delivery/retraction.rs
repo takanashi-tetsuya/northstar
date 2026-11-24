@@ -18,6 +18,7 @@ pub(super) async fn apply<S: MessageSession>(
     recipient_stable_id: Uuid,
     recipient: &LocalRecipient,
     user_id: Uuid,
+    actor_fence: Option<ActorGenerationFence>,
     from: &str,
     encrypted: bool,
     to: &str,
@@ -42,7 +43,7 @@ pub(super) async fn apply<S: MessageSession>(
             .collect::<Vec<_>>();
         let delayed_delivery = add_delay_from(
             recipient_delivery,
-            northstar_time::Utc::now(),
+            state.message_events().now(),
             Some(state.local_domain()),
         );
         let offline_limits = state.offline_delivery_limits();
@@ -62,6 +63,7 @@ pub(super) async fn apply<S: MessageSession>(
         match apply_personal_retraction(
             state,
             user_id,
+            actor_fence,
             from,
             Some(recipient.id),
             to,

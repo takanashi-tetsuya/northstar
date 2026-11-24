@@ -330,6 +330,65 @@ fn only_offline_admission_can_cross_the_personal_side_effect_boundary() {
     }
 }
 
+#[test]
+fn test_session_reports_the_authenticated_message_actor() {
+    use crate::ports::MessageSession;
+    use crate::test_support::{Session, State, ACTOR, ACTOR_CONNECTION, ACTOR_GENERATION, SENDER};
+
+    let session = Session::new(State::default(), true);
+    let actor = session.message_actor().unwrap();
+    assert_eq!(actor.account_id, ACTOR);
+    assert_eq!(actor.auth_generation, ACTOR_GENERATION);
+    assert_eq!(actor.connection_id, ACTOR_CONNECTION);
+    assert_eq!(actor.full_jid.to_string(), SENDER);
+}
+
+#[tokio::test]
+async fn client_delivery_uses_the_hosts_event_source() {
+    use crate::test_support::{Session, State, ACTOR, ACTOR_GENERATION, SENDER, TARGET};
+    use northstar_message_core::ActorGenerationFence;
+    use northstar_stream::transport::Action;
+    use uuid::Uuid;
+
+    let session = Session::new(State::default(), true);
+    let client = format!("<message to='{TARGET}' type='chat'><body>event source</body></message>");
+    let routed = set_from(&client, SENDER);
+    let document = Document::parse(&routed).unwrap();
+    let action = super::message(&session, document.root_element(), &routed, &client)
+        .await
+        .unwrap();
+    assert!(matches!(action, Action::None));
+
+    let committed = session.host.state.committed.lock().unwrap();
+    let delivery = committed.as_ref().expect("committed client delivery");
+    assert_eq!(
+        delivery.actor_fence,
+        Some(ActorGenerationFence {
+            account_id: ACTOR,
+            auth_generation: ACTOR_GENERATION,
+        }),
+    );
+    let expected_id = Uuid::from_u128(0x101);
+    assert_eq!(delivery.source.message_id, expected_id);
+    let stanza = Document::parse(&delivery.stanza).unwrap();
+    let stanza_id = stanza
+        .root_element()
+        .children()
+        .find(|child| child.has_tag_name(("urn:xmpp:sid:0", "stanza-id")))
+        .unwrap();
+    assert_eq!(stanza_id.attribute("by"), Some(TARGET));
+    assert_eq!(
+        stanza_id.attribute("id"),
+        Some(expected_id.to_string().as_str())
+    );
+    let delay = stanza
+        .root_element()
+        .children()
+        .find(|child| child.has_tag_name(("urn:xmpp:delay", "delay")))
+        .unwrap();
+    assert_eq!(delay.attribute("stamp"), Some("2001-01-01T00:00:00Z"));
+}
+
 #[tokio::test]
 async fn client_admission_preserves_commitment_before_routed_effects() {
     use crate::ports::MessageFrameStage;

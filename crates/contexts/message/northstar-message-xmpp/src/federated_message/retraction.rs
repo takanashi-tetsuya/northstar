@@ -60,7 +60,7 @@ pub(super) async fn apply<H: FederatedMessageHost>(
         }
         let delayed = add_delay_from(
             annotated,
-            northstar_time::Utc::now(),
+            state.message_events().now(),
             Some(state.local_domain()),
         );
         let limits = state.offline_delivery_limits();
@@ -85,6 +85,7 @@ pub(super) async fn apply<H: FederatedMessageHost>(
                 }],
                 canonical_from,
                 &RetractionCommand {
+                    actor_fence: None,
                     target_id: &command.target_id,
                     action_id: &command.action_id,
                     semantic_payload: &command.semantic_payload,

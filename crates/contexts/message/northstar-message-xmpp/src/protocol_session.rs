@@ -7,9 +7,11 @@ use crate::ports::{MessageFrameStage, MessageHost, MessageSession};
 use anyhow::Result;
 use northstar_message_application::extdisco::ExtDiscoService;
 use northstar_message_application::message_admission::witness::DirectOperationHandle;
+use northstar_message_core::AuthenticatedMessageActor;
 use northstar_stream::frame_execution::Stage;
 use northstar_stream::protocol::{ProtocolSession, SessionHost};
 use northstar_stream::transport::Action;
+use northstar_xmpp_types::jid::CanonicalJid;
 use roxmltree::Node;
 use std::net::IpAddr;
 use uuid::Uuid;
@@ -148,5 +150,16 @@ impl<H: SessionHost + MessageHost> MessageSession for ProtocolSession<H> {
 
     async fn muc_message(&self, root: Node<'_, '_>, raw: &str) -> Result<Action> {
         H::dispatch_muc_message(self, root, raw).await
+    }
+
+    fn message_actor(&self) -> Option<AuthenticatedMessageActor> {
+        let account = self.authenticated.as_ref()?;
+        let full_jid = CanonicalJid::parse(self.full_jid.as_deref()?).ok()?;
+        Some(AuthenticatedMessageActor {
+            account_id: account.id,
+            auth_generation: account.auth_generation,
+            connection_id: self.route_connection_id(),
+            full_jid,
+        })
     }
 }

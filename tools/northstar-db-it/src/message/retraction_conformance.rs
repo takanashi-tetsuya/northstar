@@ -34,6 +34,7 @@ async fn keyed_owner_evidence_survives_archive_removal_and_fences_key_retirement
     );
     let action = format!("<message from='retraction-evidence@local.test/phone' to='peer@remote.test/device' id='evidence-action'><retract xmlns='urn:xmpp:message-retract:1' id='{target}'/></message>");
     let command = RetractionCommand {
+        actor_fence: None,
         target_id: &target,
         action_id: "evidence-action",
         semantic_payload: &action,

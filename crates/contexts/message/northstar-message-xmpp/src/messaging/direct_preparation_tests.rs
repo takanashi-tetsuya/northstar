@@ -91,6 +91,7 @@ fn command<'a>(
     let source = local.source;
     ValidatedPersonalMessage {
         local_actor_id: Some(source.actor_id),
+        local_actor_fence: None,
         archives: &[],
         identity: source.origin_id.as_deref().map(|origin| MessageIdentity {
             authority: IdentityAuthority::LocalOrigin,

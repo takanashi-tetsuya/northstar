@@ -7,6 +7,7 @@ use northstar_message_application::retractions::{
     RetractionOutcome,
 };
 use northstar_message_core::retraction::personal_retraction_command;
+use northstar_message_core::ActorGenerationFence;
 use roxmltree::Node;
 use uuid::Uuid;
 
@@ -17,6 +18,7 @@ use uuid::Uuid;
 pub(crate) async fn apply_personal_retraction<H: MessageHost>(
     state: &H,
     sender_id: Uuid,
+    actor_fence: Option<ActorGenerationFence>,
     sender_jid: &str,
     recipient_id: Option<Uuid>,
     recipient_jid: &str,
@@ -43,6 +45,7 @@ pub(crate) async fn apply_personal_retraction<H: MessageHost>(
             &owners,
             sender_jid,
             &RetractionCommand {
+                actor_fence,
                 target_id: &command.target_id,
                 action_id: &command.action_id,
                 semantic_payload: &command.semantic_payload,
@@ -61,6 +64,7 @@ pub(crate) async fn apply_personal_retraction<H: MessageHost>(
 pub(crate) async fn apply_outbound_personal_retraction<H: MessageHost>(
     state: &H,
     sender_id: Uuid,
+    actor_fence: Option<ActorGenerationFence>,
     sender_jid: &str,
     recipient_jid: &str,
     root: Node<'_, '_>,
@@ -86,6 +90,7 @@ pub(crate) async fn apply_outbound_personal_retraction<H: MessageHost>(
             }],
             sender_jid,
             &RetractionCommand {
+                actor_fence,
                 target_id: &command.target_id,
                 action_id: &command.action_id,
                 semantic_payload: &command.semantic_payload,

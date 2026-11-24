@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use northstar_abuse_policy::content_identity::PersonalRetractionContentKeyring;
 use northstar_abuse_policy::ContentIdentityAuthenticators;
 use northstar_message_core::retraction::{render_retraction_tombstone, RetractionEnvelope};
+use northstar_message_core::ActorGenerationFence;
 pub use northstar_message_core::ArchiveProjection as ArchiveWrite;
 
 use roxmltree::{Document, Node};
@@ -29,6 +30,7 @@ pub struct OwnerProjection<'a> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RetractionCommand<'a> {
+    pub actor_fence: Option<ActorGenerationFence>,
     pub target_id: &'a str,
     pub action_id: &'a str,
     /// Exact accepted message element. The service canonicalizes semantic XML

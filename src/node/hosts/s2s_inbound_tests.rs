@@ -229,6 +229,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
                 }],
                 "alice@remote.test/Phone",
                 &RetractionCommand {
+                    actor_fence: None,
                     target_id: &online_command.target_id,
                     action_id: &online_command.action_id,
                     semantic_payload: &online_command.semantic_payload,
@@ -306,6 +307,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
                 }],
                 "alice@remote.test/Phone",
                 &RetractionCommand {
+                    actor_fence: None,
                     target_id: &offline_command.target_id,
                     action_id: &offline_command.action_id,
                     semantic_payload: &offline_command.semantic_payload,
@@ -374,6 +376,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
                 }],
                 "alice@local.test/Phone",
                 &RetractionCommand {
+                    actor_fence: None,
                     target_id: &outbound_command.target_id,
                     action_id: &outbound_command.action_id,
                     semantic_payload: &outbound_command.semantic_payload,
@@ -425,6 +428,7 @@ async fn message_acceptance_boundary_prevents_mam_retraction_and_offline_ghosts(
             }],
             "alice@local.test/Phone",
             &RetractionCommand {
+                actor_fence: None,
                 target_id: &rollback_command.target_id,
                 action_id: &rollback_command.action_id,
                 semantic_payload: &rollback_command.semantic_payload,

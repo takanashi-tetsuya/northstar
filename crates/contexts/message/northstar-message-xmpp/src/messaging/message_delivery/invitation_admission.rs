@@ -11,6 +11,7 @@ use northstar_message_application::messaging::{
     ArchiveCandidate, IdentityAuthority, LocalDelivery, LocalRecipient, MessageIdentity,
     OutboundPolicyDecision, PersonalMessageDestination, ValidatedPersonalMessage,
 };
+use northstar_message_core::ActorGenerationFence;
 use northstar_room_core::{ClusterMucAffiliationSubject, ClusterMucInviteAuthority};
 use northstar_xml_builder::message_policy::add_delay_from;
 use northstar_xmpp_types::jid::CanonicalJid;
@@ -229,6 +230,7 @@ pub(super) async fn commit_local<S: MessageSession>(
     to: &str,
     rewritten: &str,
     user_id: Uuid,
+    local_actor_fence: Option<ActorGenerationFence>,
     candidates: &[ArchiveCandidate<'_>],
     recipient_stable_id: Uuid,
     recipient: &LocalRecipient,
@@ -251,7 +253,7 @@ pub(super) async fn commit_local<S: MessageSession>(
         }
         let delayed = add_delay_from(
             recipient_delivery,
-            northstar_time::Utc::now(),
+            state.message_events().now(),
             Some(bare_jid(from)),
         );
         let identity = origin_id.map(|identity_value| {
@@ -267,6 +269,7 @@ pub(super) async fn commit_local<S: MessageSession>(
         });
         let grant = ValidatedPersonalMessage {
             local_actor_id: Some(user_id),
+            local_actor_fence,
             identity,
             archives: candidates,
             destination: PersonalMessageDestination::Local(LocalDelivery {

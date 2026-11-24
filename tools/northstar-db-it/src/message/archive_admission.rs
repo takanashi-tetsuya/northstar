@@ -161,6 +161,7 @@ async fn paired_preferences_are_sampled_after_history_account_fence() {
             service
                 .admit_personal_message(&ValidatedPersonalMessage {
                     local_actor_id: Some(SENDER),
+                    local_actor_fence: None,
                     identity: None,
                     archives: &candidates,
                     destination: PersonalMessageDestination::Local(local_delivery(
@@ -245,6 +246,7 @@ async fn federated_admission_uses_committed_opt_out_and_opt_in() {
             service
                 .admit_personal_message(&ValidatedPersonalMessage {
                     local_actor_id: None,
+                    local_actor_fence: None,
                     identity: None,
                     archives: &inbound,
                     destination: PersonalMessageDestination::Local(local_delivery(
@@ -269,6 +271,7 @@ async fn federated_admission_uses_committed_opt_out_and_opt_in() {
             service
                 .admit_personal_message(&ValidatedPersonalMessage {
                     local_actor_id: Some(SENDER),
+                    local_actor_fence: None,
                     identity: None,
                     archives: &outbound,
                     destination: PersonalMessageDestination::Federation(FederationDelivery {
@@ -312,6 +315,7 @@ async fn failed_delivery_rolls_back_selected_archive_rows_and_identity() {
     let delivery_id = candidates[1].projection.id;
     let request = ValidatedPersonalMessage {
         local_actor_id: Some(SENDER),
+        local_actor_fence: None,
         identity: Some(MessageIdentity {
             authority: IdentityAuthority::LocalOrigin,
             actor_scope_raw: "alice@local.test",

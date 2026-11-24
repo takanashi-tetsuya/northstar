@@ -7,6 +7,7 @@
 pub mod direct_commit;
 pub mod direct_lifecycle;
 pub mod direct_spool_wake;
+mod events;
 pub mod extdisco;
 pub mod message_admission;
 pub mod message_carbons;
@@ -17,6 +18,7 @@ pub mod telemetry;
 #[cfg(test)]
 mod test_queue;
 
+pub use events::SystemMessageEvents;
 use northstar_message_core::{
     IdentityAuthority, MessageCommit, PersonalMessageDestination, ValidatedPersonalMessage,
 };
@@ -170,6 +172,7 @@ mod tests {
     fn federation_actor_is_required_even_without_an_origin_id() {
         let command = ValidatedPersonalMessage {
             local_actor_id: None,
+            local_actor_fence: None,
             identity: None,
             archives: &[],
             destination: PersonalMessageDestination::Federation(FederationDelivery {
@@ -195,6 +198,7 @@ mod tests {
     fn local_and_remote_identity_namespaces_cannot_cross() {
         let local_actor = ValidatedPersonalMessage {
             local_actor_id: Some(Uuid::nil()),
+            local_actor_fence: None,
             identity: Some(identity(IdentityAuthority::AuthenticatedRemoteStanza)),
             archives: &[],
             destination: PersonalMessageDestination::Local(local_delivery()),
@@ -206,6 +210,7 @@ mod tests {
 
         let remote_actor = ValidatedPersonalMessage {
             local_actor_id: None,
+            local_actor_fence: None,
             identity: Some(identity(IdentityAuthority::LocalOrigin)),
             archives: &[],
             destination: PersonalMessageDestination::Local(local_delivery()),
@@ -223,6 +228,7 @@ mod tests {
         });
         let command = ValidatedPersonalMessage {
             local_actor_id: Some(Uuid::nil()),
+            local_actor_fence: None,
             identity: Some(identity(IdentityAuthority::AuthenticatedRemoteStanza)),
             archives: &[],
             destination: PersonalMessageDestination::Local(local_delivery()),
@@ -241,6 +247,7 @@ mod tests {
         });
         let command = ValidatedPersonalMessage {
             local_actor_id: None,
+            local_actor_fence: None,
             identity: Some(identity(IdentityAuthority::AuthenticatedRemoteStanza)),
             archives: &[],
             destination: PersonalMessageDestination::Local(local_delivery()),

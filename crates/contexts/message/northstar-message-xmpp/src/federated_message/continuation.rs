@@ -95,7 +95,7 @@ pub(super) async fn finish<H: FederatedMessageHost>(
         }
         let delayed = add_delay_from(
             archive,
-            northstar_time::Utc::now(),
+            state.message_events().now(),
             Some(state.local_domain()),
         );
         let offline_outcome = state

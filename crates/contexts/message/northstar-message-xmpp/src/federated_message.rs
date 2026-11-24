@@ -130,7 +130,7 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
         ControlFlow::Continue(policy) => policy,
         ControlFlow::Break(action) => return Ok(action),
     };
-    let stable_id = uuid::Uuid::new_v4();
+    let stable_id = state.message_events().new_stanza_id();
     let recipient_by = format!("{}@{}", recipient.username, state.local_domain());
     let authoritative_raw = strip_stanza_ids_by_domain(
         &strip_untrusted_direct_delays(raw, Some(authenticated_domain)),

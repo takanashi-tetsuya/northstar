@@ -69,11 +69,12 @@ pub(super) async fn commit<H: FederatedMessageHost>(
                 );
         let delayed = add_delay_from(
             annotated,
-            northstar_time::Utc::now(),
+            state.message_events().now(),
             Some(state.local_domain()),
         );
         let delivery = ValidatedPersonalMessage {
             local_actor_id: None,
+            local_actor_fence: None,
             identity,
             archives: candidate.as_slice(),
             destination: PersonalMessageDestination::Local(LocalDelivery {

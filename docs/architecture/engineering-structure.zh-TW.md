@@ -151,6 +151,7 @@ WP-495 後，operation runtime 的現行位置為
 | S47 C2 產品決策 | WP-685–691 | 依使用者對 S44 C2 審計 4 項的決定實作：先只移動地拆分 MIX repository port（WP-685）與治理資料生命週期模組（WP-686）；MIX 個人副本以永久的來源撤回事實收斂到頻道撤回（WP-687，migration 0159）；聯邦 MUC MAM 入列以交易內的 generation 列 fence outbox 配額（WP-688，migration 0160）；本地與聯邦 MUC MAM 共用 room-core 的一個投影（WP-689）；legal hold 期間撤回與審核經顯示覆蓋層成功，匯出改為附帶顯示變更的 V3 雜湊鏈（WP-690，migration 0161）；記錄階段（WP-691） |
 | S48 C3 語義退出 | WP-695–704、715 | 唯讀審計 room 上下文（C3 MUC、C4 MIX 各 19 項）後修正 C3：共用的確切 occupant 路由契約（WP-695）；groupchat 與撤回投遞給 admission 時提交的受眾，本地路徑先取使用者鎖（WP-698）；房間退役回傳確切的效果（WP-699）；延遲事件以提交時的事實渲染、ordinal 保留取完整 claim、容量分片依升序鎖定（WP-700）；房間讀取在一個唯讀快照回答且不寫入（WP-701）；加入與 SM resume 以提交的權威渲染（WP-696）；私訊、voice 請求與邀請以確切路由投遞（WP-697）；注入的時鐘與 ID，鎖定房間的期限由 PostgreSQL 判斷（WP-702）；型別化的轉換與行動者權威（WP-703）；runtime 執行緒的 stack 提高到 8 MiB，修正推送後 CI 在 debug build 抓到的溢位（WP-715）；記錄階段（WP-704）。盤點見 5.44 | C3 的 19 項發現全部關閉；新增 47 個單元測試與 43 個 ignored 資料庫測試，資料庫測試登記在 CI 執行的 DB 腳本，合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S49 C4 語義退出 | WP-705–714、716、717 | 修正 S48 審計的 C4（MIX）：先只移動地把 MIX 協定與儲存的大檔拆成葉模組（WP-705），加入型別化的 MIX 位址與權威（WP-706）；presence 復原以資料庫時鐘的 cutoff 分頁清完（WP-709）；反射流量以一個 PAM 快照 admission，只有新的儲存扇出給入准帳號（WP-708）；PAM 投影與名冊 delta 跟 Core 成員同交易提交，遠端 PAM 加入轉送邀請與 ANON 偏好（WP-707）；管理表單以稀疏 patch 在頻道鎖下合併，項目時間戳由注入的時鐘取一次（WP-710）；託管探索在一個快照回答、隱藏頻道與不存在的頻道相同，MUC 鏡像在建立之後以頻道 UUID fence 連結（WP-711）；relay 回程只到 admission 時的確切路由，回覆與逾時恰好一個消費者（WP-712）；一般發布只渲染一次，持久投遞綁定收件者帳號（WP-713，migration 0163）；聯邦邀請的授權、token 與結果原子提交（WP-714）；叢集測試改等維護掃除已崩潰節點的 MUC 成員（WP-716）；記錄階段（WP-717）。盤點見 5.45 | C4 的 19 項發現全部關閉，room 上下文完成；新增 38 個單元測試與 45 個 ignored 資料庫測試，資料庫測試登記在 CI 執行的 `mix-family-db-wsl.sh`，合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱除了 WP-713 改名的一個之外不變；全部門禁、Python 腳本測試、離線 CI 與本機 PostgreSQL protocol integration 通過 |
+| S50 C5 語義退出 | WP-718、722–734 | 唯讀審計 message 上下文（WP-718，C5 的 21 項）後修正：先只移動地拆分訊息處理的大檔（WP-722），單獨修正持久叢集信封送到同名重建帳號的問題（WP-723），落地行動者 fence 與事件來源（WP-724）；叢集訊息契約第 14 版攜帶初始預留與確切受眾（WP-725）；直接訊息以一個政策快照授權提交，隱私查詢唯讀（WP-726）；重播重驗權威，Bind2 以確切的 MAM 投影證明才抑制（WP-727）；撤回綁定寄件者帳號並取消未被持有的原文（WP-728，migration 0164）；Push 的 claim 快照與擁有者 fence（WP-729）；C2S、S2S 與元件共用一個處理政策（WP-730）；ExtDisco 的查詢與命令型別化（WP-731）；bare JID 主要訊息依全叢集優先權排序（WP-732）；Carbons 投遞到擷取並重驗的受眾（WP-733）；記錄階段（WP-734）。盤點見 5.46 | C5 的 21 項發現全部關閉；新增 47 個單元測試與 35 個 ignored 測試（32 個資料庫測試登記在 CI 執行的 `message-authority-db-wsl.sh`，3 個 Redis 測試在 `muc-cluster-wsl.sh`），合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱全部保留；全部門禁、Python 腳本測試、離線 CI 與本機 PostgreSQL protocol integration 通過 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -2211,6 +2212,106 @@ S49 後最大的生產檔仍是 `northstar-stream` 的 `local_routes/session_tab
 45 個 ignored 資料庫測試，資料庫測試全部登記在 CI 執行的 `mix-family-db-wsl.sh`，並列入 `room-db-experiments.py` 的預期清單
 （共 120 個）。Cargo.lock 仍是 485 個套件；新增 migration 0163，共 162 項。
 
+### 5.46 S50 盤點：C5 語義退出（`f94a3dc69bc59d70f2bad0bb95ab80260baf4ae3`）
+
+S50 依[後續路線圖](next-steps-roadmap.zh-TW.md)處理 D 的第二個上下文 message。先唯讀審計（WP-718，報告不入庫），
+得到 C5 的 21 項發現與十個封包（P0–P9）。WP-722 先只移動地拆分訊息處理的大檔（P0），WP-723 單獨修正最嚴重的 C5-01，
+WP-724 落地共用的行動者 fence 與事件來源（P1），之後 WP-725–733 各負責一個封包平行開發，在一條鏈上依 WP 編號接起來。
+使用者決定了需要產品判斷的八項（C5-03、04、06、10、11、12／13、14、21）；C5-07、08、19 採審計的預設。C5 的 21 項發現
+至此全部關閉。S49 與 S50 之間另有三個清理 WP（WP-719–721），內容見第 8 節。程式修改由 Codex CLI（`gpt-6.2-sol`）執行
+（第 6 節第 10 點）。
+
+| WP | 內容 |
+| --- | --- |
+| WP-718 | 唯讀審計 message 上下文（報告不入庫）：C5 的 21 項發現、十個封包與需要使用者決定的選項 |
+| WP-722 | P0：後面的封包都會改同一批大型處理函式，先只移動。`northstar-message-xmpp` 的 C2S 訊息路徑拆成 `messaging/message_delivery/` 下的 rated admission、遠端路由、本地目標、持久提交、撤回、離線 fallback 與 Carbons 葉模組，邀請的前置檢查、授權與授予移到 `invitation_admission.rs`；聯邦入站路徑拆成 `federated_message/` 下的 route port、降級、收件者政策、持久提交、撤回與後續處理；`northstar-stream` 的 session table 把直接路由與 Carbons 選擇器移到 `local_routes/session_table/`。葉函式以參考取用處理函式的可變狀態，效果順序、SQL、wire 輸出與公開 API 不變。`check-abuse.mjs` 與 `check-federated-route-boundaries.mjs` 跟著移動的程式碼檢查 |
+| WP-723 | C5-01：叢集 listener 以一個收件者帳號的 spool 列驗證持久的 C2S 契約後，才列舉目標 JID 目前的本地會話；期間帳號被刪除並以同名重建時，新帳號的會話不符合持久來源，listener 改走一般佇列，舊帳號的 stanza 可能送到新帳號並回報 live 接受。`fan_out_direct_delivery` 在隱私查詢、佇列與接受記錄之前略過帳號 UUID 與持久收件者不同的會話；沒有符合的會話時不回報 live 接受，spool 列留給重播。信封與 SQL 不變 |
+| WP-724 | P1／C5-02、C5-17、C5-18 的型別部分：message-core 新增 `ActorGenerationFence` 與 `AuthenticatedMessageActor`（帳號、驗證 generation、連線、正規化的 full JID），`MessageSession::message_actor()` 由串流會話的已驗證帳號、路由連線與綁定的 full JID 建立；C2S 的個人訊息與撤回命令帶這個 fence，S2S 入口為 None。message-core 新增 `MessageEventSource`（`now`、`new_stanza_id`），處理葉模組的 11 個 stanza ID 與 delay 取樣改讀 host 的來源。這個 WP 只攜帶事實，由 WP-726、728、729 強制 |
+| WP-725 | P2a／C5-21、C5-05、C5-06 的下限：叢集的 Live admission 以 `claim_id = message_id` 預留 spool 列，`from_durable` 因此拒絕每個遠端的 Live 主要投遞，訊息退回重播。新的 `DurableC2sReserved` 攜帶這個初始預留；帶預留契約或確切受眾的訊息 payload 使用 `protocol_version` 14，心跳、presence 與其他 payload 仍是 13。v13 listener 拒絕 v14 且不入列，送出端接受相關的零投遞回條並重新武裝預留，改走同帳號的重播。接收端以一個無鎖查詢讀 stanza 與目前的 claim，只在 claim 仍等於初始預留時提供投遞，socket fence 在寫出位元組前輪替它。message-application 新增 `ExactMessageRoute`（full JID、帳號、驗證 generation、連線、節點）與 `ExactMessageRoutePort`：本地入列在該 full JID 的會話換了帳號、generation 或連線時拒絕；遠端信封帶 `expected_connections`，listener 重驗。bare JID 的遠端主要投遞與本地一樣只取非負優先權。3 個 DB 測試 |
+| WP-726 | P3／C5-02、C5-03、C5-04：C2S 行動者的帳號 UUID 與驗證 generation 在提交交易內檢查，過期、停用或刪除的行動者回既有的 unavailable-sender，不留任何投影。提交依序取既有的叢集權威、排序的帳號鎖，再讀封鎖並以一個陳述式取樣隱私選擇與規則、名冊、MAM 偏好與預設 spool 資格（`PRIVACY_DECISION_FACTS` 與 `ARCHIVE_ADMISSION_FACTS`），之後才寫身分、封存、spool 或 outbox；不增加隱私、名冊或封鎖政策的鎖。獨立的離線 fallback 在插入前以相同方式重驗行動者與預設政策。volatile 歷史仍在 live 路由之後 best effort 寫入，但用路由前取得的封存決定（C5-03，使用者決定）。`privacy_allows_session` 改為唯讀：一個快照、不續約租約、不取列或 advisory 鎖；已命名的 active 清單不見或過期時拒絕，直到連線重新選擇（C5-04，使用者決定）；`deployment-capacity-session-leases` 心跳為它續約的連線續約未過期的選擇。6 個 DB 測試 |
+| WP-727 | P5／C5-08、C5-09：Bind2 只在收件者可見的確切 MAM 投影仍存在時才抑制 spool 列：在帳號、active 選擇與 spool fence 之後以 `FOR SHARE SKIP LOCKED` 取封存列，保留清理持有該列或沒有證據（暫時 spool、沒有收件者投影）時投遞 spool 副本，不再只信任歷史旗標（C5-08 的保守做法）。登入、優先權轉換、Bind2、SM resume 與叢集復原以確切路由開始重播，每次抑制或入列前重驗連線、驗證 generation、隱私選擇、封鎖與名冊政策；政策改變只釋放尚未轉交的後綴並重試，連線被替換時停止。等待佇列容量時不持有資料庫鎖。4 個 DB 測試 |
+| WP-728 | P6／C5-10、C5-11、C5-12、C5-19，C5-17 的 tombstone 部分：本地撤回意圖屬於寄件者帳號 UUID。migration 0164 為 `personal_retraction_intents` 加 `sender_account_id`，只在外送請求或與收件者不同的擁有者證明寄件者時回填，並以兩個 partial unique index（帳號範圍與位址範圍）取代只看位址的身分（C5-11，使用者決定）；重建的帳號可以重用動作 ID，遠端重放保留位址範圍。行動者的驗證 generation 在寫入交易內鎖定。兩個擁有者的原文在一個快照鎖定（C5-19）；撤回只取消確切對應且沒有連線持有的 spool 列，與 tombstone 同交易，被進行中的投遞持有時等待後整個重試（C5-10，使用者決定）；成對的 tombstone 共用交易的 PostgreSQL 時間。帶明確 no-store 的撤回在 C2S、S2S 與元件路徑回 wait/service-unavailable，不留持久效果（C5-12，使用者決定）；零匹配的撤回維持 forward-only。10 個 DB 測試 |
+| WP-729 | P7／C5-14、C5-15，Push 的 C5-02、C5-17：一個 PostgreSQL 快照提供 claim 的離線數、待處理 presence 數與合格訂閱；轉交在路由與叢集 fallback 之前重驗確切的 claim，過時的 claim 不進佇列也不算失敗。佇列接受是轉交邊界，不召回（C5-14，使用者決定）。Push 變更依序鎖帳號 advisory、訂閱、嘗試；過期嘗試的清理改為獨立的 `FOR UPDATE SKIP LOCKED` 有界批次。擁有者的啟用與停用在寫入交易內以 `northstar_lock_auth_generation` 檢查帳號與驗證 generation；請求合併、關聯到期與 claim 時間用交易的資料庫時間。6 個 DB 測試 |
+| WP-730 | P8／C5-13、C5-20：message-core 新增 `processing_policy.rs`，以一個純函式分類訊息允許的效果（各方向的持久化、只能 volatile、只是訊號）；C2S 送往遠端網域或元件、S2S 本地投遞與 S2S 送往已設定元件的流量都使用它。送往元件的 S2S 訊息先通過共用的驗證與分類，不再走早期的通用 outbox。明確 no-store 只走 live 路由，沒有路由接受時回 wait/service-unavailable 且不寫入；只有喚醒能力的元件連線不接受 volatile 流量。錯誤 stanza 不進 S2S outbox；獨立的訊號（回條、chat marker 含舊名、chat state）只有在健康模式下帶明確 store 提示才進入。C2S 的 InProgress 與 Denied 速率決定對 `type='error'` 的輸入靜默丟棄。1 個 DB 測試 |
+| WP-731 | P9／C5-16，XEP-0215 的 C5-17：`ExtDiscoService::list_services(ExtDiscoQuery)` 是唯讀查詢，不碰速率計數；`issue_credentials(ExtDiscoCommand, IssuanceTime)` 負責選擇器比對、拒絕順序、先帳號後 IP 的計費與憑證推導，回傳 `ExtDiscoIssuance` 或型別化的 `ExtDiscoRejection`。XMPP adapter 取樣一次時間：host 的 `MessageEventSource` 的牆鐘與一個單調時間點。wire 輸出與程序內計費不變 |
+| WP-732 | P2b／C5-06：bare JID 的主要訊息送到帳號在所有叢集節點中優先權最高的非負 available resource（RFC 6121 8.5.2.1.1，使用者決定），不再是「先本地、再第一個遠端節點」。擁有節點把每個會話的路由 presence 發布到 Redis 的 `session_presence:<full JID>`（值為 `<連線 uuid>|<available 0/1>|<優先權>|<seq>`，TTL 同會話）；受保護的腳本只在 session 與 instance 鍵指向本節點與該連線時、且每連線的 seq 較新時寫入；確切續約延長它，拆除、維護釋放與過時擁有者接管刪除它；發布是 best effort（2 秒上限），不讓 presence stanza 失敗。擷取以一個 pipeline 的 GET 讀取（runtime 的 Redis ACL 已允許 GET，不需 MGET），只在記錄的連線與擷取的路由相符時採用。`primary_ranking.rs` 排序：已知 available 且非負者依優先權，同分本地優先，遠端依節點與 full JID；再來是 presence 未知的遠端；已知 unavailable 或負優先權者捨棄。每次遠端嘗試是指名一個連線的 v14 確切受眾，被拒時換下一個。S2S 仍是本節點優先：它的送出函式無法指定單一擷取的連線。3 個 ignored 真實 Redis 測試登記在 `muc-cluster-wsl.sh` |
+| WP-733 | P4／C5-07：C2S 扇出在後續工作之前依連線擷取本地 Carbons 受眾；本地與叢集投遞在入列前一刻重驗該連線、它的 Carbons 啟用、適用時的 MUC 範圍，以及 XEP-0191 封鎖與 XEP-0016 隱私，查詢錯誤只略過該 resource。遠端副本以簽章的 v14 carbons-only 信封傳送（`carbons_only=true`、volatile 投遞、`expected_user_id`、`expected_auth_generation`、把每個擷取的 full JID 對應到連線 UUID 的 `expected_connections`，MUC 範圍另帶 `carbon_muc_room` 與 `carbon_muc_nick`），擁有節點只接受給這些連線，並在入列前檢查 Carbons 旗標；同 JID 的替換不在受眾內。不另做啟用狀態的 probe：每則訊息每個遠端 resource 多一次往返，仍與入列時的檢查競爭，而後者才是權威。v13 的拒絕或缺少確切 ACK 記錄並計入 Carbon 失敗，沒有舊版 fallback 或重試；Carbons 不進歷史、離線 spool 或叢集重試。2 個 DB 測試 |
+| WP-734 | 記錄階段；新增 CI 執行的 `message-authority-db-wsl.sh`，登記 WP-725–733 的 32 個資料庫測試 |
+
+讀寫規則：
+
+- 行動者權威：C2S 命令帶 `ActorGenerationFence`，直接訊息、撤回與 Push 的擁有者變更都在寫入交易內檢查帳號與驗證
+  generation；S2S 入口沒有本地行動者。
+- 鎖順序：叢集權威、排序的帳號鎖，再以一個陳述式讀封鎖、隱私、名冊、MAM 偏好與 spool 資格，之後才寫投影；Push 為帳號
+  advisory、訂閱、嘗試；撤回在一個快照鎖定兩個擁有者的原文，再取消沒有連線持有的 spool 列。
+- 查詢不寫入：`privacy_allows_session` 唯讀，續約只由心跳與明確的會話生命週期做；ExtDisco 的列表不碰計數。
+- 確切路由：投遞以擷取的 `ExactMessageRoute`（帳號、generation、連線）為準，本地入列與遠端 listener 都重驗；路由不見時
+  spool 列留給同帳號的重播，不以 JID 重新解析。叢集訊息契約第 14 版攜帶初始預留與確切受眾。
+- 重播：每次抑制或入列前重驗路由與政策；Bind2 只有在確切的 MAM 投影仍存在時才抑制，否則投遞。
+- 轉交邊界：佇列接受即轉交，訊息、Push 與 Carbons 都不召回。
+- 時間：stanza ID 與 delay 由 `MessageEventSource` 取樣；tombstone、Push 的窗口與到期用交易的資料庫時間。
+
+部署：
+
+- migration 0164 刪除舊版 binary 作為衝突目標的位址身分 index：先停止所有舊的伺服器程序，migrate，只啟動新版。
+- 叢集訊息契約第 14 版：v13 節點拒絕 v14 的訊息 payload 且不入列，送出端退回同帳號的重播，所以混版期間跨節點的 Live
+  投遞、確切受眾與遠端 Carbons 會退化（重播或計為 Carbon 失敗），不會送錯對象；所有節點一起升級。
+- Redis 的 `session_presence:*` 鍵由新版節點寫入，runtime 的 Redis ACL 不需改變；舊節點不寫，排名把它們的 resource 當成
+  presence 未知。
+- S2S 的 bare JID 投遞仍是本節點優先；WP-726 的確切選擇只涵蓋本地的隱私選擇，遠端只提供可達性，由接收節點在入列前
+  檢查自己的選擇。
+- Push 的失敗計數不再包含過時的 claim；Bind2 在證據不足時多投遞而不是丟棄。
+
+線上行為的改變：
+
+- 只在另一個叢集節點上線的收件者即時收到訊息，不再等重播；bare JID 的主要訊息送到全叢集優先權最高的非負 resource
+  （C5-06、C5-21，使用者決定）。
+- 刪除後以同名重建的帳號不會收到舊帳號的持久訊息；被替換的連線、改變的 generation 或帳號不會收到原路由的投遞。
+- 改密、管理員重設或停用之後，舊連線的訊息、撤回與 Push 變更回 unavailable，不留投影。
+- 封鎖、隱私或名冊在提交前改變時，訊息依提交時的狀態拒絕；已選擇的 active 隱私清單不見或過期時拒絕，直到重新選擇
+  （C5-04，使用者決定）。
+- 撤回取消尚未被連線持有、確切對應的離線原文（C5-10，使用者決定）；帶 no-store 的撤回回 wait/service-unavailable
+  （C5-12，使用者決定）；重建的帳號可以重用動作 ID（C5-11，使用者決定）。
+- S2S 送往元件的訊息依共用政策處理：no-store 沒有 live 路由時回 wait/service-unavailable；獨立的訊號只有帶 store 提示
+  才進 S2S outbox；錯誤 stanza 不進 outbox。
+- Bind2 在 MAM 證據不見時投遞 spool 副本；重播中政策改變只釋放後綴。
+- Carbons 只送到擷取時啟用且在入列時仍啟用的確切連線，遵守封鎖與 active 清單；晚綁定的 resource 不在受眾內。
+- Push 的回應計數來自一個快照；過時的 claim 不送出。
+- C2S 收到速率限制中的 `type='error'` 訊息時靜默丟棄。
+
+其他 stanza、錯誤條件、儲存的編碼與 wire 格式都不變。
+
+與審計的差異：
+
+- C5-07：審計建議遠端的啟用狀態在擷取時以 probe 取樣。實作移除了 probe，只在擁有節點入列前檢查：probe 每則訊息每個遠端
+  resource 多一次往返，仍與入列時的檢查競爭。
+- C5-06：審計把排名列在版本化契約裡；實作分成 WP-725 的非負下限與 WP-732 的全叢集排名，排名的 presence 用 Redis 的
+  受保護記錄，不改信封版本。S2S 維持本節點優先。
+- C5-08：審計允許遷移持久的封存指標；實作沿用既有的 ID，以鎖下的確切投影證明，證據不足時投遞（審計的保守選項）。
+- C5-14：轉交邊界定在佇列接受，沒有 schema 連結（審計的建議）。
+- C5-18：依審計，型別作為前提落地（行動者、確切路由、處理政策），只在新 port 與擁有封包的呼叫端使用。
+
+尚未處理：撤回的相容 operation ID 仍取程序的隨機來源（呼叫端沒有 host）；WP-726 的確切選擇不跨節點；
+`clippy::too_many_arguments` 豁免改成參數結構；debug build 的大 frame 仍是結構債；D 的下一個上下文依 5.4 的順序；
+聯邦的對端互通仍是 `EXT-FEDERATION`。
+
+新決定：
+
+- 叢集訊息契約第 14 版攜帶初始預留與確切受眾，混版時退回同帳號的重播，不降級語義（C5-21、C5-05，WP-725）。
+- bare JID 的主要訊息依全叢集的優先權排序，presence 由受保護的 Redis 記錄提供（C5-06，WP-732）。
+- 隱私查詢唯讀，遺失的 active 選擇 fail closed（C5-04，WP-726）。
+- volatile 歷史以送出時準備的事實 best effort 寫入（C5-03，WP-726）。
+- 撤回取消沒有連線持有的確切原文，本地意圖綁定寄件者帳號（C5-10、11，WP-728，migration 0164）。
+- no-store 與 C2S 一致：撤回拒絕，訊息只走 live 路由（C5-12、13，WP-728、730）。
+- 訊息、Push 與 Carbons 的轉交邊界是佇列接受，不召回（C5-14，WP-725、729、733）。
+
+S50 後最大的生產檔是 `northstar-message-core` 的 `jingle.rs`（1,376 行）：WP-722 把 `northstar-stream` 的
+`local_routes/session_table.rs` 由 1,388 行降為 702 行，message-xmpp 的 `message_delivery.rs` 由 1,284 行降為 676 行、
+`federated_message.rs` 由 886 行降為 457 行；最大的測試檔仍是 `stage4_replay/tests.rs`（2,742 行）。workspace 測試由
+3,855 個（WP-719 刪除未使用 helper 的 5 個測試之後）增為 3,937 個（ignored 由 483 個增為 518 個，其中 392 個在
+`northstar-db-it`），原有名稱全部保留。新增 47 個單元測試與 35 個 ignored 測試：32 個資料庫測試登記在 CI 執行的
+`message-authority-db-wsl.sh`，3 個 Redis 測試在 `muc-cluster-wsl.sh`。Cargo.lock 仍是 485 個套件；新增 migration 0164，共 163 項。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點），S31 的 WP-483 起 agy 額度用盡，再改由 Codex CLI 執行（第 10 點）。
@@ -2540,6 +2641,19 @@ S49 後最大的生產檔仍是 `northstar-stream` 的 `local_routes/session_tab
      要求兩者（S49 的 WP-707）。
    - 讀取改為不寫入時，要搜尋依賴讀取副作用的測試，包括 `scripts/` 的叢集與整合腳本：WP-701 讓 room 讀取不碰 Redis 後，
      叢集測試只在碰上維護週期時通過，S48 推送後才失敗（WP-716）（S49）。
+   - 平行的 WP 為同一個結構新增欄位時（WP-732 為 `ExactMessageRoute` 加 `priority` 與 `available`，WP-726 為
+     `ValidatedPersonalMessage` 加 `policy`），其他 WP 新寫的 struct literal 要到接鏈後才編譯失敗；接鏈後在整個 workspace
+     （包括 `tools/`）搜尋該型別的每個 literal，包括 `Some(Type {`、`&Type {` 與測試替身。S50 的兩次完整驗證各被一個漏掉的
+     literal 擋下（Carbon 路由與 WP-730 的資料庫測試）。
+   - 委派的程式碼可能在生產程式用了只列在 dev-dependencies 的 crate（WP-726 的 `futures::future::BoxFuture`、WP-733 的
+     `tokio::join!`）：該 crate 自己的測試會通過，下游的 lib 建置才失敗。驗證要建置依賴它的 crate；能用 std 時改用 std
+     （S50）。
+   - 需要專用 schema 前綴與隔離角色的資料庫測試（`repository-conformance-db-wsl.sh` 登記的）要用它自己的 runner，一般的
+     單一 schema 執行會在 fixture 斷言失敗（S50 的 WP-728）。
+   - 新的 Redis 指令先對照 runtime 的 ACL：WP-732 的擷取原本用 MGET，部署時就要改 ACL，改成 pipeline 的 GET 後不需要
+     （S50）。
+   - 審計建議的機制若只增加成本、不提供權威（WP-733 的遠端 Carbons probe 與入列前的檢查競爭，而後者才是權威），由架構
+     負責人移除，並在盤點的「與審計的差異」記錄（S50）。
 10. Codex（S31 的 WP-483 起，2026-11-16）：agy 額度用盡期間，程式修改改由 Codex CLI（`gpt-6.1-sol`，2026-11-19 起
     `gpt-6.2-sol`）執行，呼叫方式與
     限制同第 8 點，`model_reasoning_effort` 依任務難度選擇；第 1、3、4、7 點與第 9 點的機械搬移做法照舊。agy 恢復後回到
@@ -3177,3 +3291,20 @@ Stage 證據仍綁定其原提交。
 | WP-714 | 完成：聯邦邀請的授權、token、結果 journal 與 S2S 回覆原子提交，精確重試回原 token（C4-15、16） | 見 `git log --grep '\[WP-714\]'` |
 | WP-716 | 完成：多節點叢集測試改等維護掃除已崩潰節點的 MUC 成員；WP-701 之後 room 讀取不再寫 Redis | 見 `git log --grep '\[WP-716\]'` |
 | WP-717 | 完成：記錄 S49 的階段與盤點（5.45）、目標架構第 4、5 節、執行計劃的 C4 列、已知問題的 `ARCH-MIX-COMMITTED-AUTHORITY`、程式職責表的兩個 MIX worker、CHANGELOG 與路線圖的狀態。WP-705–714 接成一條鏈驗證：fmt、clippy、受影響 21 個 crate 的單獨建置與測試、workspace 測試與名稱比對、全部門禁與 Python 腳本測試、Stage 4 lanes、node 腳本測試、離線 CI、本機 PostgreSQL 上 MIX、MUC、帳號與訊息的資料庫測試與 repository conformance，以及本機的 PostgreSQL protocol integration。接鏈抓到重複的 re-export、被移走的屬性與架構門禁的表單 producer 對應，修正併入對應的 WP | 見 `git log --grep '\[WP-717\]'` |
+| WP-718 | 完成：唯讀審計 message 上下文，C5 的 21 項發現、十個封包與需要使用者決定的選項（報告不入庫） | 無（報告不入庫） |
+| WP-719 | 完成：刪除 WP-701 後沒有呼叫者的 `northstar-muc-xmpp` discovery 模組與它的 5 個單元測試 | 見 `git log --grep '\[WP-719\]'` |
+| WP-720 | 完成：移除 WP-705 為只移動而在 `northstar-mix-xmpp` 加的 `needless_return` 與 `ptr_arg` 豁免，修正被隱藏的寫法；`too_many_arguments` 留待參數結構 | 見 `git log --grep '\[WP-720\]'` |
+| WP-721 | 完成：room-postgres 的 MIX 正規化委派給 room-core 的 `MixRealJid` 與 `MixChannelAddress`，儲存層不再與領域規則分歧 | 見 `git log --grep '\[WP-721\]'` |
+| WP-722 | 完成：C2S 訊息、聯邦入站與 session table 的大檔只移動地拆成葉模組（C5 的 P0） | 見 `git log --grep '\[WP-722\]'` |
+| WP-723 | 完成：叢集 listener 不把持久的 C2S 信封交給帳號 UUID 不同的會話，沒有相符會話時留給重播（C5-01） | 見 `git log --grep '\[WP-723\]'` |
+| WP-724 | 完成：行動者 generation fence、已驗證的訊息行動者與注入的訊息事件來源（C5-02、17、18 的前提） | 見 `git log --grep '\[WP-724\]'` |
+| WP-725 | 完成：叢集訊息契約第 14 版攜帶初始預留與確切受眾，本地與遠端都以確切路由入列（C5-05、06、21） | 見 `git log --grep '\[WP-725\]'` |
+| WP-726 | 完成：直接訊息以一個政策快照在提交交易內授權，行動者 generation 在交易內檢查；隱私查詢唯讀（C5-02、03、04） | 見 `git log --grep '\[WP-726\]'` |
+| WP-727 | 完成：重播在每次抑制或入列前重驗路由與政策，Bind2 以確切的 MAM 投影證明才抑制（C5-08、09） | 見 `git log --grep '\[WP-727\]'` |
+| WP-728 | 完成：撤回意圖綁定寄件者帳號，兩個擁有者在一個快照鎖定，取消未被持有的原文，no-store 撤回拒絕（C5-10、11、12、17、19，migration 0164） | 見 `git log --grep '\[WP-728\]'` |
+| WP-729 | 完成：Push claim 的計數與目標來自一個快照，轉交前重驗；帳號優先的鎖順序與擁有者 fence，時間用資料庫時鐘（C5-02、14、15、17） | 見 `git log --grep '\[WP-729\]'` |
+| WP-730 | 完成：C2S、S2S 與元件共用一個訊息處理政策；no-store 只走 live 路由；速率限制中的錯誤訊息靜默丟棄（C5-13、20） | 見 `git log --grep '\[WP-730\]'` |
+| WP-731 | 完成：ExtDisco 的唯讀列表與憑證命令型別化，時間取樣一次（C5-16、17） | 見 `git log --grep '\[WP-731\]'` |
+| WP-732 | 完成：bare JID 主要訊息依全叢集優先權排序，presence 由受保護的 Redis 記錄提供（C5-06） | 見 `git log --grep '\[WP-732\]'` |
+| WP-733 | 完成：Carbons 投遞到擷取的確切連線，入列前重驗啟用、封鎖與隱私，遠端以 v14 carbons-only 信封傳送（C5-07） | 見 `git log --grep '\[WP-733\]'` |
+| WP-734 | 完成：記錄 S50 的階段與盤點（5.46）、目標架構第 4、5 節、執行計劃的 C5 列、已知問題的 `ARCH-MSG-EXACT-AUTHORITY`、架構與運維文件的第 14 版訊息契約、程式職責表、CHANGELOG 與路線圖的狀態；新增 CI 執行的 `message-authority-db-wsl.sh`。WP-725–733 接成一條鏈驗證：fmt、clippy、受影響 28 個 crate 的單獨建置與測試、workspace 測試與名稱比對、全部門禁與 Python 腳本測試、Stage 4 lanes、node 腳本測試、離線 CI、本機 PostgreSQL 上的資料庫測試（新的 runner 以一個共用 schema 執行）與 repository conformance，以及本機的 PostgreSQL protocol integration。接鏈抓到 WP-728 與 WP-730 對元件 no-store 撤回的交會，以及漏加排名欄位的 Carbon 路由與漏加政策欄位的資料庫測試，修正併入對應的 WP；WP-728 的提交訊息補上 C5-12 與 C5-19 | 見 `git log --grep '\[WP-734\]'` |

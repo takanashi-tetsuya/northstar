@@ -68,6 +68,28 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
   connection, and give a retried federated MIX invitation its original token.
 - Expire all stale MIX presence at startup, including rows that were locked or
   beyond the first page.
+- Deliver a message to a recipient online only on another cluster node
+  immediately instead of on replay, and send bare-JID messages to the
+  highest-priority non-negative resource across the cluster.
+- Deliver personal messages only to the exact account, sign-in and connection
+  chosen when the message was accepted, so a recreated account or a replaced
+  connection never receives them.
+- Reject messages, retractions and Push changes from a connection whose
+  password was changed or whose account was reset or disabled.
+- Apply blocks, privacy lists and roster changes made just before a message
+  commits, and deny messages when a selected active privacy list has gone
+  until the client selects one again.
+- Let a retraction cancel its original while it is still queued offline and
+  unclaimed, refuse retractions marked no-store, and let a recreated account
+  reuse retraction IDs.
+- Apply the client message policy to S2S and component traffic.
+- Deliver the queued copy on Bind 2 when its archived copy has gone, and
+  recheck block and privacy policy before each replayed message.
+- Send Message Carbons only to resources that had Carbons enabled when the
+  message was accepted and still have them enabled at delivery.
+- Take Push response counts from one snapshot and never send a stale Push
+  claim.
+- Drop rate-limited client error messages silently.
 
 ## [0.2.0] - Release notes (publication date: GitHub Releases)
 

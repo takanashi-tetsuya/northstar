@@ -202,6 +202,24 @@ releases the initial claim and refreshes the wake. A crash leaves the claim
 eligible for replay after its 60-second lease expires. Spool-only admissions
 are immediately eligible for replay.
 
+S50 binds that claim to the exact route captured before commit: the full
+JID, account UUID, authentication generation, connection UUID and owning node.
+Message payloads use exact delivery contract version 14
+(`EXACT_MESSAGE_DELIVERY_VERSION`), which carries the initial spool
+reservation and the exact audience; other node payloads stay on protocol
+version 13. The receiving listener re-checks the account, generation and
+connection before it enqueues, and a route that no longer matches leaves the
+spool row for same-account replay instead of resolving the JID again. A
+version 13 node rejects a version 14 message payload without enqueueing it,
+so during a mixed-version rollout the sender falls back to replay and remote
+Carbons count as failed; exact audiences and cross-node Live delivery hold
+only when every node runs version 14. Bare primary messages rank the
+account's resources across nodes by priority from guarded Redis
+`session_presence:{full_jid}` records (connection UUID, availability,
+priority, sequence); resources without a record rank as presence unknown.
+Queue acceptance is the handoff boundary: Live messages, Push and Carbons are
+not recalled after a transport accepts them.
+
 This closes the known late-commit hole in the recovery cutoff under a healthy
 database, but it does not make delivery instantaneous or exactly once. A
 cancelled `COMMIT` may leave the caller uncertain whether its message and wake

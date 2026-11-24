@@ -441,7 +441,12 @@ identity and any enabled MAM rows. That database fence follows the stanza
 through the bounded local or cross-node channel. The cluster node/delivery
 contract protocol v13 carries the exact recipient/row fence explicitly; the
 receiver verifies both the PostgreSQL row and its payload before any socket
-queue accepts it. Unsafe
+queue accepts it. Message payloads use exact delivery contract v14 (S50),
+which adds the initial spool reservation and the exact audience (account
+UUID, authentication generation and connection UUID captured before commit);
+the receiver re-checks that route before enqueueing and never resolves the
+JID again. A v13 peer rejects a v14 message payload, and the sender falls
+back to same-account replay. Unsafe
 volatile/durable combinations with a legacy v6 peer fail closed. When
 XEP-0198 is enabled, TCP, WebSocket and BOSH persist the exact spool fence in
 the counted unacknowledged entry before transport output and delete it only

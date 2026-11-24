@@ -198,5 +198,9 @@ cargo test --locked --offline -p northstar-cluster \
   tests::redis_soft_state::redis_ten_thousand_temporary_muc_rooms_leave_no_soft_state_keys \
   -- --ignored --nocapture
 cargo test --locked --offline -p northstar-cluster muc_routing_tests:: -- --ignored --nocapture
+# Message route presence (S50): guarded publication, refresh, release,
+# takeover and connection-matched capture against the same real Redis.
+cargo test --locked --offline -p northstar-cluster message_routing::exact::presence::tests:: \
+  -- --ignored --nocapture --test-threads=1
 
 echo "CLU-MUC static fences and pure state models passed; run scripts/cluster-wsl.sh for the disposable PostgreSQL/two-node Redis outage matrix"

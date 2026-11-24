@@ -1206,6 +1206,16 @@ matches; every other row stays address-scoped until it expires. The migration
 drops the address-only identity index that older binaries name as their
 conflict target, so stop every old server process before migrating and start
 only updated binaries.
+S50 cluster nodes send personal message payloads as exact delivery contract
+version 14, which carries the captured route (account UUID, authentication
+generation, connection UUID) and the initial spool reservation. A version 13
+node rejects those payloads without enqueueing them, so a mixed-version
+cluster delivers cross-node messages by same-account replay and counts remote
+Carbons as failed until every node is upgraded; upgrade all nodes together.
+Updated nodes also write guarded Redis `session_presence:{full_jid}` records
+for cluster-wide priority ranking of bare primary messages. They use the
+existing runtime Redis ACL; no ACL change is needed, and resources on
+old nodes rank as presence unknown.
 On an existing volume, stop every old server process, generate the new storage
 password and URL secrets, reconcile the new role, run migrations and exact
 grants, then start the new binary. The older binary's exact role/ACL audit does

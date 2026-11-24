@@ -25,6 +25,7 @@ pub mod maintenance_repository;
 pub mod mam_repository;
 pub mod mam_room;
 pub mod message_admission_port;
+mod message_policy;
 pub mod message_repository;
 pub mod metrics_snapshot_repository;
 pub mod mix_archive;

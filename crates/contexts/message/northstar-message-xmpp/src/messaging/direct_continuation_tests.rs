@@ -109,6 +109,7 @@ fn prepared<'command>(
     let command = ValidatedPersonalMessage {
         local_actor_id: Some(request.actor_id),
         local_actor_fence: None,
+        policy: None,
         identity: Some(MessageIdentity {
             authority: IdentityAuthority::LocalOrigin,
             actor_scope_raw: request.account_bare,

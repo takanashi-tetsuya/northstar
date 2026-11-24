@@ -170,7 +170,7 @@ pub(super) async fn authorize<H: MessageHost, A: MessageOutcome>(
     invitation_outcome: Option<DirectInvitationOutcome>,
     user_id: Uuid,
     from: &str,
-    active_privacy: &Option<String>,
+    privacy: (Option<Uuid>, Option<&str>),
     to: &str,
 ) -> Result<ControlFlow<A, OutboundAuthorization>> {
     // XEP-0191 is account scoped and applies to every outbound stanza,
@@ -194,7 +194,7 @@ pub(super) async fn authorize<H: MessageHost, A: MessageOutcome>(
     } else {
         match state
             .message_service()
-            .authorize_outbound_message(user_id, bare_jid(from), active_privacy.as_deref(), to)
+            .authorize_outbound_message(user_id, bare_jid(from), privacy.0, privacy.1, to)
             .await?
         {
             OutboundPolicyDecision::Allowed => {}
@@ -270,6 +270,7 @@ pub(super) async fn commit_local<S: MessageSession>(
         let grant = ValidatedPersonalMessage {
             local_actor_id: Some(user_id),
             local_actor_fence,
+            policy: None,
             identity,
             archives: candidates,
             destination: PersonalMessageDestination::Local(LocalDelivery {

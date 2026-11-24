@@ -92,6 +92,7 @@ fn command<'a>(
     ValidatedPersonalMessage {
         local_actor_id: Some(source.actor_id),
         local_actor_fence: None,
+        policy: None,
         archives: &[],
         identity: source.origin_id.as_deref().map(|origin| MessageIdentity {
             authority: IdentityAuthority::LocalOrigin,

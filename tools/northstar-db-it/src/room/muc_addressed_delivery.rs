@@ -446,6 +446,7 @@ async fn admit_direct_grant(
     let message = ValidatedPersonalMessage {
         local_actor_id: Some(request.actor_id),
         local_actor_fence: None,
+        policy: None,
         identity: None,
         archives: &[],
         destination: PersonalMessageDestination::Local(LocalDelivery {

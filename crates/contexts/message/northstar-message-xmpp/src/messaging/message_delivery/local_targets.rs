@@ -5,8 +5,7 @@ use std::ops::ControlFlow::{Break, Continue};
 pub(super) struct LocalTargets<H: FullJidFallbackPort> {
     pub(super) spool_only_now: bool,
     pub(super) targets: Vec<(String, H::Session)>,
-    pub(super) default_privacy_for_spool: Option<Result<bool>>,
-    pub(super) spool_privacy_permits: bool,
+    pub(super) remote_route_exists: bool,
 }
 
 #[expect(
@@ -69,40 +68,46 @@ pub(super) async fn select<S: MessageSession>(
     } else {
         state.personal_message_remote_resource_exists(to).await
     };
-    // A live resource's active privacy list may override the account
-    // default. If mode changes to SpoolOnly inside the PG transaction,
-    // however, the delivery becomes account-scoped. Read that default
-    // even when a live resource exists so the transaction can be marked
-    // LiveOnly when an account spool would violate recipient privacy.
-    let mut default_privacy_for_spool = if degraded_spool_eligible {
-        Some(
-            state
-                .message_service()
-                .default_recipient_privacy_denies(recipient.id, from)
-                .await,
-        )
-    } else {
-        None
-    };
-    let spool_privacy_permits = matches!(&default_privacy_for_spool, Some(Ok(false)));
-    if targets.is_empty() && !remote_route_exists {
-        let default_denies = match default_privacy_for_spool.take() {
-            Some(result) => result?,
-            None => {
-                state
-                    .message_service()
-                    .default_recipient_privacy_denies(recipient.id, from)
-                    .await?
-            }
-        };
-        if default_denies {
-            return Ok(Break(message_error(root, "cancel", "service-unavailable")));
-        }
+    if targets.is_empty()
+        && !remote_route_exists
+        && state
+            .message_service()
+            .default_recipient_privacy_denies(recipient.id, from)
+            .await?
+    {
+        return Ok(Break(message_error(root, "cancel", "service-unavailable")));
     }
     Ok(Continue(LocalTargets {
         spool_only_now,
         targets,
-        default_privacy_for_spool,
-        spool_privacy_permits,
+        remote_route_exists,
     }))
+}
+
+pub(super) async fn recheck_committed<H: MessageHost>(
+    state: &H,
+    targets: Vec<(
+        String,
+        northstar_stream::local_routes::session::OnlineSession,
+    )>,
+    from: &str,
+) -> Vec<(
+    String,
+    northstar_stream::local_routes::session::OnlineSession,
+)> {
+    let mut allowed = Vec::with_capacity(targets.len());
+    for target in targets {
+        match state.privacy_allows_fallback(&target.1, from).await {
+            Ok(true) => allowed.push(target),
+            Ok(false) => {}
+            Err(error) => {
+                state.post_accept_failed();
+                tracing::warn!(
+                    ?error,
+                    "privacy policy failed closed after durable C2S admission"
+                );
+            }
+        }
+    }
+    allowed
 }

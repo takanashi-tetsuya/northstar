@@ -8,9 +8,9 @@ use crate::message_admission::{
 };
 use crate::{direct_commit::*, direct_lifecycle::PreparationAdmission};
 use northstar_message_core::{
-    DirectPersonalMessageAdmission, DirectPostCommitMode, DirectSpoolEligibility,
-    IdentityAuthority, MessageCommit, MessagePostCommit, PersonalMessageDestination,
-    ValidatedPersonalMessage,
+    DirectPersonalMessageAdmission, DirectPolicyDenial, DirectPostCommitMode,
+    DirectSpoolEligibility, IdentityAuthority, MessageCommit, MessagePostCommit,
+    PersonalMessageDestination, ValidatedPersonalMessage,
 };
 use uuid::Uuid;
 
@@ -60,6 +60,7 @@ pub enum LocalDirectStanzaError {
     InternalPostCommitShape,
     AccountUnavailable,
     Unconfirmed,
+    Policy(DirectPolicyDenial),
 }
 impl LocalDirectStanzaError {
     pub fn stanza_error(self) -> (&'static str, &'static str) {
@@ -67,6 +68,8 @@ impl LocalDirectStanzaError {
             Self::InternalPostCommitShape => ("wait", "internal-server-error"),
             Self::AccountUnavailable => ("cancel", "service-unavailable"),
             Self::Unconfirmed => ("wait", "resource-constraint"),
+            Self::Policy(DirectPolicyDenial::DegradedSpool) => ("wait", "service-unavailable"),
+            Self::Policy(_) => ("cancel", "service-unavailable"),
         }
     }
 }
@@ -252,6 +255,9 @@ where
                 ContinuedLocalDirect::Reject(LocalDirectStanzaError::AccountUnavailable)
             }
             None => {
+                if let Some(denial) = error.downcast_ref::<DirectPolicyDenial>() {
+                    return ContinuedLocalDirect::Reject(LocalDirectStanzaError::Policy(*denial));
+                }
                 tracing::warn!(target: "northstar_server::xmpp::protocol::messaging", ?error,
                     recipient_id = %continuation.live.recipient_id,
                     "local history/C2S admission did not return a confirmed result");

@@ -17,6 +17,7 @@ fn prepared() -> (DirectOperationHandle, PreparedLocalDirect<'static, 'static>) 
     let command = ValidatedPersonalMessage {
         local_actor_id: Some(Uuid::from_u128(1)),
         local_actor_fence: None,
+        policy: None,
         identity: None,
         archives: &[],
         destination: PersonalMessageDestination::Local(LocalDelivery {

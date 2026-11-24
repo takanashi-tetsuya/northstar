@@ -14,6 +14,11 @@ use sqlx::PgPool;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::{
+    message_policy::{CommitPolicy, OfflineCommitPolicy},
+    personal_history::DirectCommitContext,
+};
+
 #[derive(Clone, Copy)]
 struct OfflineLimits {
     max_messages: i64,
@@ -65,6 +70,27 @@ impl PostgresMessageRepository {
         eligibility: DirectSpoolEligibility,
         observer: Option<&dyn DirectCommitObserver>,
     ) -> Result<DirectPersonalMessageAdmission> {
+        let (sender, recipient) = match request.destination {
+            PersonalMessageDestination::Federation(destination) => {
+                (Some(destination.local_actor_id), None)
+            }
+            PersonalMessageDestination::Local(destination) => {
+                (request.local_actor_id, Some(destination.recipient_id))
+            }
+        };
+        anyhow::ensure!(
+            request
+                .local_actor_fence
+                .is_none_or(|fence| Some(fence.account_id) == sender),
+            "actor generation fence belongs to another account"
+        );
+        let mut context = self.direct_context(eligibility, observer);
+        context.actor_fence = request.local_actor_fence;
+        context.policy = request.policy.map(|direct| CommitPolicy {
+            direct,
+            sender,
+            recipient,
+        });
         let identity = request
             .identity
             .as_ref()
@@ -91,12 +117,11 @@ impl PostgresMessageRepository {
                     };
                 let (outcome, mode, live_claim_id) = self
                     .admit_direct_history(
-                        &self.pool,
                         identity.as_ref(),
                         request.archives,
                         Some(&outbox),
                         None,
-                        (eligibility, None),
+                        context,
                     )
                     .await?;
                 (
@@ -126,12 +151,11 @@ impl PostgresMessageRepository {
                     };
                 let (outcome, mode, live_claim_id) = self
                     .admit_direct_history(
-                        &self.pool,
                         identity.as_ref(),
                         request.archives,
                         None,
                         Some(&delivery),
-                        (eligibility, observer),
+                        context,
                     )
                     .await?;
                 (
@@ -154,7 +178,6 @@ impl PostgresMessageRepository {
 
     async fn admit_direct_history(
         &self,
-        pool: &PgPool,
         identity: Option<
             &northstar_message_postgres::personal_history::PersonalHistoryIdentity<'_>,
         >,
@@ -165,28 +188,33 @@ impl PostgresMessageRepository {
         delivery: Option<
             &northstar_message_postgres::personal_history::PersonalC2sDeliveryAdmission<'_>,
         >,
-        admission: (DirectSpoolEligibility, Option<&dyn DirectCommitObserver>),
+        context: DirectCommitContext<'_>,
     ) -> Result<(
         northstar_message_postgres::personal_history::PersonalHistoryAdmission,
         DirectPostCommitMode,
         Option<Uuid>,
     )> {
-        let (eligibility, observer) = admission;
         crate::personal_history::admit_candidate_history(
-            pool,
-            identity,
-            candidates,
-            outbox,
-            delivery,
-            crate::personal_history::DirectCommitContext {
-                cluster: self
-                    .cluster
-                    .as_deref()
-                    .map(|cluster| (cluster, eligibility)),
-                observer,
-            },
+            &self.pool, identity, candidates, outbox, delivery, context,
         )
         .await
+    }
+
+    fn direct_context<'a>(
+        &'a self,
+        eligibility: DirectSpoolEligibility,
+        observer: Option<&'a dyn DirectCommitObserver>,
+    ) -> DirectCommitContext<'a> {
+        DirectCommitContext {
+            cluster: self
+                .cluster
+                .as_deref()
+                .map(|cluster| (cluster, eligibility)),
+            observer,
+            actor_fence: None,
+            policy: None,
+            archives_prepared: false,
+        }
     }
 
     async fn fence_live_invite(
@@ -301,6 +329,7 @@ impl MessageRepository for PostgresMessageRepository {
         &self,
         owner_id: Uuid,
         owner_bare_jid: &str,
+        connection_id: Option<Uuid>,
         active_privacy_list: Option<&str>,
         target: &str,
     ) -> Result<OutboundPolicyDecision> {
@@ -314,10 +343,11 @@ impl MessageRepository for PostgresMessageRepository {
         {
             return Ok(OutboundPolicyDecision::Blocked);
         }
-        if northstar_roster_postgres::privacy::privacy_denies(
+        if northstar_roster_postgres::privacy::session_privacy_denies(
             &self.pool,
             owner_id,
-            active_privacy_list,
+            connection_id,
+            active_privacy_list.is_some(),
             target,
             PrivacyStanzaKind::Message,
         )
@@ -365,19 +395,17 @@ impl MessageRepository for PostgresMessageRepository {
         recipient_id: Uuid,
         sender_jid: &str,
     ) -> Result<bool> {
-        northstar_roster_postgres::privacy::privacy_denies(
+        northstar_roster_postgres::privacy::session_privacy_denies(
             &self.pool,
             recipient_id,
             None,
+            false,
             sender_jid,
             PrivacyStanzaKind::Message,
         )
         .await
     }
 
-    /// Refresh the lease of an explicitly selected privacy list before using
-    /// it. A stale active-list row must never silently fall back to the account
-    /// default during a live session.
     async fn privacy_allows_session(
         &self,
         user_id: Uuid,
@@ -386,18 +414,11 @@ impl MessageRepository for PostgresMessageRepository {
         peer: &str,
         kind: PrivacyStanzaKind,
     ) -> Result<bool> {
-        if active_privacy_list.is_some() {
-            northstar_roster_postgres::privacy::refresh_active_privacy_session(
-                &self.pool,
-                user_id,
-                connection_id,
-            )
-            .await?;
-        }
-        Ok(!northstar_roster_postgres::privacy::privacy_denies(
+        Ok(!northstar_roster_postgres::privacy::session_privacy_denies(
             &self.pool,
             user_id,
-            active_privacy_list,
+            Some(connection_id),
+            active_privacy_list.is_some(),
             peer,
             kind,
         )
@@ -641,12 +662,11 @@ impl MessageRepository for PostgresMessageRepository {
         }
         let (outcome, _, _) = self
             .admit_direct_history(
-                &self.pool,
                 None,
                 candidates,
                 None,
                 None,
-                (DirectSpoolEligibility::LiveOnly, None),
+                self.direct_context(DirectSpoolEligibility::LiveOnly, None),
             )
             .await?;
         match outcome {
@@ -672,8 +692,22 @@ impl MessageRepository for PostgresMessageRepository {
             encrypted,
             mam_backed,
             identity,
+            actor_fence,
+            policy,
         } = admission;
         self.validate_local_recipient_authority(recipient_bare_jid)?;
+        let authorization = OfflineCommitPolicy {
+            fence: actor_fence,
+            policy: CommitPolicy {
+                direct: northstar_message_core::DirectMessagePolicy {
+                    recipient_sessions: &[],
+                    remote_recipient_route: false,
+                    ..policy
+                },
+                sender: actor_fence.map(|fence| fence.account_id),
+                recipient: Some(recipient_id),
+            },
+        };
         match northstar_message_postgres::offline::store_offline_idempotent_for_recipient_with_direct_fence(
             &self.pool,
             recipient_id,
@@ -684,6 +718,7 @@ impl MessageRepository for PostgresMessageRepository {
             self.offline_policy(mam_backed),
             identity,
             self.cluster.as_deref(),
+            &authorization,
         )
         .await?
         {
@@ -692,6 +727,56 @@ impl MessageRepository for PostgresMessageRepository {
             northstar_message_core::OfflineStoreOutcome::QuotaExceeded => Ok(OfflineAdmissionOutcome::QuotaExceeded),
             northstar_message_core::OfflineStoreOutcome::RecipientUnavailable => {
                 Ok(OfflineAdmissionOutcome::RecipientUnavailable)
+            }
+        }
+    }
+}
+
+impl MessageHistoryPreparation for PostgresMessageRepository {
+    async fn prepare_archive_history<'a>(
+        &self,
+        candidates: &[ArchiveCandidate<'a>],
+    ) -> Result<PreparedMessageHistory<'a>> {
+        let peers = candidates
+            .iter()
+            .map(|candidate| (candidate.projection.owner_id, candidate.projection.peer_jid))
+            .collect::<Vec<_>>();
+        let mut transaction = self.pool.begin().await?;
+        let allowed = northstar_archive_postgres::archive_admission_facts_in_transaction(
+            &mut transaction,
+            &peers,
+        )
+        .await?;
+        transaction.commit().await?;
+        let selected = candidates
+            .iter()
+            .zip(allowed)
+            .filter(|(_, allowed)| *allowed)
+            .map(|(candidate, _)| candidate.clone())
+            .collect();
+        Ok(PreparedMessageHistory::from_selected(selected))
+    }
+
+    async fn write_prepared_archive_history(
+        &self,
+        history: PreparedMessageHistory<'_>,
+        actor: Option<northstar_message_core::ActorGenerationFence>,
+    ) -> Result<ArchiveAdmissionOutcome> {
+        use northstar_message_postgres::personal_history::PersonalHistoryAdmission;
+
+        let mut context = self.direct_context(DirectSpoolEligibility::LiveOnly, None);
+        context.archives_prepared = true;
+        context.actor_fence = actor;
+        let (outcome, _, _) = self
+            .admit_direct_history(None, history.selected(), None, None, context)
+            .await?;
+        match outcome {
+            PersonalHistoryAdmission::Stored(ids) => Ok(ArchiveAdmissionOutcome::Projected(ids)),
+            PersonalHistoryAdmission::AccountUnavailable => {
+                Ok(ArchiveAdmissionOutcome::AccountUnavailable)
+            }
+            PersonalHistoryAdmission::Replay(_) => {
+                anyhow::bail!("history without identity cannot replay")
             }
         }
     }

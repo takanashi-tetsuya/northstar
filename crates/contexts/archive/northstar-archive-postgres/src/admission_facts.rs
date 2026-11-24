@@ -5,19 +5,20 @@ use northstar_archive_core::{decide_mam_archive_admission, MamArchiveAdmissionFa
 use sqlx::{postgres::PgRow, Postgres, Row, Transaction};
 use uuid::Uuid;
 
-pub(crate) const ARCHIVE_ADMISSION_FACTS: &str = "SELECT
+pub const ARCHIVE_ADMISSION_FACTS: &str = "SELECT
     (SELECT policy FROM mam_preference_jids
       WHERE user_id=candidate.owner_id AND jid=candidate.full_jid) AS full_policy,
     (SELECT policy FROM mam_preference_jids
       WHERE user_id=candidate.owner_id AND jid=candidate.bare_jid) AS bare_policy,
     (SELECT default_policy FROM mam_preferences WHERE user_id=candidate.owner_id) AS default_policy,
     EXISTS(SELECT 1 FROM roster_items WHERE roster_items.owner_id=candidate.owner_id
-           AND contact_jid=candidate.bare_jid) AS roster_member
+           AND contact_jid=candidate.bare_jid) AS roster_member,
+    candidate.position AS archive_position
     FROM unnest($1::uuid[], $2::text[], $3::text[]) WITH ORDINALITY
          AS candidate(owner_id, full_jid, bare_jid, position)
     ORDER BY candidate.position";
 
-pub(crate) fn decide_archive_admission(row: PgRow) -> Result<bool> {
+pub fn decide_archive_admission(row: PgRow) -> Result<bool> {
     let full_policy: Option<String> = row.try_get("full_policy")?;
     let bare_policy: Option<String> = row.try_get("bare_policy")?;
     let default_policy: Option<String> = row.try_get("default_policy")?;

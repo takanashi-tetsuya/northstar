@@ -171,7 +171,11 @@ impl PostgresMessageRepository {
     ) -> Result<Outcome> {
         let request = addresses.invitation;
         anyhow::ensure!(
-            grant.message.local_actor_id == Some(request.actor_id),
+            grant.message.local_actor_id == Some(request.actor_id)
+                && grant
+                    .message
+                    .local_actor_fence
+                    .is_none_or(|fence| fence.account_id == request.actor_id),
             "direct invitation projection has a different inviter"
         );
         let identity = grant
@@ -194,9 +198,17 @@ impl PostgresMessageRepository {
         }
         self.fence_live_invite(&mut transaction).await?;
         let room = muc::lock_direct_invitation_namespace(&mut transaction, request.room).await?;
-        let (true, recipient) = addresses.lock_accounts(&mut transaction).await? else {
+        let (locked, recipient) = addresses.lock_accounts(&mut transaction).await?;
+        if !locked
+            || !crate::message_policy::actor_generation_matches(
+                &mut transaction,
+                grant.message.local_actor_fence,
+            )
+            .await?
+        {
+            transaction.rollback().await?;
             return Ok(Outcome::Refused(Refusal::Unavailable));
-        };
+        }
         let recipient_id = recipient.as_ref().map(|account| account.id);
         let target_full_jid = match grant.message.destination {
             PersonalMessageDestination::Local(delivery) => {

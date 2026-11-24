@@ -57,6 +57,7 @@ fn prepared<'command>(
     let command = ValidatedPersonalMessage {
         local_actor_id: Some(request.actor_id),
         local_actor_fence: None,
+        policy: None,
         identity: Some(MessageIdentity {
             authority: IdentityAuthority::LocalOrigin,
             actor_scope_raw: request.account_bare,
@@ -500,6 +501,7 @@ impl messaging_service::MessageRepository for RecordingCommit {
         &self,
         _: Uuid,
         _: &str,
+        _: Option<Uuid>,
         _: Option<&str>,
         _: &str,
     ) -> anyhow::Result<messaging_service::OutboundPolicyDecision> {
@@ -1177,6 +1179,7 @@ fn prepare_envelope<'command, 'live>(
         ValidatedPersonalMessage {
             local_actor_id: Some(request.actor_id),
             local_actor_fence: None,
+            policy: None,
             identity: Some(MessageIdentity {
                 authority: IdentityAuthority::LocalOrigin,
                 actor_scope_raw: "alice@example.test",
@@ -1375,3 +1378,4 @@ async fn prepared_live_routes_only_the_original_envelope_and_committed_source() 
 
 #[path = "tests/exact_route_port.rs"]
 mod exact_route_port;
+mod prepared_history;

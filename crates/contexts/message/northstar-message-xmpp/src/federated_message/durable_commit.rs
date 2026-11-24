@@ -35,7 +35,7 @@ pub(super) async fn commit<H: FederatedMessageHost>(
     canonical_from: &str,
     encrypted: bool,
     degraded_spool_eligible: bool,
-    default_privacy_denied: bool,
+    policy: northstar_message_core::DirectMessagePolicy<'_>,
     history_committed: &mut bool,
     durable_c2s_delivery: &mut Option<Uuid>,
     live_claim_id: &mut Option<Uuid>,
@@ -75,6 +75,7 @@ pub(super) async fn commit<H: FederatedMessageHost>(
         let delivery = ValidatedPersonalMessage {
             local_actor_id: None,
             local_actor_fence: None,
+            policy: Some(policy),
             identity,
             archives: candidate.as_slice(),
             destination: PersonalMessageDestination::Local(LocalDelivery {
@@ -86,8 +87,7 @@ pub(super) async fn commit<H: FederatedMessageHost>(
                 encrypted,
             }),
         };
-        let eligibility =
-            inbound_direct_spool_eligibility(degraded_spool_eligible, default_privacy_denied);
+        let eligibility = inbound_direct_spool_eligibility(degraded_spool_eligible, false);
         match state
             .message_service()
             .admit_personal_message_with_mode(&delivery, eligibility)
@@ -129,6 +129,11 @@ pub(super) async fn commit<H: FederatedMessageHost>(
             Ok((DurableAdmissionOutcome::Replay, _, _)) => return Ok(Break(None)),
             Ok((DurableAdmissionOutcome::AccountUnavailable, _, _)) => return Ok(Break(None)),
             Err(error) => {
+                if let Some(denial) =
+                    error.downcast_ref::<northstar_message_core::DirectPolicyDenial>()
+                {
+                    return Ok(Break(policy_error(root, *denial)));
+                }
                 tracing::warn!(?error, %authenticated_domain, "inbound message history/C2S admission failed atomically");
                 return Ok(Break(inbound_message_error(
                     root,
@@ -139,4 +144,16 @@ pub(super) async fn commit<H: FederatedMessageHost>(
         }
     }
     Ok(Continue(()))
+}
+
+pub(super) fn policy_error(
+    root: roxmltree::Node<'_, '_>,
+    denial: northstar_message_core::DirectPolicyDenial,
+) -> Option<String> {
+    let kind = if denial == northstar_message_core::DirectPolicyDenial::DegradedSpool {
+        "wait"
+    } else {
+        "cancel"
+    };
+    inbound_message_error(root, kind, "service-unavailable")
 }

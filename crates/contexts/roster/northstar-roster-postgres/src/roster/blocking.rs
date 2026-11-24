@@ -36,16 +36,7 @@ pub async fn is_blocked_for_account_in_transaction(
     if candidate.localpart().is_some() && candidate.bare() == owner.bare() {
         return Ok(false);
     }
-    let candidates = blocking_match_candidates(&candidate);
-    sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM blocked_jids
-          WHERE owner_id=$1 AND blocked_jid=ANY($2::text[]))",
-    )
-    .bind(owner_id)
-    .bind(candidates)
-    .fetch_one(&mut **transaction)
-    .await
-    .map_err(Into::into)
+    is_blocked_candidates(&mut **transaction, owner_id, &candidate).await
 }
 
 /// A deliberately generous account-level ceiling. Existing deployments that

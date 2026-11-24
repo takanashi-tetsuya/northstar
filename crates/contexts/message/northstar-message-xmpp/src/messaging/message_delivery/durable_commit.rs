@@ -1,7 +1,9 @@
 use super::*;
 use northstar_message_application::messaging::{
-    direct_workflow::PreparedLiveDirect, LocalRecipient,
+    direct_workflow::{LocalDirectStanzaError, PreparedLiveDirect},
+    LocalRecipient,
 };
+use northstar_message_core::DirectPolicyDenial;
 use uuid::Uuid;
 
 #[expect(
@@ -23,13 +25,13 @@ pub(super) async fn commit<'live, S: MessageSession>(
     archive_eligibility: LocalArchiveEligibility,
     user_id: Uuid,
     local_actor_fence: Option<ActorGenerationFence>,
+    policy: DirectMessagePolicy<'_>,
     candidates: &[ArchiveCandidate<'_>],
     recipient_stable_id: Uuid,
     recipient: &LocalRecipient,
     recipient_by: &str,
     encrypted: bool,
     degraded_spool_eligible: bool,
-    spool_privacy_permits: bool,
     message_admission_lease: &mut Option<MessageAdmissionLease>,
     history_committed: &mut bool,
     durable_c2s_delivery: &mut Option<Uuid>,
@@ -56,6 +58,7 @@ pub(super) async fn commit<'live, S: MessageSession>(
         let admission = ValidatedPersonalMessage {
             local_actor_id: Some(user_id),
             local_actor_fence,
+            policy: Some(policy),
             identity,
             archives: candidates,
             destination: PersonalMessageDestination::Local(LocalDelivery {
@@ -67,7 +70,7 @@ pub(super) async fn commit<'live, S: MessageSession>(
                 encrypted,
             }),
         };
-        let eligibility = direct_spool_eligibility(degraded_spool_eligible, spool_privacy_permits);
+        let eligibility = direct_spool_eligibility(degraded_spool_eligible, true);
         session.enter_frame_stage(MessageFrameStage::Admission);
         let service = state.message_service();
         if let Some(operation) = session.message_operation() {
@@ -92,6 +95,9 @@ pub(super) async fn commit<'live, S: MessageSession>(
             {
                 ContinuedLocalDirect::Accepted => return Ok(Some(S::Action::none())),
                 ContinuedLocalDirect::Reject(error) => {
+                    if let LocalDirectStanzaError::Policy(denial) = error {
+                        return Ok(Some(policy_error(root, denial)));
+                    }
                     let (kind, condition) = error.stanza_error();
                     return Ok(Some(message_error(root, kind, condition)));
                 }
@@ -168,6 +174,9 @@ pub(super) async fn commit<'live, S: MessageSession>(
                     return Ok(Some(message_error(root, "cancel", "service-unavailable")));
                 }
                 Err(error) => {
+                    if let Some(denial) = error.downcast_ref::<DirectPolicyDenial>() {
+                        return Ok(Some(policy_error(root, *denial)));
+                    }
                     if let Some(confirmed) = preserved_transaction(&error) {
                         match confirmed {
                             TransactionOutcome::Stored {
@@ -219,3 +228,14 @@ pub(super) async fn commit<'live, S: MessageSession>(
     }
     Ok(None)
 }
+
+pub(super) fn policy_error<A: MessageOutcome>(root: Node<'_, '_>, denial: DirectPolicyDenial) -> A {
+    if denial == DirectPolicyDenial::OutboundBlock {
+        return message_blocked_error(root);
+    }
+    let (kind, condition) = LocalDirectStanzaError::Policy(denial).stanza_error();
+    message_error(root, kind, condition)
+}
+
+#[cfg(test)]
+mod tests;

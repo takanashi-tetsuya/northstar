@@ -2,6 +2,7 @@
 
 mod archive_admission;
 mod cluster_live_handoff;
+mod commit_authorization;
 mod direct_spool_wake_repository;
 mod message_repository;
 mod push;

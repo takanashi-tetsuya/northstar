@@ -7,7 +7,8 @@ use northstar_workflows::sm_teardown_repository::PostgresSmTeardownRepository;
 
 impl ServerNode {
     /// Evaluate one resource's session-local XEP-0016 selection (or the
-    /// account default when no active list is selected). Callers must apply
+    /// account default when no active list is selected) without renewing it.
+    /// The capacity lease heartbeat renews the selection separately. Callers apply
     /// XEP-0191 first; a blocking hit is never overridden by an allow rule.
     /// Stanza paths that still hold a storage-level kind convert it at this
     /// boundary; the service layer owns the mapping.

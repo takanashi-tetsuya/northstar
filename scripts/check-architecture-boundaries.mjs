@@ -2163,7 +2163,8 @@ const s2sInboundSource = readProductionModule('crates/edges/northstar-s2s/src/in
   + readProductionModule('crates/contexts/message/northstar-message-xmpp/src/federated_message.rs', { root });
 if (/(?:db|northstar_message_postgres::\w+|northstar_workflows::\w+)::(?:store_offline_for_recipient|admit_personal_history)\s*\(/.test(s2sInboundSource)
     || !s2sInboundSource.includes('.store_offline(OfflineMessageAdmission {')
-    || !s2sInboundSource.includes('.admit_history(std::slice::from_ref(candidate))')) {
+    || !s2sInboundSource.includes('.prepare_archive_history(candidate.as_slice())')
+    || !s2sInboundSource.includes('.write_prepared_archive_history(history, None)')) {
   throw new Error('inbound S2S personal storage must use the message service');
 }
 const s2sOutboundSource = readProductionModule('crates/edges/northstar-s2s/src/outbound.rs', { root });

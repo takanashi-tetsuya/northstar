@@ -34,6 +34,10 @@ async fn assert_personal_evidence_is_keyed(pool: &PgPool, identity_value: &str) 
 }
 
 pub(super) async fn isolated_message_pool() -> (PgPool, PgPool, String) {
+    isolated_message_pool_for("message_invite_test").await
+}
+
+pub(super) async fn isolated_message_pool_for(topic: &str) -> (PgPool, PgPool, String) {
     let url = std::env::var("TEST_DATABASE_URL")
         .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
     let admin = sqlx::postgres::PgPoolOptions::new()
@@ -42,7 +46,7 @@ pub(super) async fn isolated_message_pool() -> (PgPool, PgPool, String) {
         .connect(&url)
         .await
         .unwrap();
-    let schema = format!("message_invite_test_{}", Uuid::new_v4().simple());
+    let schema = format!("{topic}_{}", Uuid::new_v4().simple());
     sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .execute(&admin)
         .await
@@ -539,6 +543,7 @@ async fn members_only_invite_is_one_replay_safe_transaction() {
     let concurrent_message = ValidatedPersonalMessage {
         local_actor_id: Some(sender_id),
         local_actor_fence: None,
+        policy: None,
         identity: Some(MessageIdentity {
             authority: IdentityAuthority::LocalOrigin,
             actor_scope_raw: &sender,

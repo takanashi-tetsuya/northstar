@@ -6,14 +6,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 
-struct IsolatedDatabase {
+pub(super) struct IsolatedDatabase {
     admin: PgPool,
-    pool: PgPool,
+    pub(super) pool: PgPool,
     schema: String,
 }
 
 impl IsolatedDatabase {
-    async fn create(label: &str) -> Self {
+    pub(super) async fn create(label: &str) -> Self {
         let url = std::env::var("TEST_DATABASE_URL")
             .expect("set TEST_DATABASE_URL to an isolated PostgreSQL database");
         let admin = sqlx::postgres::PgPoolOptions::new()
@@ -49,7 +49,7 @@ impl IsolatedDatabase {
         }
     }
 
-    async fn finish(self) {
+    pub(super) async fn finish(self) {
         self.pool.close().await;
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "DROP SCHEMA {} CASCADE",

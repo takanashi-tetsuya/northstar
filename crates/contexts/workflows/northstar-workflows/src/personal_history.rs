@@ -1,7 +1,11 @@
 //! Personal history admission: archive writes, history identity fences and C2S/S2S delivery admission.
 
+use crate::message_policy::{actor_generation_matches, spool_eligibility, CommitPolicy};
 use anyhow::Result;
-use northstar_message_core::{ArchiveCandidate, DirectPostCommitMode, DirectSpoolEligibility};
+use northstar_message_core::{
+    ActorGenerationFence, ArchiveCandidate, DirectPolicyDenial, DirectPostCommitMode,
+    DirectSpoolEligibility,
+};
 use northstar_message_postgres::direct_cluster::DirectCommitCluster;
 use northstar_message_postgres::direct_spool_wake::record_direct_spool_wake_in_transaction;
 use northstar_message_postgres::personal_history::*;
@@ -82,6 +86,9 @@ pub(crate) struct DirectCommitContext<'a> {
     pub(crate) cluster: Option<(&'a dyn DirectCommitCluster, DirectSpoolEligibility)>,
     pub(crate) observer:
         Option<&'a dyn northstar_message_application::direct_commit::DirectCommitObserver>,
+    pub(crate) actor_fence: Option<ActorGenerationFence>,
+    pub(crate) policy: Option<CommitPolicy<'a>>,
+    pub(crate) archives_prepared: bool,
 }
 
 pub(crate) async fn admit_candidate_history(
@@ -95,7 +102,11 @@ pub(crate) async fn admit_candidate_history(
     admit_personal_history_inner(
         pool,
         identity,
-        HistoryArchives::Candidates(candidates),
+        if context.archives_prepared {
+            HistoryArchives::PreparedCandidates(candidates)
+        } else {
+            HistoryArchives::Candidates(candidates)
+        },
         outbox,
         delivery,
         Some(context),
@@ -106,13 +117,14 @@ pub(crate) async fn admit_candidate_history(
 #[derive(Clone, Copy)]
 enum HistoryArchives<'a> {
     Candidates(&'a [ArchiveCandidate<'a>]),
+    PreparedCandidates(&'a [ArchiveCandidate<'a>]),
     Preselected(&'a [PersonalArchiveWrite<'a>]),
 }
 
 impl<'a> HistoryArchives<'a> {
     fn owners(self) -> Vec<Uuid> {
         match self {
-            Self::Candidates(candidates) => candidates
+            Self::Candidates(candidates) | Self::PreparedCandidates(candidates) => candidates
                 .iter()
                 .map(|candidate| candidate.projection.owner_id)
                 .collect(),
@@ -123,20 +135,24 @@ impl<'a> HistoryArchives<'a> {
     async fn select(
         self,
         tx: &mut Transaction<'_, Postgres>,
+        decisions: Option<Vec<bool>>,
     ) -> Result<Vec<PersonalArchiveWrite<'a>>> {
-        let candidates = match self {
-            Self::Candidates(candidates) => candidates,
+        let (candidates, prepared) = match self {
+            Self::Candidates(candidates) => (candidates, false),
+            Self::PreparedCandidates(candidates) => (candidates, true),
             Self::Preselected(writes) => return Ok(writes.to_vec()),
         };
-        let peers = candidates
-            .iter()
-            .map(|candidate| {
-                let projection = &candidate.projection;
-                (projection.owner_id, projection.peer_jid)
-            })
-            .collect::<Vec<_>>();
-        let allowed =
-            northstar_archive_postgres::archive_admission_facts_in_transaction(tx, &peers).await?;
+        let allowed = if let Some(decisions) = decisions {
+            decisions
+        } else if prepared {
+            vec![true; candidates.len()]
+        } else {
+            let peers = candidates
+                .iter()
+                .map(|candidate| (candidate.projection.owner_id, candidate.projection.peer_jid))
+                .collect::<Vec<_>>();
+            northstar_archive_postgres::archive_admission_facts_in_transaction(tx, &peers).await?
+        };
         Ok(candidates
             .iter()
             .zip(allowed)
@@ -186,10 +202,11 @@ async fn admit_personal_history_inner(
     archives: HistoryArchives<'_>,
     outbox: Option<&PersonalS2sOutboxAdmission<'_>>,
     c2s_delivery: Option<&PersonalC2sDeliveryAdmission<'_>>,
-    context: Option<DirectCommitContext<'_>>,
+    mut context: Option<DirectCommitContext<'_>>,
 ) -> Result<(PersonalHistoryAdmission, DirectPostCommitMode, Option<Uuid>)> {
-    let (cluster, observer) =
-        context.map_or((None, None), |context| (context.cluster, context.observer));
+    let (cluster, observer) = context
+        .as_ref()
+        .map_or((None, None), |context| (context.cluster, context.observer));
     let mut transaction = pool.begin().await?;
     if let Some((cluster, eligibility)) = cluster {
         lock_direct_spool_instance_claims_in_transaction(&mut transaction).await?;
@@ -197,19 +214,57 @@ async fn admit_personal_history_inner(
             cluster.fence_authority(&mut transaction, authority).await?;
         }
     }
-    let outcome =
-        admit_history_in_transaction(&mut transaction, identity, archives, outbox, c2s_delivery)
-            .await?;
+    let result = admit_history_in_transaction(
+        &mut transaction,
+        identity,
+        archives,
+        outbox,
+        c2s_delivery,
+        context.as_mut(),
+    )
+    .await;
+    let outcome = match result {
+        Ok(outcome) => outcome,
+        Err(error) if error.downcast_ref::<DirectPolicyDenial>().is_some() => {
+            transaction.rollback().await?;
+            return Err(error);
+        }
+        Err(error) => return Err(error),
+    };
+    if matches!(outcome, PersonalHistoryAdmission::AccountUnavailable)
+        && context
+            .as_ref()
+            .is_some_and(|context| context.actor_fence.is_some())
+    {
+        transaction.rollback().await?;
+        if observer.is_some() {
+            return Err(DirectPolicyDenial::ActorUnavailable.into());
+        }
+        return Ok((outcome, DirectPostCommitMode::Live, None));
+    }
+    let effective_cluster = context.and_then(|context| context.cluster);
     // The short health gate admits this final turn before the exact PostgreSQL
     // authority recheck, and holds a counted permit through acknowledged
     // COMMIT. A concurrent health transition freezes new work immediately,
     // then publishes its state after this turn finishes. Routing is outside
     // the permit.
     let mut live_claim_id = None;
-    let mode = if let Some((cluster, eligibility)) = cluster {
-        let (turn, authority) = cluster.begin_direct_commit_turn(eligibility)?;
+    let mode = if let Some((cluster_runtime, eligibility)) = effective_cluster {
+        let (turn, authority) = match cluster_runtime.begin_direct_commit_turn(eligibility) {
+            Ok(turn) => turn,
+            Err(_)
+                if cluster.is_some_and(|(_, initial)| initial != eligibility)
+                    && cluster_runtime.direct_mode() != DirectPostCommitMode::Live =>
+            {
+                transaction.rollback().await?;
+                return Err(DirectPolicyDenial::DegradedSpool.into());
+            }
+            Err(error) => return Err(error),
+        };
         if let Some(authority) = authority {
-            cluster.fence_authority(&mut transaction, authority).await?;
+            cluster_runtime
+                .fence_authority(&mut transaction, authority)
+                .await?;
             if let (PersonalHistoryAdmission::Stored(_), Some(delivery)) = (&outcome, c2s_delivery)
             {
                 // A committed wake can start replay before the postcommit
@@ -248,7 +303,7 @@ async fn admit_personal_history_inner(
         }
         let admitted_mode = turn.finish();
         if admitted_mode == DirectPostCommitMode::Live
-            && cluster.direct_mode() != DirectPostCommitMode::Live
+            && cluster_runtime.direct_mode() != DirectPostCommitMode::Live
         {
             DirectPostCommitMode::SpoolOnly
         } else {
@@ -290,6 +345,7 @@ pub(crate) async fn admit_personal_history_in_transaction(
         HistoryArchives::Candidates(candidates),
         outbox,
         c2s_delivery,
+        None,
     )
     .await
 }
@@ -300,6 +356,7 @@ async fn admit_history_in_transaction(
     archives: HistoryArchives<'_>,
     outbox: Option<&PersonalS2sOutboxAdmission<'_>>,
     c2s_delivery: Option<&PersonalC2sDeliveryAdmission<'_>>,
+    context: Option<&mut DirectCommitContext<'_>>,
 ) -> Result<PersonalHistoryAdmission> {
     let mut required_accounts = archives.owners();
     anyhow::ensure!(
@@ -314,17 +371,40 @@ async fn admit_history_in_transaction(
         required_accounts.push(delivery.recipient_id);
         required_accounts.extend(delivery.local_actor_id);
     }
+    let actor_fence = context.as_ref().and_then(|context| context.actor_fence);
+    required_accounts.extend(actor_fence.map(|fence| fence.account_id));
     if !northstar_auth_postgres::users::lock_enabled_users_in_transaction(
         transaction,
         &required_accounts,
     )
     .await?
+        || !actor_generation_matches(transaction, actor_fence).await?
     {
         return Ok(PersonalHistoryAdmission::AccountUnavailable);
     }
     // Account locks precede the one preference/roster snapshot; no policy
     // row locks are needed. Only the selected rows become replay evidence.
-    let writes = archives.select(transaction).await?;
+    let decisions = if let Some(context) = context {
+        if let (Some(policy), HistoryArchives::Candidates(candidates)) = (&context.policy, archives)
+        {
+            let facts = policy.read(transaction, candidates).await?;
+            if let Some((cluster, eligibility)) = context.cluster.as_mut() {
+                let checked = spool_eligibility(*eligibility, facts.default_denies);
+                if *eligibility != checked
+                    && cluster.direct_mode() == DirectPostCommitMode::SpoolOnly
+                {
+                    return Err(DirectPolicyDenial::DegradedSpool.into());
+                }
+                *eligibility = checked;
+            }
+            Some(facts.archives)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let writes = archives.select(transaction, decisions).await?;
     anyhow::ensure!(
         identity.is_none() || !writes.is_empty() || outbox.is_some() || c2s_delivery.is_some(),
         "personal history identity requires a recoverable archive, S2S, or C2S projection"

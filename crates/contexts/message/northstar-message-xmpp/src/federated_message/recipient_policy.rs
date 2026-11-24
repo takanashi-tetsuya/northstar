@@ -2,14 +2,12 @@ use super::{degraded::degraded_inbound_privacy_uses_default, inbound_message_err
 use crate::ports::FederatedMessageHost;
 use anyhow::Result;
 use northstar_message_application::messaging::{FullJidFallbackPort, LocalRecipient};
-use northstar_stream::local_routes::session::OnlineSession;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::atomic::Ordering;
 
 pub(super) struct RecipientPolicy {
-    pub(super) privacy_candidates: Vec<(String, OnlineSession)>,
+    pub(super) privacy_selections: Vec<northstar_message_core::PrivacySelection>,
     pub(super) remote_route_exists: bool,
-    pub(super) default_privacy_denied: bool,
 }
 
 #[expect(
@@ -83,28 +81,13 @@ pub(super) async fn select<H: FederatedMessageHost>(
     }
     let remote_route_exists =
         !spool_only_privacy && state.s2s_remote_recipient_route_exists(to).await;
-    // Even with a healthy resource route, a statically spoolable message
-    // might enter SpoolOnly during its PostgreSQL transaction. Bind that
-    // transition to the account-default privacy decision before admission.
     let no_live_route = unfiltered_privacy_candidates == 0 && !remote_route_exists;
-    let default_privacy_denied = if degraded_spool_eligible || no_live_route {
-        match state
+    if no_live_route
+        && state
             .message_service()
             .default_recipient_privacy_denies(recipient.id, from)
-            .await
-        {
-            Ok(denied) => denied,
-            Err(error) if !no_live_route => {
-                tracing::warn!(?error, recipient_id = %recipient.id,
-                    "account-default privacy unavailable; S2S message remains live-only");
-                true
-            }
-            Err(error) => return Err(error),
-        }
-    } else {
-        false
-    };
-    if no_live_route && default_privacy_denied {
+            .await?
+    {
         return Ok(Break(inbound_message_error(
             root,
             "cancel",
@@ -129,8 +112,13 @@ pub(super) async fn select<H: FederatedMessageHost>(
         }
     }
     Ok(Continue(RecipientPolicy {
-        privacy_candidates,
+        privacy_selections: privacy_candidates
+            .iter()
+            .map(|(_, session)| northstar_message_core::PrivacySelection {
+                connection_id: session.connection_id,
+                expects_active: session.privacy_active_snapshot().is_some(),
+            })
+            .collect(),
         remote_route_exists,
-        default_privacy_denied,
     }))
 }

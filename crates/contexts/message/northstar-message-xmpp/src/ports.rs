@@ -66,7 +66,9 @@ pub struct DirectInviteRoom {
 }
 
 /// The node as the message pipeline sees it.
-pub trait MessageHost: DirectMessageRoutePort + CarbonDeliveryPort + Send + Sync + 'static {
+pub trait MessageHost:
+    DirectMessageRoutePort<Session = OnlineSession> + CarbonDeliveryPort + Send + Sync + 'static
+{
     type Messages: MessageRepository;
     type Admissions: MessageAdmissionRepository;
     type Retractions: RetractionRepository;

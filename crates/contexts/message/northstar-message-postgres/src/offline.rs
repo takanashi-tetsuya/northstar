@@ -13,6 +13,9 @@ use sqlx::{PgPool, Row};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
+mod authorization;
+pub use authorization::OfflineAuthorization;
+
 pub const OFFLINE_DEDUPE_CAPACITY_SHARDS: u8 = 64;
 pub const MAX_OFFLINE_DEDUPE_PER_SHARD: i32 = 32_768;
 pub const MAX_OFFLINE_DEDUPE_PER_RECIPIENT: i64 = 4_096;
@@ -35,6 +38,7 @@ pub async fn store_offline(
         stanza,
         encrypted,
         policy,
+        None,
         None,
         None,
     )
@@ -62,6 +66,7 @@ pub async fn store_offline_for_recipient(
         stanza,
         encrypted,
         policy,
+        None,
         None,
         None,
     )
@@ -94,6 +99,7 @@ pub async fn store_offline_idempotent(
         policy,
         identity,
         None,
+        None,
     )
     .await
 }
@@ -123,6 +129,7 @@ pub async fn store_offline_idempotent_for_recipient(
         policy,
         identity,
         None,
+        None,
     )
     .await
 }
@@ -138,20 +145,8 @@ pub async fn store_offline_idempotent_for_recipient_with_direct_fence(
     policy: OfflineStorePolicy,
     identity: Option<&northstar_abuse_policy::MessageDedupeIdentity>,
     cluster: Option<&dyn DirectCommitCluster>,
+    authorization: &dyn OfflineAuthorization,
 ) -> Result<OfflineStoreOutcome> {
-    let Some(cluster) = cluster else {
-        return store_offline_idempotent_for_recipient(
-            pool,
-            recipient_id,
-            recipient_bare_jid,
-            sender_jid,
-            stanza,
-            encrypted,
-            policy,
-            identity,
-        )
-        .await;
-    };
     store_offline_idempotent_inner(
         pool,
         recipient_id,
@@ -161,13 +156,14 @@ pub async fn store_offline_idempotent_for_recipient_with_direct_fence(
         encrypted,
         policy,
         identity,
-        Some(cluster),
+        cluster,
+        Some(authorization),
     )
     .await
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn store_offline_idempotent_inner(
+async fn store_offline_idempotent_inner(
     pool: &PgPool,
     recipient_id: Uuid,
     recipient_bare_jid: Option<&str>,
@@ -177,6 +173,7 @@ pub async fn store_offline_idempotent_inner(
     policy: OfflineStorePolicy,
     identity: Option<&northstar_abuse_policy::MessageDedupeIdentity>,
     cluster: Option<&dyn DirectCommitCluster>,
+    authorization: Option<&dyn OfflineAuthorization>,
 ) -> Result<OfflineStoreOutcome> {
     let (recipient_authority, target_resource) =
         normalized_offline_target_resource(stanza, recipient_bare_jid)?;
@@ -207,7 +204,9 @@ pub async fn store_offline_idempotent_inner(
     // administrator's FOR UPDATE cannot pass this shared row lock until the
     // queue projection commits, while a disable that won first is observed as
     // unavailable before any admission/tombstone row is created.
-    if !lock_enabled_users_in_transaction(&mut transaction, &[recipient_id]).await? {
+    let mut accounts = vec![recipient_id];
+    accounts.extend(authorization.and_then(|authorization| authorization.actor_id()));
+    if !lock_enabled_users_in_transaction(&mut transaction, &accounts).await? {
         transaction.rollback().await?;
         return Ok(OfflineStoreOutcome::RecipientUnavailable);
     }
@@ -223,6 +222,14 @@ pub async fn store_offline_idempotent_inner(
             recipient_matches,
             "offline recipient account is unavailable or authority does not match"
         );
+    }
+    let authorization_result = match authorization {
+        Some(authorization) => authorization.check(&mut transaction).await,
+        None => Ok(()),
+    };
+    if let Err(error) = authorization_result {
+        transaction.rollback().await?;
+        return Err(error);
     }
     // The global queue gate gives the administrator clear operation exact
     // snapshot semantics without enumerating recipient locks. Normal enqueue

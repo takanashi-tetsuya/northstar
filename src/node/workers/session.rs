@@ -2,8 +2,13 @@
 
 use super::super::ServerNode;
 use northstar_runtime::workers::{WorkerCriticality, WorkerMode};
+use northstar_session_application::capacity_maintenance::CapacityMaintenanceRepository;
+use northstar_session_postgres::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository;
+use sqlx::PgPool;
+use std::collections::HashSet;
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 pub(super) fn start(state: &Arc<ServerNode>, cancel: &CancellationToken) {
     let worker_registry = state.runtime.workers();
@@ -44,18 +49,48 @@ pub(super) fn start(state: &Arc<ServerNode>, cancel: &CancellationToken) {
 
 fn capacity_lease_renewal_context(
     state: &ServerNode,
-) -> northstar_stream::capacity_maintenance::CapacityLeaseRenewalContext<
-    northstar_session_postgres::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository,
->{
+) -> northstar_stream::capacity_maintenance::CapacityLeaseRenewalContext<CapacityAndPrivacyLeases> {
     northstar_stream::capacity_maintenance::CapacityLeaseRenewalContext::new(
         northstar_session_application::capacity_maintenance::CapacityMaintenanceService::new(
-            northstar_session_postgres::capacity_maintenance_repository::PostgresCapacityMaintenanceRepository::new(
-                state.pool.clone(),
-            ),
+            CapacityAndPrivacyLeases {
+                capacity: PostgresCapacityMaintenanceRepository::new(state.pool.clone()),
+                pool: state.pool.clone(),
+            },
         ),
         Arc::clone(state.session.live().sessions()),
         Arc::clone(&state.metrics),
         Duration::from_secs(state.config.capacity_session_heartbeat_seconds),
         state.config.capacity_session_lease_seconds,
     )
+}
+
+#[derive(Clone)]
+struct CapacityAndPrivacyLeases {
+    capacity: PostgresCapacityMaintenanceRepository,
+    pool: PgPool,
+}
+
+impl CapacityMaintenanceRepository for CapacityAndPrivacyLeases {
+    async fn renew_live_connections(
+        &self,
+        connection_ids: &[Uuid],
+        lease_seconds: u64,
+    ) -> anyhow::Result<HashSet<Uuid>> {
+        let live = self
+            .capacity
+            .renew_live_connections(connection_ids, lease_seconds)
+            .await?;
+        if !live.is_empty() {
+            let live_ids = live.iter().copied().collect::<Vec<_>>();
+            northstar_roster_postgres::privacy::renew_active_privacy_selection(
+                &self.pool, &live_ids,
+            )
+            .await?;
+        }
+        Ok(live)
+    }
+
+    async fn try_reap_expired(&self, limit: i64) -> anyhow::Result<Option<u64>> {
+        self.capacity.try_reap_expired(limit).await
+    }
 }

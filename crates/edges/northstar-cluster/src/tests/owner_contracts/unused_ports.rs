@@ -893,6 +893,7 @@ mod message {
             &self,
             _owner_id: Uuid,
             _owner_bare_jid: &str,
+            _connection_id: Option<Uuid>,
             _active_privacy_list: Option<&str>,
             _target: &str,
         ) -> Result<OutboundPolicyDecision> {
@@ -1066,6 +1067,7 @@ mod sm {
 }
 
 mod pam_projection_repository;
+mod prepared_message_history;
 #[cfg(test)]
 mod presence_recovery;
 mod relay_return;

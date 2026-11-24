@@ -3,7 +3,7 @@
 use super::archive_admission::archive_candidate;
 use super::*;
 use northstar_message_application::messaging::invitation_admission::DirectInvitation;
-use northstar_message_core::ActorGenerationFence;
+use northstar_message_core::{ActorGenerationFence, DirectMessagePolicy, PrivacySelection};
 use std::ops::ControlFlow;
 
 use self::invitation_admission::GrantDelivery;
@@ -33,7 +33,8 @@ pub async fn message<S: MessageSession>(
     let Some(from) = session.full_jid() else {
         return Ok(message_error(root, "cancel", "not-authorized"));
     };
-    let local_actor_fence = session.message_actor().map(|actor| actor.fence());
+    let message_actor = session.message_actor();
+    let local_actor_fence = message_actor.as_ref().map(|actor| actor.fence());
     if let Err(condition) = state.validate_routed_message(root) {
         // RFC 6120 section 8.3.1: never answer an error stanza with a
         // second stanza error. This validation boundary runs before every
@@ -141,6 +142,10 @@ pub async fn message<S: MessageSession>(
     session.enter_frame_stage(MessageFrameStage::Policy);
     let invitation_room = direct_invite_admission(session, root);
     let active_privacy = session.active_privacy();
+    let sender_selection = message_actor.as_ref().map(|actor| PrivacySelection {
+        connection_id: actor.connection_id,
+        expects_active: active_privacy.is_some(),
+    });
     let target_domain = target_jid.domainpart();
     let local_invitee = target_domain == state.local_domain()
         || target_domain == session.upload_domain()
@@ -169,7 +174,10 @@ pub async fn message<S: MessageSession>(
         invitation_outcome,
         user_id,
         from,
-        &active_privacy,
+        (
+            sender_selection.map(|selection| selection.connection_id),
+            active_privacy.as_deref(),
+        ),
         to,
     )
     .await?
@@ -234,6 +242,7 @@ pub async fn message<S: MessageSession>(
         &personal_retraction_target,
         user_id,
         local_actor_fence,
+        sender_selection,
         to,
         &invitation,
         &target_jid,
@@ -327,9 +336,8 @@ pub async fn message<S: MessageSession>(
     let candidates = local_projection.archive_candidates(archive_eligibility);
     let local_targets::LocalTargets {
         spool_only_now,
-        targets,
-        default_privacy_for_spool: _default_privacy_for_spool,
-        spool_privacy_permits,
+        mut targets,
+        remote_route_exists,
     } = match local_targets::select::<S>(
         state,
         root,
@@ -345,6 +353,20 @@ pub async fn message<S: MessageSession>(
     {
         ControlFlow::Continue(targets) => targets,
         ControlFlow::Break(action) => return Ok(action),
+    };
+    let recipient_sessions = targets
+        .iter()
+        .map(|(_, target)| PrivacySelection {
+            connection_id: target.connection_id,
+            expects_active: target.privacy_active_snapshot().is_some(),
+        })
+        .collect::<Vec<_>>();
+    let commit_policy = DirectMessagePolicy {
+        from,
+        to,
+        sender: sender_selection,
+        recipient_sessions: &recipient_sessions,
+        remote_recipient_route: remote_route_exists,
     };
     // A trusted client origin-id is account scoped. Commit the durable
     // delivery and any selected archives before fanout. A retried origin-id is
@@ -409,13 +431,13 @@ pub async fn message<S: MessageSession>(
         archive_eligibility,
         user_id,
         local_actor_fence,
+        commit_policy,
         &candidates,
         recipient_stable_id,
         &recipient,
         &recipient_by,
         encrypted,
         degraded_spool_eligible,
-        spool_privacy_permits,
         &mut message_admission_lease,
         &mut history_committed,
         &mut durable_c2s_delivery,
@@ -425,6 +447,9 @@ pub async fn message<S: MessageSession>(
     .await?
     {
         return Ok(action);
+    }
+    if durable_c2s_delivery.is_some() {
+        targets = local_targets::recheck_committed(state, targets, from).await;
     }
     if let Some(action) = retraction::apply(
         session,
@@ -461,6 +486,16 @@ pub async fn message<S: MessageSession>(
             })
         }
         None => DirectRouteDelivery::Volatile,
+    };
+    let prepared_history = if live_delivery_id.is_none() && !personal_retraction {
+        Some(
+            state
+                .message_service()
+                .prepare_archive_history(&candidates)
+                .await,
+        )
+    } else {
+        None
     };
     session.enter_frame_stage(MessageFrameStage::Routing);
     let outcome = if let Some(live) = prepared_live {
@@ -540,6 +575,8 @@ pub async fn message<S: MessageSession>(
         &recipient_by,
         from,
         encrypted,
+        local_actor_fence,
+        commit_policy,
         history_committed,
         user_id,
         to,
@@ -559,8 +596,16 @@ pub async fn message<S: MessageSession>(
         !personal_retraction || history_committed,
         "a personal retraction reached fanout without durable admission"
     );
-    if live_delivery_id.is_none() && !personal_retraction {
-        let history_result = state.message_service().admit_history(&candidates).await;
+    if let Some(prepared_history) = prepared_history {
+        let history_result = match prepared_history {
+            Ok(prepared) => {
+                state
+                    .message_service()
+                    .write_prepared_archive_history(prepared, local_actor_fence)
+                    .await
+            }
+            Err(error) => Err(error),
+        };
         if let Err(error) = history_result {
             state.personal_message_telemetry().post_accept_failed();
             tracing::warn!(?error, %sender_stable_id, route = accepted_route, "accepted message history transaction failed atomically");

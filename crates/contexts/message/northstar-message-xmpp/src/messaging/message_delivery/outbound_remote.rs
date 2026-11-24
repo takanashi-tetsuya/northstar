@@ -19,6 +19,7 @@ pub(super) async fn route<S: MessageSession>(
     personal_retraction_target: &Option<String>,
     user_id: Uuid,
     local_actor_fence: Option<ActorGenerationFence>,
+    sender_selection: Option<PrivacySelection>,
     to: &str,
     invitation: &Option<DirectInvitation<'_>>,
     target_jid: &CanonicalJid,
@@ -93,6 +94,13 @@ pub(super) async fn route<S: MessageSession>(
                     .message_service()
                     .archive_content_eligible(mam_storage_eligible(root), encrypted),
         );
+        let policy = Some(DirectMessagePolicy {
+            from,
+            to,
+            sender: sender_selection,
+            recipient_sessions: &[],
+            remote_recipient_route: false,
+        });
         let invitation_sent = if let (Some(invitation), Some(revision)) =
             (invitation, grant_revision)
         {
@@ -110,6 +118,7 @@ pub(super) async fn route<S: MessageSession>(
             let admission = ValidatedPersonalMessage {
                 local_actor_id: Some(user_id),
                 local_actor_fence,
+                policy,
                 identity,
                 archives: candidate.as_slice(),
                 destination: PersonalMessageDestination::Federation(FederationDelivery {
@@ -221,6 +230,7 @@ pub(super) async fn route<S: MessageSession>(
             let admission = ValidatedPersonalMessage {
                 local_actor_id: Some(user_id),
                 local_actor_fence,
+                policy,
                 identity,
                 archives: candidate.as_slice(),
                 destination: PersonalMessageDestination::Federation(FederationDelivery {
@@ -249,6 +259,11 @@ pub(super) async fn route<S: MessageSession>(
                     return Ok(Some(message_error(root, "cancel", "service-unavailable")));
                 }
                 Err(error) => {
+                    if let Some(denial) =
+                        error.downcast_ref::<northstar_message_core::DirectPolicyDenial>()
+                    {
+                        return Ok(Some(durable_commit::policy_error(root, *denial)));
+                    }
                     tracing::warn!(?error, %domain, "remote message history/outbox admission failed atomically");
                     return Ok(Some(message_error(root, "wait", "remote-server-timeout")));
                 }

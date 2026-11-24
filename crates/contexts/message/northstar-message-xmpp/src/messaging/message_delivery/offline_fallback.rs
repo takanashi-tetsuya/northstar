@@ -25,6 +25,8 @@ pub(super) async fn finish<S: MessageSession>(
     recipient_by: &str,
     from: &str,
     encrypted: bool,
+    actor_fence: Option<ActorGenerationFence>,
+    policy: DirectMessagePolicy<'_>,
     history_committed: bool,
     user_id: Uuid,
     to: &str,
@@ -85,6 +87,8 @@ pub(super) async fn finish<S: MessageSession>(
                                 identity: message_admission_lease
                                     .as_ref()
                                     .map(|lease| &lease.offline_dedupe),
+                                actor_fence,
+                                policy,
                             },
                         ),
                         history_committed,
@@ -99,7 +103,18 @@ pub(super) async fn finish<S: MessageSession>(
                             }
                         },
                     )
-                    .await?;
+                    .await;
+                    let offline = match offline {
+                        Ok(offline) => offline,
+                        Err(error) => {
+                            if let Some(denial) =
+                                error.downcast_ref::<northstar_message_core::DirectPolicyDenial>()
+                            {
+                                return Ok(Some(durable_commit::policy_error(root, *denial)));
+                            }
+                            return Err(error);
+                        }
+                    };
                     match offline.admission {
                         OfflineAdmissionOutcome::QuotaExceeded if history_committed => {
                             // A pre-admitted recipient MAM row is durable

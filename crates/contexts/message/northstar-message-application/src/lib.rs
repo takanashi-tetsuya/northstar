@@ -173,6 +173,7 @@ mod tests {
         let command = ValidatedPersonalMessage {
             local_actor_id: None,
             local_actor_fence: None,
+            policy: None,
             identity: None,
             archives: &[],
             destination: PersonalMessageDestination::Federation(FederationDelivery {
@@ -199,6 +200,7 @@ mod tests {
         let local_actor = ValidatedPersonalMessage {
             local_actor_id: Some(Uuid::nil()),
             local_actor_fence: None,
+            policy: None,
             identity: Some(identity(IdentityAuthority::AuthenticatedRemoteStanza)),
             archives: &[],
             destination: PersonalMessageDestination::Local(local_delivery()),
@@ -211,6 +213,7 @@ mod tests {
         let remote_actor = ValidatedPersonalMessage {
             local_actor_id: None,
             local_actor_fence: None,
+            policy: None,
             identity: Some(identity(IdentityAuthority::LocalOrigin)),
             archives: &[],
             destination: PersonalMessageDestination::Local(local_delivery()),
@@ -229,6 +232,7 @@ mod tests {
         let command = ValidatedPersonalMessage {
             local_actor_id: Some(Uuid::nil()),
             local_actor_fence: None,
+            policy: None,
             identity: Some(identity(IdentityAuthority::AuthenticatedRemoteStanza)),
             archives: &[],
             destination: PersonalMessageDestination::Local(local_delivery()),
@@ -248,6 +252,7 @@ mod tests {
         let command = ValidatedPersonalMessage {
             local_actor_id: None,
             local_actor_fence: None,
+            policy: None,
             identity: Some(identity(IdentityAuthority::AuthenticatedRemoteStanza)),
             archives: &[],
             destination: PersonalMessageDestination::Local(local_delivery()),

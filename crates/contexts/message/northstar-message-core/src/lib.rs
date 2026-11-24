@@ -14,6 +14,8 @@ pub mod route_item;
 pub mod validation;
 
 pub use authority::{ActorGenerationFence, AuthenticatedMessageActor};
+mod direct_policy;
+pub use direct_policy::{DirectMessagePolicy, DirectPolicyDenial, PrivacySelection};
 pub use events::MessageEventSource;
 use uuid::Uuid;
 
@@ -116,6 +118,7 @@ pub enum PersonalMessageDestination<'a> {
 pub struct ValidatedPersonalMessage<'a> {
     pub local_actor_id: Option<Uuid>,
     pub local_actor_fence: Option<ActorGenerationFence>,
+    pub policy: Option<DirectMessagePolicy<'a>>,
     pub identity: Option<MessageIdentity<'a>>,
     pub archives: &'a [ArchiveCandidate<'a>],
     pub destination: PersonalMessageDestination<'a>,
@@ -337,6 +340,7 @@ mod tests {
         let command = ValidatedPersonalMessage {
             local_actor_id: Some(Uuid::nil()),
             local_actor_fence: None,
+            policy: None,
             identity: None,
             archives: &[],
             destination: PersonalMessageDestination::Local(local),

@@ -112,9 +112,8 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
         return Ok(inbound_message_error(root, "modify", "bad-request"));
     }
     let recipient_policy::RecipientPolicy {
-        privacy_candidates: _privacy_candidates,
+        privacy_selections,
         remote_route_exists,
-        default_privacy_denied,
     } = match recipient_policy::select(
         state,
         root,
@@ -175,6 +174,13 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
     let mut durable_c2s_delivery = None;
     let mut live_claim_id = None;
     let direct_delivery_mode = northstar_message_core::direct_delivery_mode(root);
+    let commit_policy = northstar_message_core::DirectMessagePolicy {
+        from: &canonical_from,
+        to,
+        sender: None,
+        recipient_sessions: &privacy_selections,
+        remote_recipient_route: remote_route_exists,
+    };
     if let ControlFlow::Break(action) = durable_commit::commit(
         state,
         root,
@@ -193,7 +199,7 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
         &canonical_from,
         encrypted,
         degraded_spool_eligible,
-        default_privacy_denied,
+        commit_policy,
         &mut history_committed,
         &mut durable_c2s_delivery,
         &mut live_claim_id,
@@ -281,6 +287,16 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
             claim_id: live_claim_id,
         })
     });
+    let prepared_history = if durable_c2s_delivery.is_none() && !personal_retraction {
+        Some(
+            state
+                .message_service()
+                .prepare_archive_history(candidate.as_slice())
+                .await,
+        )
+    } else {
+        None
+    };
     let outcome = DirectMessageRouter::route_federated(
         &FederatedDirectRoute(state),
         DirectRouteRequest {
@@ -333,7 +349,7 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
         &delivered_key,
         message_type,
         durable_c2s_delivery,
-        &candidate,
+        prepared_history,
         from,
         authenticated_domain,
         &recipient_by,
@@ -344,6 +360,7 @@ pub async fn route_inbound_message<H: FederatedMessageHost>(
         persistence_allowed,
         durable_content_allowed,
         history_committed,
+        commit_policy,
         &archive,
         encrypted,
     )

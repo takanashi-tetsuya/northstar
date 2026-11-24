@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
+use sqlx::{postgres::PgRow, PgConnection, PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 pub use northstar_xep_0016::{
@@ -83,34 +83,89 @@ async fn privacy_list_on(
     .bind(name)
     .fetch_all(&mut *connection)
     .await?;
-    let mut items = Vec::with_capacity(rows.len());
-    for row in rows {
-        let action: String = row.get("action");
-        let match_type: Option<String> = row.get("match_type");
-        items.push(PrivacyItem {
-            order: u32::try_from(row.get::<i64, _>("item_order"))
-                .map_err(|_| anyhow::anyhow!("stored privacy-list order exceeds xs:unsignedInt"))?,
-            action: if action == "allow" {
-                PrivacyAction::Allow
-            } else {
-                PrivacyAction::Deny
-            },
-            match_type: match_type.as_deref().map(|value| match value {
-                "jid" => PrivacyMatchType::Jid,
-                "group" => PrivacyMatchType::Group,
-                _ => PrivacyMatchType::Subscription,
-            }),
-            match_value: row.get("match_value"),
-            message: row.get("filter_message"),
-            iq: row.get("filter_iq"),
-            presence_in: row.get("filter_presence_in"),
-            presence_out: row.get("filter_presence_out"),
-        });
-    }
+    let items = rows.iter().map(privacy_item).collect::<Result<Vec<_>>>()?;
     Ok(Some(PrivacyList {
         name: name.to_owned(),
         items,
     }))
+}
+
+fn privacy_item(row: &PgRow) -> Result<PrivacyItem> {
+    let action: String = row.get("action");
+    let match_type: Option<String> = row.get("match_type");
+    Ok(PrivacyItem {
+        order: u32::try_from(row.get::<i64, _>("item_order"))
+            .map_err(|_| anyhow::anyhow!("stored privacy-list order exceeds xs:unsignedInt"))?,
+        action: if action == "allow" {
+            PrivacyAction::Allow
+        } else {
+            PrivacyAction::Deny
+        },
+        match_type: match_type.as_deref().map(|value| match value {
+            "jid" => PrivacyMatchType::Jid,
+            "group" => PrivacyMatchType::Group,
+            _ => PrivacyMatchType::Subscription,
+        }),
+        match_value: row.get("match_value"),
+        message: row.get("filter_message"),
+        iq: row.get("filter_iq"),
+        presence_in: row.get("filter_presence_in"),
+        presence_out: row.get("filter_presence_out"),
+    })
+}
+
+/// Projection for a policy snapshot whose `requested` CTE supplies owner,
+/// connection, expected-active, and peer-bare columns in request order.
+pub const PRIVACY_DECISION_FACTS: &str = "SELECT requested.position AS privacy_position,
+           (requested.expects_active AND active.list_name IS NULL)
+           OR (COALESCE(active.list_name, defaults.list_name) IS NOT NULL AND list.name IS NULL)
+           AS missing_selection,
+           list.name AS selected_name, roster.subscription, roster.groups,
+           item.item_order, item.action, item.match_type, item.match_value,
+           item.filter_message, item.filter_iq, item.filter_presence_in, item.filter_presence_out
+      FROM requested
+      LEFT JOIN privacy_active_sessions active
+        ON active.owner_id=requested.owner_id AND active.connection_id=requested.connection_id
+       AND active.expires_at>statement_timestamp()
+      LEFT JOIN privacy_default_lists defaults ON defaults.owner_id=requested.owner_id
+      LEFT JOIN privacy_lists list ON list.owner_id=requested.owner_id
+       AND list.name=COALESCE(active.list_name, defaults.list_name)
+      LEFT JOIN privacy_list_items item ON item.owner_id=list.owner_id AND item.list_name=list.name
+      LEFT JOIN roster_items roster ON roster.owner_id=requested.owner_id
+       AND roster.contact_jid=requested.peer_bare";
+
+/// Decode one exact policy request's rows in item order.
+pub fn privacy_denies_from_facts(
+    rows: &[PgRow],
+    candidate: &str,
+    kind: PrivacyStanzaKind,
+) -> Result<bool> {
+    let first = rows
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("missing privacy decision facts"))?;
+    if first.try_get::<bool, _>("missing_selection")? {
+        return Ok(true);
+    }
+    let Some(name) = first.try_get::<Option<String>, _>("selected_name")? else {
+        return Ok(false);
+    };
+    let items = if first.try_get::<Option<i64>, _>("item_order")?.is_some() {
+        rows.iter().map(privacy_item).collect::<Result<Vec<_>>>()?
+    } else {
+        Vec::new()
+    };
+    let subscription: Option<String> = first.try_get("subscription")?;
+    let groups = first
+        .try_get::<Option<serde_json::Value>, _>("groups")?
+        .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+        .unwrap_or_default();
+    Ok(privacy_list_denies(
+        &PrivacyList { name, items },
+        candidate,
+        subscription.as_deref(),
+        &groups,
+        kind,
+    ))
 }
 
 pub async fn replace_privacy_list(
@@ -376,6 +431,44 @@ pub async fn refresh_active_privacy_session(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Renew existing, unexpired selections for connections that own live leases.
+pub async fn renew_active_privacy_selection(pool: &PgPool, connection_ids: &[Uuid]) -> Result<()> {
+    sqlx::query(
+        "UPDATE privacy_active_sessions
+            SET updated_at=statement_timestamp(),expires_at=statement_timestamp()+INTERVAL '24 hours'
+          WHERE connection_id=ANY($1) AND expires_at>statement_timestamp()",
+    )
+    .bind(connection_ids)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Evaluate a connected resource without extending or repairing its selection lease.
+pub async fn session_privacy_denies<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    owner_id: Uuid,
+    connection_id: Option<Uuid>,
+    expects_active: bool,
+    candidate: &str,
+    kind: PrivacyStanzaKind,
+) -> Result<bool> {
+    let candidate = northstar_xmpp_types::jid::CanonicalJid::parse(candidate)?;
+    let statement = format!(
+        "WITH requested(owner_id, connection_id, expects_active, peer_bare, position) AS
+             (VALUES ($1::uuid, $2::uuid, $3::bool, $4::text, 1))
+         {PRIVACY_DECISION_FACTS} ORDER BY item_order"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(statement))
+        .bind(owner_id)
+        .bind(connection_id)
+        .bind(expects_active)
+        .bind(candidate.bare())
+        .fetch_all(executor)
+        .await?;
+    privacy_denies_from_facts(&rows, &candidate.to_string(), kind)
 }
 
 async fn privacy_list_exists_in_tx(

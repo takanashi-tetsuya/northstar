@@ -22,7 +22,9 @@ pub mod mix_source_retractions;
 pub mod personal_display;
 
 pub use self::account_fence::{authorize_mam_account, mam_account_is_current};
-pub use self::admission_facts::archive_admission_facts_in_transaction;
+pub use self::admission_facts::{
+    archive_admission_facts_in_transaction, decide_archive_admission, ARCHIVE_ADMISSION_FACTS,
+};
 pub use self::mam_query::*;
 
 pub use northstar_archive_core::{

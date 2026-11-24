@@ -5,7 +5,7 @@ use super::{
 use crate::ports::FederatedMessageHost;
 use anyhow::Result;
 use northstar_message_application::messaging::{
-    ArchiveCandidate, LocalRecipient, OfflineAdmissionOutcome, OfflineMessageAdmission,
+    LocalRecipient, OfflineAdmissionOutcome, OfflineMessageAdmission, PreparedMessageHistory,
 };
 use northstar_message_core::{DirectDeliveryMode, DirectPostCommitMode};
 use northstar_xep_0280::should_copy as should_carbon;
@@ -23,7 +23,7 @@ pub(super) async fn finish<H: FederatedMessageHost>(
     delivered_key: &Option<String>,
     message_type: &str,
     durable_c2s_delivery: Option<Uuid>,
-    candidate: &Option<ArchiveCandidate<'_>>,
+    prepared_history: Option<Result<PreparedMessageHistory<'_>>>,
     from: &str,
     authenticated_domain: &str,
     recipient_by: &str,
@@ -34,6 +34,7 @@ pub(super) async fn finish<H: FederatedMessageHost>(
     persistence_allowed: bool,
     durable_content_allowed: bool,
     history_committed: bool,
+    policy: northstar_message_core::DirectMessagePolicy<'_>,
     archive: &str,
     encrypted: bool,
 ) -> Result<Option<String>> {
@@ -43,7 +44,15 @@ pub(super) async fn finish<H: FederatedMessageHost>(
 
     if delivered {
         if durable_c2s_delivery.is_none() {
-            finalize_accepted_inbound_history(state, root, candidate.as_ref(), "s2s-online").await;
+            finalize_accepted_inbound_history(
+                state,
+                root,
+                prepared_history,
+                recipient.id,
+                stable_id,
+                "s2s-online",
+            )
+            .await;
         }
         let remote_muc_private_message =
             is_remote_muc_private_message(root, from, authenticated_domain);
@@ -109,8 +118,21 @@ pub(super) async fn finish<H: FederatedMessageHost>(
                 // No durable history admission preceded this fallback.
                 mam_backed: false,
                 identity: None,
+                actor_fence: None,
+                policy,
             })
-            .await?;
+            .await;
+        let offline_outcome = match offline_outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                if let Some(denial) =
+                    error.downcast_ref::<northstar_message_core::DirectPolicyDenial>()
+                {
+                    return Ok(super::durable_commit::policy_error(root, *denial));
+                }
+                return Err(error);
+            }
+        };
         if offline_outcome == OfflineAdmissionOutcome::RecipientUnavailable {
             return Ok(None);
         }
@@ -126,7 +148,15 @@ pub(super) async fn finish<H: FederatedMessageHost>(
             }
             return Ok(inbound_message_error(root, "wait", "resource-constraint"));
         }
-        finalize_accepted_inbound_history(state, root, candidate.as_ref(), "s2s-offline").await;
+        finalize_accepted_inbound_history(
+            state,
+            root,
+            prepared_history,
+            recipient.id,
+            stable_id,
+            "s2s-offline",
+        )
+        .await;
         if state.message_service().direct_mode() == DirectPostCommitMode::Live {
             if let Err(error) = state.dispatch_push_notification(recipient.id).await {
                 state.record_s2s_post_accept_failure();
@@ -144,7 +174,9 @@ pub(super) async fn finish<H: FederatedMessageHost>(
 async fn finalize_accepted_inbound_history<H: FederatedMessageHost>(
     state: &H,
     root: roxmltree::Node<'_, '_>,
-    candidate: Option<&ArchiveCandidate<'_>>,
+    prepared: Option<Result<PreparedMessageHistory<'_>>>,
+    recipient_id: Uuid,
+    stable_id: Uuid,
     route: &'static str,
 ) {
     debug_assert!(
@@ -154,15 +186,18 @@ async fn finalize_accepted_inbound_history<H: FederatedMessageHost>(
             .is_none(),
         "personal retraction reached post-delivery history finalization"
     );
-    let Some(candidate) = candidate else {
+    let Some(prepared) = prepared else {
         return;
     };
-    let stable_id = candidate.projection.id;
-    let recipient_id = candidate.projection.owner_id;
-    let history_result = state
-        .message_service()
-        .admit_history(std::slice::from_ref(candidate))
-        .await;
+    let history_result = match prepared {
+        Ok(history) => {
+            state
+                .message_service()
+                .write_prepared_archive_history(history, None)
+                .await
+        }
+        Err(error) => Err(error),
+    };
     if let Err(error) = history_result {
         state.record_s2s_post_accept_failure();
         tracing::warn!(?error, %stable_id, %route, %recipient_id, "accepted inbound message history transaction failed");

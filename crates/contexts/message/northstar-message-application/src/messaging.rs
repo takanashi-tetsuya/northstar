@@ -528,6 +528,8 @@ pub struct OfflineMessageAdmission<'a> {
     pub encrypted: bool,
     pub mam_backed: bool,
     pub identity: Option<&'a MessageDedupeIdentity>,
+    pub actor_fence: Option<northstar_message_core::ActorGenerationFence>,
+    pub policy: northstar_message_core::DirectMessagePolicy<'a>,
 }
 
 /// One application-level members-only direct invitation admission. The
@@ -548,6 +550,8 @@ pub struct LocalMucInviteAdmission<'a> {
 }
 
 pub mod invitation_admission;
+mod prepared_history;
+pub use prepared_history::{MessageHistoryPreparation, PreparedMessageHistory};
 
 /// Each admission commits all requested history, delivery and affiliation
 /// changes atomically. An error after requesting COMMIT can leave its outcome
@@ -556,6 +560,7 @@ pub trait MessageRepository:
     PersonalMessageCommitRepository<Error = anyhow::Error>
     + DirectCommitRepository<Error = anyhow::Error>
     + invitation_admission::DirectInvitationRepository
+    + MessageHistoryPreparation
     + Clone
     + Send
     + Sync
@@ -572,6 +577,7 @@ pub trait MessageRepository:
         &self,
         owner_id: Uuid,
         owner_bare_jid: &str,
+        connection_id: Option<Uuid>,
         active_privacy_list: Option<&str>,
         target: &str,
     ) -> impl Future<Output = Result<OutboundPolicyDecision>> + Send;
@@ -694,11 +700,18 @@ impl<R: MessageRepository> MessageService<R> {
         &self,
         owner_id: Uuid,
         owner_bare_jid: &str,
+        connection_id: Option<Uuid>,
         active_privacy_list: Option<&str>,
         target: &str,
     ) -> Result<OutboundPolicyDecision> {
         self.repository
-            .authorize_outbound_message(owner_id, owner_bare_jid, active_privacy_list, target)
+            .authorize_outbound_message(
+                owner_id,
+                owner_bare_jid,
+                connection_id,
+                active_privacy_list,
+                target,
+            )
             .await
     }
 

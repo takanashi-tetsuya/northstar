@@ -392,6 +392,12 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
             break;
         }
         if exclude_jids.contains(&jid)
+            || (is_message_stanza
+                && matches!(
+                    resolved_message_delivery,
+                    Some(ResolvedNodeMessageDelivery::Durable(durable))
+                        if durable.recipient_id != session.user_id
+                ))
             || !delivery_user_identity_matches(
                 expected_user_id,
                 expected_auth_generation,
@@ -510,5 +516,62 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl<A: ClusterAdapters> ClusterListenerDispatch<A> {
+    pub(crate) async fn test_direct_message_delivery(
+        &self,
+        admission: &ClusterListenerAdmission,
+        message_policy: &ClusterListenerMessagePolicy<A>,
+        mix_caps: &ClusterListenerMixCaps,
+        json: &serde_json::Value,
+    ) -> (usize, Option<String>, Option<NodeDeliveryContract>) {
+        let ListenerStep::Next(ListenerCommand {
+            target, mut turn, ..
+        }) = super::envelope::prepare_listener_command(
+            admission,
+            json,
+            DELIVERY_CONTRACT_PROTOCOL_VERSION,
+        )
+        else {
+            panic!("test command must be accepted for dispatch");
+        };
+        let stanza = json["stanza"].as_str().unwrap();
+        let parsed_stanza = Some(roxmltree::Document::parse(stanza).unwrap());
+        let ListenerStep::Next((delivery, _)) = resolve_stanza_delivery(
+            message_policy,
+            json,
+            target,
+            stanza,
+            &parsed_stanza,
+            (false, false),
+            &mut turn,
+        )
+        .await
+        else {
+            panic!("test message must be resolved for dispatch");
+        };
+        let ListenerStep::Next(options) =
+            validate_direct_delivery(json, target, stanza, &parsed_stanza, None, &delivery)
+        else {
+            panic!("test command must be valid for direct fan-out");
+        };
+        fan_out_direct_delivery(
+            self,
+            message_policy,
+            mix_caps,
+            target,
+            &delivery,
+            &options,
+            &mut turn,
+        )
+        .await;
+        (
+            turn.delivered,
+            turn.accepted_full_jid,
+            turn.acknowledged_delivery,
+        )
     }
 }

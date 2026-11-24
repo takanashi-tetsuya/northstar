@@ -2,6 +2,9 @@
 #[derive(Clone)]
 pub(super) struct UnusedPorts;
 
+#[derive(Clone)]
+pub(super) struct MessagePorts(pub(super) std::sync::Arc<std::sync::Mutex<Vec<uuid::Uuid>>>);
+
 mod administration;
 mod direct_invitation_stub;
 mod hosted_disco;
@@ -836,7 +839,7 @@ mod presence {
 }
 
 mod message {
-    use super::UnusedPorts;
+    use super::MessagePorts;
     use anyhow::Result;
     use northstar_message_application::messaging::*;
     use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility, MessageCommit};
@@ -844,7 +847,7 @@ mod message {
     use northstar_xep_0016::PrivacyStanzaKind;
     use uuid::Uuid;
 
-    impl northstar_message_application::PersonalMessageCommitRepository for UnusedPorts {
+    impl northstar_message_application::PersonalMessageCommitRepository for MessagePorts {
         type Error = anyhow::Error;
 
         async fn commit<'a>(
@@ -855,7 +858,7 @@ mod message {
         }
     }
 
-    impl northstar_message_application::direct_commit::DirectCommitRepository for UnusedPorts {
+    impl northstar_message_application::direct_commit::DirectCommitRepository for MessagePorts {
         type Error = anyhow::Error;
 
         async fn commit_direct<'a>(
@@ -868,7 +871,7 @@ mod message {
         }
     }
 
-    impl MessageRepository for UnusedPorts {
+    impl MessageRepository for MessagePorts {
         fn direct_mode(&self) -> DirectPostCommitMode {
             panic!("unused MessageRepository::direct_mode port");
         }
@@ -915,13 +918,14 @@ mod message {
 
         async fn privacy_allows_session(
             &self,
-            _user_id: Uuid,
+            user_id: Uuid,
             _connection_id: Uuid,
             _active_privacy_list: Option<&str>,
             _peer: &str,
             _kind: PrivacyStanzaKind,
         ) -> Result<bool> {
-            panic!("unused MessageRepository::privacy_allows_session port");
+            self.0.lock().unwrap().push(user_id);
+            Ok(true)
         }
 
         async fn admit_remote_muc_invite(

@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 mod unused_ports;
 use authority::AuthorityPorts;
-use unused_ports::UnusedPorts;
+use unused_ports::{MessagePorts, UnusedPorts};
 
 struct Adapters;
 
@@ -27,8 +27,8 @@ impl ClusterAdapters for Adapters {
     type ReplayMaintenance = AuthorityPorts;
     type RouteMaintenance = AuthorityPorts;
     type SessionAuthoritySweep = AuthorityPorts;
-    type NodeMessageProjection = northstar_session_postgres::node_message_projection_repository::PostgresNodeMessageProjectionRepository;
-    type SessionTermination = northstar_session_postgres::session_termination_authority_repository::PostgresSessionTerminationAuthorityRepository;
+    type NodeMessageProjection = durable_recipient_identity::Projection;
+    type SessionTermination = UnusedPorts;
     type Replay = northstar_session_postgres::replay_repository::PostgresReplayRepository;
     type RecoveryReplay =
         northstar_session_postgres::replay_repository::PostgresRecoveryReplayStore;
@@ -43,7 +43,7 @@ impl ClusterAdapters for Adapters {
     type MucReceiptClaim = Ports;
     type Mix = UnusedPorts;
     type SmTeardownMuc = UnusedPorts;
-    type Message = UnusedPorts;
+    type Message = MessagePorts;
     type DirectSpoolWake = UnusedPorts;
     type Presence = UnusedPorts;
     type Federation = UnusedPorts;
@@ -1034,6 +1034,8 @@ async fn muc_retry_counts_only_after_durable_turn() {
 }
 
 mod authority;
+#[path = "durable_recipient_identity.rs"]
+mod durable_recipient_identity;
 mod roster;
 
 #[cfg(test)]

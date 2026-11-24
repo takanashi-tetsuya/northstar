@@ -72,7 +72,7 @@ impl<H: SessionHost + ExtDiscoHost> ExtDiscoHandlers for ProtocolSession<H> {
         iq: Node<'_, '_>,
         credentials: Node<'_, '_>,
     ) -> Result<Action> {
-        extdisco::external_credentials(self, id, iq, credentials)
+        extdisco::external_credentials(self, id, iq, credentials, self.host().message_events())
     }
 }
 

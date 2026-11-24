@@ -1,16 +1,20 @@
 //! XEP-0215 external service discovery requests.
 
-use crate::ports::MessageOutcome;
+use crate::ports::{MessageHost, MessageOutcome};
 use anyhow::Result;
-use northstar_message_application::extdisco::{CredentialIssueError, ExtDiscoService};
-use northstar_xep_0215::{CredentialedService, ExtDiscoRequest, SecretText, ServiceCredentials};
+use northstar_message_application::extdisco::{
+    ExtDiscoCommand, ExtDiscoIssuance, ExtDiscoQuery, ExtDiscoRejection, ExtDiscoRequestScope,
+    ExtDiscoService, ExtDiscoServices, IssuanceTime,
+};
+use northstar_message_core::MessageEventSource;
+use northstar_xep_0215::ExtDiscoRequest;
 use northstar_xml_builder::stanza::{iq_error_from, iq_result_from};
 use roxmltree::Node;
 use std::net::IpAddr;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 /// What the node provides to the external service discovery handlers. The composition root implements it.
-pub trait ExtDiscoHost: Send + Sync {
+pub trait ExtDiscoHost: MessageHost {
     /// The external service discovery service.
     fn extdisco_service(&self) -> &ExtDiscoService;
 }
@@ -31,29 +35,25 @@ pub fn external_services<S: ExtDiscoSession>(
     iq: Node<'_, '_>,
     _services: Node<'_, '_>,
 ) -> Result<S::Action> {
-    if !extdisco_request_authorized(session, iq) {
-        return Ok(extdisco_error(session, id, "not-authorized"));
-    }
-    if !session
-        .extdisco_service()
-        .target_allowed(iq.attribute("to"))
-    {
-        return Ok(extdisco_error(session, id, "service-unavailable"));
-    }
     let request = match northstar_xep_0215::parse_iq(iq) {
-        Ok(ExtDiscoRequest::Services(request)) => request,
-        _ => return Ok(extdisco_error(session, id, "bad-request")),
+        Ok(ExtDiscoRequest::Services(request)) => Some(request),
+        _ => None,
     };
-    let configured = session.extdisco_service().public_services()?;
-    let selected = northstar_xep_0215::select_services(&request, &configured)
-        .into_iter()
-        .cloned()
-        .collect::<Vec<_>>();
-    let payload =
-        northstar_xep_0215::build_services_result(request.service_type.as_ref(), &selected)?;
+    let service = session.extdisco_service();
+    let result = service.list_services(ExtDiscoQuery {
+        scope: request_scope(session, iq),
+        request,
+    })?;
+    let payload = match result {
+        ExtDiscoServices::Listed {
+            service_type,
+            services,
+        } => northstar_xep_0215::build_services_result(service_type.as_ref(), &services)?,
+        ExtDiscoServices::Rejected(rejection) => return Ok(extdisco_error(session, id, rejection)),
+    };
     Ok(S::Action::send(iq_result_from(
         id,
-        session.extdisco_service().domain(),
+        service.domain(),
         &payload,
     )))
 }
@@ -63,97 +63,66 @@ pub fn external_credentials<S: ExtDiscoSession>(
     id: &str,
     iq: Node<'_, '_>,
     _credentials: Node<'_, '_>,
+    message_events: &dyn MessageEventSource,
 ) -> Result<S::Action> {
-    if !extdisco_request_authorized(session, iq) {
-        return Ok(extdisco_error(session, id, "not-authorized"));
-    }
-    if !session
-        .extdisco_service()
-        .target_allowed(iq.attribute("to"))
-    {
-        return Ok(extdisco_error(session, id, "service-unavailable"));
-    }
     let request = match northstar_xep_0215::parse_iq(iq) {
-        Ok(ExtDiscoRequest::Credentials(request)) => request,
-        _ => return Ok(extdisco_error(session, id, "bad-request")),
+        Ok(ExtDiscoRequest::Credentials(request)) => Some(request),
+        _ => None,
     };
-    if !session.extdisco_service().turn_is_restricted() {
-        return Ok(extdisco_error(session, id, "item-not-found"));
-    }
-    let configured = session.extdisco_service().public_services()?;
-    let matches = northstar_xep_0215::plan_credential_matches(&request, &configured);
-    if matches.is_empty() {
-        return Ok(extdisco_error(session, id, "item-not-found"));
-    }
-
-    // Authorization and selector matching deliberately happen before the
-    // stateful issuance/rate-limit capability is invoked.
-    let bare_jid = northstar_xmpp_types::jid::CanonicalJid::parse(
-        session
-            .full_jid()
-            .expect("authorization requires a bound JID"),
-    )?
-    .bare();
-    let issued = match session.extdisco_service().issue_turn_credentials(
-        &bare_jid,
-        session.peer_ip(),
-        Instant::now(),
-        SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
-    ) {
-        Ok(credentials) => credentials,
-        Err(CredentialIssueError::NotConfigured) => {
-            return Ok(extdisco_error(session, id, "item-not-found"));
-        }
-        Err(CredentialIssueError::RateLimited) => {
-            return Ok(extdisco_error(session, id, "resource-constraint"));
-        }
-        Err(CredentialIssueError::TimestampOverflow) => {
-            return Ok(extdisco_error(session, id, "internal-server-error"));
-        }
+    let command = ExtDiscoCommand {
+        scope: request_scope(session, iq),
+        request,
+        peer_ip: session.peer_ip(),
     };
-
-    let mut services = Vec::with_capacity(matches.len());
-    for identity in matches {
-        let Some(service) = configured
-            .iter()
-            .find(|service| service.identity == identity)
-            .cloned()
-        else {
-            continue;
-        };
-        let credentials = ServiceCredentials::new(
-            issued.username.clone(),
-            SecretText::new(issued.password.as_str())?,
-            issued.expires.clone(),
-        )?;
-        services.push(CredentialedService {
-            service,
-            credentials,
-        });
-    }
-    if services.is_empty() {
-        return Ok(extdisco_error(session, id, "item-not-found"));
-    }
-    let payload = northstar_xep_0215::build_credentials_result(&services)?;
+    let time = IssuanceTime {
+        monotonic: Instant::now(),
+        unix_seconds: message_events.now().timestamp(),
+    };
+    let service = session.extdisco_service();
+    let payload = match service.issue_credentials(command, time)? {
+        ExtDiscoIssuance::Issued(services) => {
+            northstar_xep_0215::build_credentials_result(&services)?
+        }
+        ExtDiscoIssuance::Rejected(rejection) => return Ok(extdisco_error(session, id, rejection)),
+    };
     Ok(S::Action::send(iq_result_from(
         id,
-        session.extdisco_service().domain(),
+        service.domain(),
         &payload,
     )))
 }
 
-fn extdisco_request_authorized<S: ExtDiscoSession>(session: &S, iq: Node<'_, '_>) -> bool {
-    session.extdisco_service().request_authorized(
-        session.authenticated_username(),
-        session.full_jid(),
-        iq.attribute("type"),
-    )
+fn request_scope<'a, S: ExtDiscoSession>(
+    session: &'a S,
+    iq: Node<'a, '_>,
+) -> ExtDiscoRequestScope<'a> {
+    ExtDiscoRequestScope {
+        username: session.authenticated_username(),
+        full_jid: session.full_jid(),
+        iq_type: iq.attribute("type"),
+        target: iq.attribute("to"),
+    }
 }
 
-fn extdisco_error<S: ExtDiscoSession>(session: &S, id: &str, condition: &str) -> S::Action {
+fn extdisco_error<S: ExtDiscoSession>(
+    session: &S,
+    id: &str,
+    rejection: ExtDiscoRejection,
+) -> S::Action {
+    let condition = match rejection {
+        ExtDiscoRejection::NotAuthorized => "not-authorized",
+        ExtDiscoRejection::OutOfScope => "service-unavailable",
+        ExtDiscoRejection::MalformedRequest => "bad-request",
+        ExtDiscoRejection::Unavailable => "item-not-found",
+        ExtDiscoRejection::RateLimited => "resource-constraint",
+        ExtDiscoRejection::TimestampOverflow => "internal-server-error",
+    };
     S::Action::send(iq_error_from(
         id,
         session.extdisco_service().domain(),
         condition,
     ))
 }
+
+#[cfg(test)]
+mod wire_tests;

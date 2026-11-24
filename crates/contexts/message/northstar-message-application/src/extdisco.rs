@@ -2,7 +2,12 @@ use anyhow::Result as AnyhowResult;
 use base64::Engine;
 use dashmap::DashMap;
 use hmac::{Hmac, Mac};
-use northstar_xep_0215::{PublicService, ServiceHost, ServiceIdentity, ServiceToken};
+use northstar_xep_0215::{
+    plan_credential_matches, select_services, CredentialedService, CredentialsRequest,
+    PublicService, SecretText, ServiceCredentials, ServiceHost, ServiceIdentity, ServiceToken,
+    ServicesRequest,
+};
+use northstar_xmpp_types::jid::CanonicalJid;
 use sha1::Sha1;
 use sha2::Sha256;
 use std::num::NonZeroU16;
@@ -22,15 +27,63 @@ const RATE_WINDOW_SWEEP_INTERVAL: u64 = 256;
 const MAX_ACTIVE_RATE_KEYS: usize = 65_536;
 
 #[derive(Debug, Eq, PartialEq)]
-pub struct TurnCredentials {
-    pub username: String,
-    pub password: Zeroizing<String>,
-    pub expires: String,
+struct TurnCredentials {
+    username: String,
+    password: Zeroizing<String>,
+    expires: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CredentialIssueError {
+enum CredentialIssueError {
     NotConfigured,
+    RateLimited,
+    TimestampOverflow,
+}
+
+pub struct ExtDiscoRequestScope<'a> {
+    pub username: Option<&'a str>,
+    pub full_jid: Option<&'a str>,
+    pub iq_type: Option<&'a str>,
+    pub target: Option<&'a str>,
+}
+
+pub struct ExtDiscoQuery<'a> {
+    pub scope: ExtDiscoRequestScope<'a>,
+    /// `None` represents a malformed or unexpected payload.
+    pub request: Option<ServicesRequest>,
+}
+
+pub struct ExtDiscoCommand<'a> {
+    pub scope: ExtDiscoRequestScope<'a>,
+    /// `None` represents a malformed or unexpected payload.
+    pub request: Option<CredentialsRequest>,
+    pub peer_ip: IpAddr,
+}
+
+pub struct IssuanceTime {
+    pub unix_seconds: i64,
+    pub monotonic: Instant,
+}
+
+pub enum ExtDiscoServices {
+    Listed {
+        service_type: Option<ServiceToken>,
+        services: Vec<PublicService>,
+    },
+    Rejected(ExtDiscoRejection),
+}
+
+pub enum ExtDiscoIssuance {
+    Issued(Vec<CredentialedService>),
+    Rejected(ExtDiscoRejection),
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub enum ExtDiscoRejection {
+    NotAuthorized,
+    OutOfScope,
+    MalformedRequest,
+    Unavailable,
     RateLimited,
     TimestampOverflow,
 }
@@ -110,9 +163,110 @@ impl ExtDiscoService {
         &self.inner.domain
     }
 
-    pub fn target_allowed(&self, target: Option<&str>) -> bool {
+    pub fn list_services(&self, query: ExtDiscoQuery<'_>) -> AnyhowResult<ExtDiscoServices> {
+        if let Some(rejection) = self.request_rejection(&query.scope) {
+            return Ok(ExtDiscoServices::Rejected(rejection));
+        }
+        let Some(request) = query.request else {
+            return Ok(ExtDiscoServices::Rejected(
+                ExtDiscoRejection::MalformedRequest,
+            ));
+        };
+        let configured = self.public_services()?;
+        let services = select_services(&request, &configured)
+            .into_iter()
+            .cloned()
+            .collect();
+        Ok(ExtDiscoServices::Listed {
+            service_type: request.service_type,
+            services,
+        })
+    }
+
+    pub fn issue_credentials(
+        &self,
+        command: ExtDiscoCommand<'_>,
+        time: IssuanceTime,
+    ) -> AnyhowResult<ExtDiscoIssuance> {
+        if let Some(rejection) = self.request_rejection(&command.scope) {
+            return Ok(ExtDiscoIssuance::Rejected(rejection));
+        }
+        let Some(request) = command.request else {
+            return Ok(ExtDiscoIssuance::Rejected(
+                ExtDiscoRejection::MalformedRequest,
+            ));
+        };
+        if !self.turn_is_restricted() {
+            return Ok(ExtDiscoIssuance::Rejected(ExtDiscoRejection::Unavailable));
+        }
+        let configured = self.public_services()?;
+        let matches = plan_credential_matches(&request, &configured);
+        if matches.is_empty() {
+            return Ok(ExtDiscoIssuance::Rejected(ExtDiscoRejection::Unavailable));
+        }
+
+        let bare_jid = CanonicalJid::parse(
+            command
+                .scope
+                .full_jid
+                .expect("authorization requires a bound JID"),
+        )?
+        .bare();
+        let issued = match self.issue_turn_credentials(
+            &bare_jid,
+            command.peer_ip,
+            time.monotonic,
+            u64::try_from(time.unix_seconds)?,
+        ) {
+            Ok(credentials) => credentials,
+            Err(error) => {
+                let rejection = match error {
+                    CredentialIssueError::NotConfigured => ExtDiscoRejection::Unavailable,
+                    CredentialIssueError::RateLimited => ExtDiscoRejection::RateLimited,
+                    CredentialIssueError::TimestampOverflow => ExtDiscoRejection::TimestampOverflow,
+                };
+                return Ok(ExtDiscoIssuance::Rejected(rejection));
+            }
+        };
+
+        let mut services = Vec::with_capacity(matches.len());
+        for identity in matches {
+            let Some(service) = configured
+                .iter()
+                .find(|service| service.identity == identity)
+                .cloned()
+            else {
+                continue;
+            };
+            let credentials = ServiceCredentials::new(
+                issued.username.clone(),
+                SecretText::new(issued.password.as_str())?,
+                issued.expires.clone(),
+            )?;
+            services.push(CredentialedService {
+                service,
+                credentials,
+            });
+        }
+        if services.is_empty() {
+            return Ok(ExtDiscoIssuance::Rejected(ExtDiscoRejection::Unavailable));
+        }
+        Ok(ExtDiscoIssuance::Issued(services))
+    }
+
+    fn request_rejection(&self, scope: &ExtDiscoRequestScope<'_>) -> Option<ExtDiscoRejection> {
+        if !self.request_authorized(scope.username, scope.full_jid, scope.iq_type) {
+            return Some(ExtDiscoRejection::NotAuthorized);
+        }
+        if !self.target_allowed(scope.target) {
+            return Some(ExtDiscoRejection::OutOfScope);
+        }
+        None
+    }
+
+    fn target_allowed(&self, target: Option<&str>) -> bool {
         target.is_none_or(|target| {
-            northstar_xmpp_types::jid::CanonicalJid::parse_bare(target).is_ok_and(|jid| {
+            CanonicalJid::parse_bare(target).is_ok_and(|jid| {
                 jid.localpart().is_none()
                     && jid.resourcepart().is_none()
                     && jid.domainpart() == self.inner.domain
@@ -120,7 +274,7 @@ impl ExtDiscoService {
         })
     }
 
-    pub fn request_authorized(
+    fn request_authorized(
         &self,
         username: Option<&str>,
         full_jid: Option<&str>,
@@ -129,7 +283,7 @@ impl ExtDiscoService {
         let (Some(username), Some(full_jid)) = (username, full_jid) else {
             return false;
         };
-        northstar_xmpp_types::jid::CanonicalJid::parse(full_jid).is_ok_and(|jid| {
+        CanonicalJid::parse(full_jid).is_ok_and(|jid| {
             jid.resourcepart().is_some()
                 && jid.localpart() == Some(username)
                 && jid.domainpart() == self.inner.domain
@@ -137,7 +291,7 @@ impl ExtDiscoService {
         })
     }
 
-    pub fn public_services(&self) -> AnyhowResult<Vec<PublicService>> {
+    fn public_services(&self) -> AnyhowResult<Vec<PublicService>> {
         let mut services = Vec::with_capacity(3);
         if let Some((host, port)) = &self.inner.stun_service {
             services.push(public_service(
@@ -165,11 +319,11 @@ impl ExtDiscoService {
         Ok(services)
     }
 
-    pub fn turn_is_restricted(&self) -> bool {
+    fn turn_is_restricted(&self) -> bool {
         self.inner.turn_shared_secret.is_some()
     }
 
-    pub fn issue_turn_credentials(
+    fn issue_turn_credentials(
         &self,
         bare_jid: &str,
         peer_ip: IpAddr,
@@ -467,3 +621,6 @@ mod tests {
         assert_eq!(service.inner.rate_windows.len(), KEY_CAPACITY);
     }
 }
+
+#[cfg(test)]
+mod operation_tests;

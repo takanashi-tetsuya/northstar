@@ -1,6 +1,7 @@
 //! Persists service messages, runtime policy projections, and scheduled service controls.
 
 use super::*;
+use northstar_roster_core::RosterActor as ServiceMessageRoute;
 
 pub async fn set_admin_service_message_command(
     pool: &PgPool,
@@ -56,14 +57,43 @@ pub async fn record_admin_announcement_command(
 
 /// Lease service messages for one account.  A socket/process failure before
 /// enqueue confirmation leaves an expiring lease rather than a false
-/// delivered marker, so a later initial presence can retry.  Completion is a
-/// separate connection-incarnation-bound update below; delivery is therefore
-/// at-least-once across the unavoidable queue/DB crash boundary.
+/// delivered marker, so a later initial presence can retry. Completion after
+/// enqueue is token-bound, preserving at-least-once recovery across a crash.
+pub async fn claim_admin_service_messages_for_route(
+    pool: &PgPool,
+    route: &ServiceMessageRoute,
+) -> Result<Vec<ClaimedAdminServiceMessage>> {
+    claim_service_messages(pool, route.account_id, Some(route.auth_generation)).await
+}
+
+#[cfg(any(test, feature = "test-support"))]
 pub async fn claim_admin_service_messages(
     pool: &PgPool,
     user_id: Uuid,
 ) -> Result<Vec<ClaimedAdminServiceMessage>> {
+    claim_service_messages(pool, user_id, None).await
+}
+
+async fn claim_service_messages(
+    pool: &PgPool,
+    user_id: Uuid,
+    expected_generation: Option<i64>,
+) -> Result<Vec<ClaimedAdminServiceMessage>> {
     let mut tx = pool.begin().await?;
+    if let Some(generation) = expected_generation {
+        let current: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM users
+             WHERE id=$1 AND NOT is_disabled AND auth_generation=$2)",
+        )
+        .bind(user_id)
+        .bind(generation)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !current {
+            tx.rollback().await?;
+            return Ok(Vec::new());
+        }
+    }
     let rows = sqlx::query("SELECT kind,body,revision FROM admin_service_messages ORDER BY kind")
         .fetch_all(&mut *tx)
         .await?;
@@ -88,7 +118,7 @@ pub async fn claim_admin_service_messages(
             // first delivery may be reclaimed.
             let existing = sqlx::query(
                 "SELECT delivered_at IS NULL
-                        AND claim_expires_at <= clock_timestamp() AS claimable
+                        AND claim_expires_at <= statement_timestamp() AS claimable
                  FROM admin_service_message_deliveries
                  WHERE kind='welcome' AND user_id=$1 FOR UPDATE",
             )
@@ -100,7 +130,7 @@ pub async fn claim_admin_service_messages(
                     sqlx::query(
                         "INSERT INTO admin_service_message_deliveries
                          (kind,revision,user_id,delivery_date,delivered_at,claim_id,claim_expires_at)
-                         VALUES('welcome',$1,$2,$3,NULL,$4,clock_timestamp()+INTERVAL '30 seconds')",
+                         VALUES('welcome',$1,$2,$3,NULL,$4,statement_timestamp()+INTERVAL '30 seconds')",
                     )
                     .bind(revision)
                     .bind(user_id)
@@ -114,7 +144,7 @@ pub async fn claim_admin_service_messages(
                     sqlx::query(
                         "UPDATE admin_service_message_deliveries
                          SET revision=$2,claim_id=$3,
-                             claim_expires_at=clock_timestamp()+INTERVAL '30 seconds'
+                             claim_expires_at=statement_timestamp()+INTERVAL '30 seconds'
                          WHERE kind='welcome' AND user_id=$1",
                     )
                     .bind(user_id)
@@ -130,12 +160,12 @@ pub async fn claim_admin_service_messages(
             sqlx::query(
                 "INSERT INTO admin_service_message_deliveries
                  (kind,revision,user_id,delivery_date,delivered_at,claim_id,claim_expires_at)
-                 VALUES($1,$2,$3,$4,NULL,$5,clock_timestamp()+INTERVAL '30 seconds')
+                 VALUES($1,$2,$3,$4,NULL,$5,statement_timestamp()+INTERVAL '30 seconds')
                  ON CONFLICT(kind,revision,user_id,delivery_date) DO UPDATE
                  SET claim_id=EXCLUDED.claim_id,
-                     claim_expires_at=clock_timestamp()+INTERVAL '30 seconds'
+                     claim_expires_at=EXCLUDED.claim_expires_at
                  WHERE admin_service_message_deliveries.delivered_at IS NULL
-                   AND admin_service_message_deliveries.claim_expires_at <= clock_timestamp()
+                   AND admin_service_message_deliveries.claim_expires_at <= statement_timestamp()
                  RETURNING TRUE",
             )
             .bind(&kind)
@@ -172,7 +202,50 @@ pub async fn claim_admin_service_messages(
     Ok(claimed)
 }
 
+pub async fn admit_admin_service_message_claim(
+    pool: &PgPool,
+    route: &ServiceMessageRoute,
+    claim: &ClaimedAdminServiceMessage,
+) -> Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM admin_service_message_deliveries AS delivery
+             JOIN users AS account ON account.id=delivery.user_id
+             WHERE delivery.kind=$1 AND delivery.revision=$2 AND delivery.user_id=$3
+               AND delivery.delivery_date=$4 AND delivery.claim_id=$5
+               AND delivery.delivered_at IS NULL
+               AND delivery.claim_expires_at > statement_timestamp()
+               AND NOT account.is_disabled AND account.auth_generation=$6
+         )",
+    )
+    .bind(&claim.kind)
+    .bind(claim.revision)
+    .bind(route.account_id)
+    .bind(claim.delivery_date)
+    .bind(claim.claim_id)
+    .bind(route.auth_generation)
+    .fetch_one(pool)
+    .await?)
+}
+
+pub async fn complete_admin_service_message_claim_for_route(
+    pool: &PgPool,
+    route: &ServiceMessageRoute,
+    claim: &ClaimedAdminServiceMessage,
+) -> Result<bool> {
+    complete_service_message_claim(pool, route.account_id, claim).await
+}
+
+#[cfg(any(test, feature = "test-support"))]
 pub async fn complete_admin_service_message_claim(
+    pool: &PgPool,
+    user_id: Uuid,
+    claim: &ClaimedAdminServiceMessage,
+) -> Result<bool> {
+    complete_service_message_claim(pool, user_id, claim).await
+}
+
+async fn complete_service_message_claim(
     pool: &PgPool,
     user_id: Uuid,
     claim: &ClaimedAdminServiceMessage,

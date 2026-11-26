@@ -18,6 +18,7 @@ mod direct_invitation_stub;
 mod hosted_disco;
 mod pam_delivery_repository;
 mod publication_stub;
+mod service_messages;
 
 mod invitation_stub;
 
@@ -771,18 +772,6 @@ mod presence {
 
         async fn replay_cutoff(&self) -> Result<DateTime<Utc>> {
             panic!("unused PresenceRepository::replay_cutoff port");
-        }
-
-        async fn claim_service_messages(&self, _user_id: Uuid) -> Result<Vec<ServiceMessageClaim>> {
-            panic!("unused PresenceRepository::claim_service_messages port");
-        }
-
-        async fn complete_service_message_claim(
-            &self,
-            _user_id: Uuid,
-            _claim: &ServiceMessageClaim,
-        ) -> Result<bool> {
-            panic!("unused PresenceRepository::complete_service_message_claim port");
         }
 
         async fn transition_remote_with_outbox(

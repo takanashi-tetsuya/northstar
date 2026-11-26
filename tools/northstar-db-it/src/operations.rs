@@ -18,3 +18,4 @@ mod operation_muc_destroy_repository;
 mod read_conformance;
 mod report_moderation_repository;
 mod retention_policy_repository;
+mod service_message_claim;

@@ -1435,16 +1435,20 @@ if (!/^\s*repository\s*:\s*R\s*,?\s*$/m.test(mamServiceBody)) {
 // mix_muc.rs receives the MIX service from its callers instead of ServerNode.
 for (const [name, accessor, forbiddenAuthority, route, path] of [
   ['mix_muc.rs', 'MixService', 'link_mix_muc_by_localpart', /\bmix\s*:\s*&MixService<R>[^]*?\bmix\s*\.\s*link_local_muc_mirror\s*\(/, 'crates/contexts/room/northstar-room-application/src/mix_muc.rs'],
-  ['presence.rs', 'presence_service()', 'claim_admin_service_messages', /\.presence_service\s*\(\s*\)/],
-  ['presence.rs', 'presence_service()', 'complete_admin_service_message_claim', /\.presence_service\s*\(\s*\)/],
+  ['presence.rs', 'presence_service()', 'claim_admin_service_messages(?:_for_route)?', /\blet service = SessionPresencePolicyHost::presence_service\([^;]+\);\s*for claim in service\.claim_service_messages\(&route\)/],
+  ['presence.rs', 'presence_service()', 'admit_admin_service_message_claim', /\bservice\.admit_service_message_claim\(&claim\)/],
+  ['presence.rs', 'presence_service()', 'complete_admin_service_message_claim(?:_for_route)?', /\bservice\.complete_service_message_claim\(&claim\)/],
   ['upload.rs', 'UploadSessionHost', 'create_upload_slot_bounded', /\.reserve_upload_slot\s*\(/],
   ['upload_session_host.rs', 'upload_service()', 'create_upload_slot_bounded', /\.upload_service\s*\(\s*\)/, 'src/node/hosts/upload_session.rs'],
 ]) {
+  const source = path ? read(path) : readProtocolSource(name);
   const production = productionWithoutCfgTestModules(
-    path ? read(path) : readProtocolSource(name),
+    name === 'presence.rs'
+      ? `${source}\n${read('crates/contexts/roster/northstar-roster-xmpp/src/presence/notice.rs')}`
+      : source,
     `${name} production`,
   );
-  if (new RegExp(`\\b(?:db|northstar_upload_postgres)\\s*::\\s*${forbiddenAuthority}\\b`).test(production)) {
+  if (new RegExp(`\\b(?:db|northstar_upload_postgres|northstar_operations_postgres(?:\\s*::\\s*admin_commands)?)\\s*::\\s*${forbiddenAuthority}\\b`).test(production)) {
     throw new Error(`${name} bypasses ${accessor} via db::${forbiddenAuthority}`);
   }
   if (!route.test(production)) {
@@ -1468,7 +1472,7 @@ for (const [name, source] of [
   ['PubSubService', readProductionModule('crates/contexts/pubsub/northstar-pubsub-application/src/service.rs', { root })],
   ['BlockingService', read('crates/contexts/roster/northstar-roster-application/src/blocking.rs')],
   ['PrivacyService', read('crates/contexts/roster/northstar-roster-application/src/privacy.rs')],
-  ['PresenceService', read('crates/contexts/roster/northstar-roster-application/src/presence.rs')],
+  ['PresenceService', readProductionModule('crates/contexts/roster/northstar-roster-application/src/presence.rs', { root })],
   ['ReplayService', read('crates/contexts/session/northstar-session-application/src/replay.rs')],
   ['AccountService', accountServiceSource],
   ['AdminCommandService', read('crates/contexts/operations/northstar-operations-application/src/admin_commands.rs')],

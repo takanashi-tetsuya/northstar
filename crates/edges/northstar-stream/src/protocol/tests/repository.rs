@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 mod administration;
 mod publication_stub;
+mod service_messages;
 
 #[derive(Clone)]
 pub(super) struct UnusedRepository {
@@ -792,20 +793,6 @@ mod presence_ports {
         #[allow(clippy::too_many_arguments)]
         async fn replay_cutoff(&self) -> Result<DateTime<Utc>> {
             panic!("unexpected port call: replay_cutoff")
-        }
-
-        #[allow(clippy::too_many_arguments)]
-        async fn claim_service_messages(&self, _user_id: Uuid) -> Result<Vec<ServiceMessageClaim>> {
-            panic!("unexpected port call: claim_service_messages")
-        }
-
-        #[allow(clippy::too_many_arguments)]
-        async fn complete_service_message_claim(
-            &self,
-            _user_id: Uuid,
-            _claim: &ServiceMessageClaim,
-        ) -> Result<bool> {
-            panic!("unexpected port call: complete_service_message_claim")
         }
 
         #[allow(clippy::too_many_arguments)]

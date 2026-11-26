@@ -9,21 +9,34 @@ use anyhow::Result;
 use northstar_time::{DateTime, Utc};
 use uuid::Uuid;
 
+mod service_messages;
+
 pub use northstar_roster_core::{
     InboundRemotePresenceEffect, LocalPresenceEffect, PresenceAccount, PresencePolicyDenial,
     RosterChange, ServiceMessageDeliveryClaim,
 };
+pub use service_messages::{ServiceMessageRepository, ServiceMessageRoute};
 
-/// An administrative notice with the revision, date and token needed to
-/// acknowledge its exact delivery claim.
+/// An administrative notice with its captured route and the revision, date
+/// and token needed to admit and complete the exact delivery claim.
 #[derive(Clone, Debug)]
 pub struct ServiceMessageClaim {
+    route: ServiceMessageRoute,
     repository_claim: ServiceMessageDeliveryClaim,
 }
 
 impl ServiceMessageClaim {
-    pub fn from_lease(repository_claim: ServiceMessageDeliveryClaim) -> Self {
-        Self { repository_claim }
+    pub fn from_lease(
+        route: ServiceMessageRoute,
+        repository_claim: ServiceMessageDeliveryClaim,
+    ) -> Self {
+        Self {
+            route,
+            repository_claim,
+        }
+    }
+    pub fn route(&self) -> &ServiceMessageRoute {
+        &self.route
     }
     pub fn lease(&self) -> &ServiceMessageDeliveryClaim {
         &self.repository_claim
@@ -87,7 +100,7 @@ pub struct LocalSubscriptionRequest<'a> {
     pub stanza: &'a str,
 }
 
-pub trait PresenceRepository: Send + Sync {
+pub trait PresenceRepository: ServiceMessageRepository + Send + Sync {
     fn roster_subscriptions(
         &self,
         owner_id: Uuid,
@@ -120,15 +133,6 @@ pub trait PresenceRepository: Send + Sync {
         contact: &str,
     ) -> impl std::future::Future<Output = Result<Option<String>>> + Send;
     fn replay_cutoff(&self) -> impl std::future::Future<Output = Result<DateTime<Utc>>> + Send;
-    fn claim_service_messages(
-        &self,
-        user_id: Uuid,
-    ) -> impl std::future::Future<Output = Result<Vec<ServiceMessageClaim>>> + Send;
-    fn complete_service_message_claim(
-        &self,
-        user_id: Uuid,
-        claim: &ServiceMessageClaim,
-    ) -> impl std::future::Future<Output = Result<bool>> + Send;
     #[allow(clippy::too_many_arguments)]
     fn transition_remote_with_outbox(
         &self,
@@ -266,18 +270,22 @@ impl<R: PresenceRepository> PresenceService<R> {
         self.repository.replay_cutoff().await
     }
 
-    pub async fn claim_service_messages(&self, user_id: Uuid) -> Result<Vec<ServiceMessageClaim>> {
-        self.repository.claim_service_messages(user_id).await
+    pub async fn claim_service_messages(
+        &self,
+        route: &ServiceMessageRoute,
+    ) -> Result<Vec<ServiceMessageClaim>> {
+        self.repository.claim_service_messages(route).await
+    }
+
+    pub async fn admit_service_message_claim(&self, claim: &ServiceMessageClaim) -> Result<bool> {
+        self.repository.admit_service_message_claim(claim).await
     }
 
     pub async fn complete_service_message_claim(
         &self,
-        user_id: Uuid,
         claim: &ServiceMessageClaim,
     ) -> Result<bool> {
-        self.repository
-            .complete_service_message_claim(user_id, claim)
-            .await
+        self.repository.complete_service_message_claim(claim).await
     }
 
     #[allow(clippy::too_many_arguments)]

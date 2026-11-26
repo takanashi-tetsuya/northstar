@@ -31,4 +31,8 @@ pub trait SessionIdentity: Sync {
     fn session_account(&self) -> Option<PresenceAccount>;
     /// The server's local domain.
     fn session_local_domain(&self) -> &str;
+    /// The roster actor, or `None` until the session is authenticated and bound.
+    fn roster_actor(&self) -> Option<northstar_roster_core::RosterActor>;
+    /// The source of time and protocol IDs for roster effects.
+    fn roster_events(&self) -> &dyn northstar_roster_core::RosterEventSource;
 }

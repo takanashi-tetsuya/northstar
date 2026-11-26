@@ -26,6 +26,7 @@ use roxmltree::Node;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+mod actor;
 mod presence_staging;
 mod roster_sync;
 
@@ -44,6 +45,23 @@ impl<H: SessionHost> crate::SessionIdentity for ProtocolSession<H> {
 
     fn session_local_domain(&self) -> &str {
         self.host().local_domain()
+    }
+
+    fn roster_actor(&self) -> Option<northstar_roster_core::RosterActor> {
+        actor::bound_actor(
+            self.authenticated
+                .as_ref()
+                .map(|user| (user.id, user.auth_generation)),
+            self.connection_id,
+            self.full_jid.as_deref(),
+        )
+    }
+
+    fn roster_events(&self) -> &dyn northstar_roster_core::RosterEventSource {
+        use northstar_roster_application::SystemRosterEvents;
+
+        static SYSTEM: SystemRosterEvents = SystemRosterEvents;
+        &SYSTEM
     }
 }
 

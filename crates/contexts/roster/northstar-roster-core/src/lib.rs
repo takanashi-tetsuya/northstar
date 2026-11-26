@@ -3,8 +3,15 @@
 
 #![forbid(unsafe_code)]
 
+mod authority;
+mod events;
 pub mod roster_sync;
+mod subscription_action;
+
+pub use authority::{ExactPresenceRoute, RosterActor, RosterVersion};
+pub use events::RosterEventSource;
 pub use roster_sync::*;
+pub use subscription_action::{SubscriptionAction, SubscriptionOrigin};
 
 use std::collections::HashMap;
 use uuid::Uuid;

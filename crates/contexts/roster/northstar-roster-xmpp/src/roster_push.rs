@@ -4,7 +4,7 @@ use crate::roster::{roster_change_item_element, roster_push_xml};
 use anyhow::Result;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_roster_application::RosterPushDisposition;
-use northstar_roster_core::{ClusterPresenceAuthority, RosterChange};
+use northstar_roster_core::{ClusterPresenceAuthority, RosterChange, RosterEventSource};
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_xml_builder::rewrite::set_to;
 use std::{
@@ -105,6 +105,7 @@ pub async fn deliver_committed_roster_change<P>(
     owner: &str,
     change: &RosterChange,
     participant_id: Option<&str>,
+    events: &dyn RosterEventSource,
 ) -> Result<()>
 where
     P: RosterPushDeliveryPorts<LocalSession = OnlineSession>,
@@ -117,9 +118,21 @@ where
         if target.user_id != owner_id {
             continue;
         }
-        let plain_push = roster_push_xml(&owner_jid, &target_jid, change.version, item.clone());
+        let plain_push = roster_push_xml(
+            &owner_jid,
+            &target_jid,
+            change.version,
+            item.clone(),
+            events.new_protocol_id(),
+        );
         let annotated_push = annotated.as_ref().map(|annotated| {
-            roster_push_xml(&owner_jid, &target_jid, change.version, annotated.clone())
+            roster_push_xml(
+                &owner_jid,
+                &target_jid,
+                change.version,
+                annotated.clone(),
+                events.new_protocol_id(),
+            )
         });
         match target.roster_sync.route(
             &target.roster_requested,
@@ -147,9 +160,22 @@ where
     }
     // The immutable journal snapshot and exact committed version cross node
     // boundaries together; remote resources add their exact full-JID target.
-    let push = roster_push_xml(&owner_jid, &owner_jid, change.version, item);
-    let annotated_push = annotated
-        .map(|annotated| roster_push_xml(&owner_jid, &owner_jid, change.version, annotated));
+    let push = roster_push_xml(
+        &owner_jid,
+        &owner_jid,
+        change.version,
+        item,
+        events.new_protocol_id(),
+    );
+    let annotated_push = annotated.map(|annotated| {
+        roster_push_xml(
+            &owner_jid,
+            &owner_jid,
+            change.version,
+            annotated,
+            events.new_protocol_id(),
+        )
+    });
     match delivery
         .route_remote_push(
             &owner_jid,
@@ -371,6 +397,7 @@ mod tests {
                     "alice",
                     &change,
                     Some("opaque-id"),
+                    &northstar_roster_application::SystemRosterEvents,
                 )
                 .await
                 .is_ok());
@@ -532,9 +559,16 @@ mod tests {
             }
             let failures = Arc::new(AtomicU64::new(0));
             let delivery = RosterPushDelivery::new(ports, failures.clone(), "example.test".into());
-            deliver_committed_roster_change(&delivery, owner_id, "alice", &change(), None)
-                .await
-                .unwrap();
+            deliver_committed_roster_change(
+                &delivery,
+                owner_id,
+                "alice",
+                &change(),
+                None,
+                &northstar_roster_application::SystemRosterEvents,
+            )
+            .await
+            .unwrap();
             for (target, session, mut receiver) in receivers {
                 if session.resource == "interested" {
                     let push = receiver.try_recv().unwrap().stanza;
@@ -579,6 +613,7 @@ mod tests {
                 "alice",
                 &change(),
                 Some("opaque-id"),
+                &northstar_roster_application::SystemRosterEvents,
             )
             .await
             .unwrap();
@@ -625,9 +660,16 @@ mod tests {
                     failures.clone(),
                     "example.test".into(),
                 );
-                deliver_committed_roster_change(&delivery, owner_id, "alice", &change(), None)
-                    .await
-                    .unwrap();
+                deliver_committed_roster_change(
+                    &delivery,
+                    owner_id,
+                    "alice",
+                    &change(),
+                    None,
+                    &northstar_roster_application::SystemRosterEvents,
+                )
+                .await
+                .unwrap();
                 assert!(session.disconnect.is_cancelled());
                 assert!(session.sender.backpressure_disconnect().is_cancelled());
                 assert_eq!(failures.load(Ordering::Relaxed), 1);

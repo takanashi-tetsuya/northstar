@@ -14,7 +14,6 @@ use northstar_protocol_runtime::caps::{
 use northstar_session_application::telemetry::CapsEffectTelemetry;
 use northstar_session_core::LocalCapsEpoch;
 use northstar_telemetry::metrics::DurationHistogram;
-use northstar_xml_builder::stream::stream_id;
 use northstar_xml_builder::XmlElement;
 use std::future::Future;
 use std::pin::Pin;
@@ -24,9 +23,33 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
+
+/// Monotonic time and protocol IDs used by CAPS observations and disco queries.
+pub trait CapsEventSource: Send + Sync {
+    fn caps_now(&self) -> Instant {
+        SystemCapsEvents.caps_now()
+    }
+
+    fn new_caps_protocol_id(&self) -> Uuid {
+        SystemCapsEvents.new_caps_protocol_id()
+    }
+}
+
+struct SystemCapsEvents;
+
+impl CapsEventSource for SystemCapsEvents {
+    fn caps_now(&self) -> Instant {
+        Instant::now()
+    }
+
+    fn new_caps_protocol_id(&self) -> Uuid {
+        Uuid::new_v4()
+    }
+}
 
 /// The node services capability effects drive beyond process-local routes.
-pub trait CapsEffectPorts: Send + Sync + 'static {
+pub trait CapsEffectPorts: CapsEventSource + 'static {
     fn send_federated_disco(
         &self,
         domain: &str,
@@ -130,11 +153,13 @@ impl<P: CapsEffectPorts> CapsEffectDispatchContext<P> {
 pub(crate) struct CapsEffectRunGuard<'a> {
     pub(crate) observations: &'a CapsResourceIndex,
     pub(crate) dispatcher: &'a CapsEffectDispatcher,
+    events: &'a dyn CapsEventSource,
 }
 
 impl Drop for CapsEffectRunGuard<'_> {
     fn drop(&mut self) {
-        self.observations.recover_interrupted(Instant::now());
+        self.observations
+            .recover_interrupted(self.events.caps_now());
         self.dispatcher.request_rescan();
     }
 }
@@ -167,7 +192,7 @@ async fn send_caps_disco_query<P: CapsEffectPorts>(
     // admitted together before the first response arrives; the pending index
     // single-flights that first request, and followers resolve from this same
     // Arc on their event-driven retry instead of emitting duplicate IQs.
-    if let Some(summary) = context.cache.query(key, Instant::now()) {
+    if let Some(summary) = context.cache.query(key, context.ports.caps_now()) {
         return match context.observations.mark_cached_verified(
             &job.full_jid,
             job.owner,
@@ -183,8 +208,7 @@ async fn send_caps_disco_query<P: CapsEffectPorts>(
             }
         };
     }
-    let id = format!("caps-{}", stream_id());
-    let expires_at = Instant::now() + PENDING_TTL;
+    let (id, expires_at) = caps_query_correlation(&context.ports);
     if !context
         .observations
         .begin_query(&job.full_jid, job.owner, key, id.clone())
@@ -247,6 +271,12 @@ async fn send_caps_disco_query<P: CapsEffectPorts>(
             .mark_query_failed(&job.full_jid, job.owner, &id);
         anyhow::bail!("caps disco query was not accepted by its exact transport")
     }
+}
+
+fn caps_query_correlation(events: &impl CapsEventSource) -> (String, Instant) {
+    let id = format!("caps-{}", events.new_caps_protocol_id().as_u128());
+    let expires_at = events.caps_now() + PENDING_TTL;
+    (id, expires_at)
 }
 
 async fn execute_caps_effects_inner<P: CapsEffectPorts>(
@@ -334,7 +364,9 @@ async fn run_caps_effect_dispatcher<P: CapsEffectPorts>(
     heartbeat: northstar_runtime::workers::WorkerHeartbeat,
 ) -> anyhow::Result<()> {
     let dispatcher = context.dispatcher.as_ref();
-    context.observations.recover_interrupted(Instant::now());
+    context
+        .observations
+        .recover_interrupted(context.ports.caps_now());
     // A restart performs one authoritative reconstruction. Thereafter new
     // work, saturation, completions and exact retry/expiry deadlines are the
     // only wake sources; correctness does not depend on fixed polling.
@@ -342,6 +374,7 @@ async fn run_caps_effect_dispatcher<P: CapsEffectPorts>(
     let _recovery = CapsEffectRunGuard {
         observations: &context.observations,
         dispatcher,
+        events: &context.ports,
     };
     let mut running = FuturesUnordered::<CapsEffectFuture>::new();
     let mut draining = false;
@@ -364,7 +397,7 @@ async fn run_caps_effect_dispatcher<P: CapsEffectPorts>(
             };
             let Some(job) = context
                 .observations
-                .claim_effects(&full_jid, Instant::now())
+                .claim_effects(&full_jid, context.ports.caps_now())
             else {
                 drop(permit);
                 continue;
@@ -381,7 +414,7 @@ async fn run_caps_effect_dispatcher<P: CapsEffectPorts>(
             && dispatcher.execution_slots.available_permits() > 0
             && dispatcher.begin_rescan()
         {
-            let now = Instant::now();
+            let now = context.ports.caps_now();
             for (full_jid, local) in context.observations.ready_observations(now) {
                 let _ = dispatcher.hint(full_jid, local, &context.telemetry());
             }
@@ -396,7 +429,7 @@ async fn run_caps_effect_dispatcher<P: CapsEffectPorts>(
             return Ok(());
         }
 
-        let now = Instant::now();
+        let now = context.ports.caps_now();
         let next_deadline = if draining {
             None
         } else {
@@ -428,7 +461,7 @@ async fn run_caps_effect_dispatcher<P: CapsEffectPorts>(
                         context.pending.remove_local_epoch(&job.full_jid, epoch);
                         context.observations.remove_local_epoch(&job.full_jid, epoch);
                     }
-                } else if context.observations.complete_effects(&job, failed, Instant::now()) {
+                } else if context.observations.complete_effects(&job, failed, context.ports.caps_now()) {
                     let _ = dispatcher.hint(
                         job.full_jid.clone(),
                         job.owner.is_local(),
@@ -446,7 +479,7 @@ async fn run_caps_effect_dispatcher<P: CapsEffectPorts>(
             }
             _ = dispatcher.wake.notified() => {}
             _ = &mut deadline_wait, if !draining => {
-                let now = Instant::now();
+                let now = context.ports.caps_now();
                 for (id, pending) in context.pending.take_expired(now) {
                     if context.observations.rearm_expired(&id, &pending, now) {
                         let _ = dispatcher.hint(
@@ -459,7 +492,7 @@ async fn run_caps_effect_dispatcher<P: CapsEffectPorts>(
                 dispatcher.request_rescan();
             }
             _ = liveness.tick() => {
-                context.cache.sweep(Instant::now());
+                context.cache.sweep(context.ports.caps_now());
                 heartbeat.pulse();
             }
         }
@@ -529,6 +562,7 @@ mod tests {
         drop(CapsEffectRunGuard {
             observations: &observations,
             dispatcher: dispatcher.as_ref(),
+            events: &SystemCapsEvents,
         });
 
         assert!(dispatcher.begin_rescan());
@@ -713,4 +747,6 @@ mod tests {
                 .is_clean());
         }
     }
+
+    mod events;
 }

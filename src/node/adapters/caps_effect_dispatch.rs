@@ -46,6 +46,8 @@ impl ServerNode {
     }
 }
 
+impl northstar_stream::caps_effects::CapsEventSource for CapsEffectAdapters {}
+
 impl CapsEffectPorts for CapsEffectAdapters {
     async fn send_federated_disco(&self, domain: &str, query: String, local_domain: &str) -> bool {
         self.federation_outbox

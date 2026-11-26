@@ -119,6 +119,7 @@ impl MixHost for ServerNode {
             owner,
             change,
             participant_id,
+            &northstar_roster_application::SystemRosterEvents,
         )
         .await
     }

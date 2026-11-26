@@ -12,7 +12,6 @@ use northstar_xml_builder::stanza::iq_result_from;
 use roxmltree::Node;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Instant;
 
 pub trait CapsEffectDispatcherExt {
     fn hint(
@@ -181,7 +180,7 @@ impl<H: SessionHost> ProtocolSession<H> {
             .snapshot(&full_jid)
             .filter(|observation| observation.key.as_ref() == Some(&key))
             .and_then(|observation| observation.summary)
-            .or_else(|| self.host.caps_cache().query(&key, Instant::now()));
+            .or_else(|| self.host.caps_cache().query(&key, self.host.caps_now()));
         let Some(summary) = summary else {
             return northstar_room_core::mix::MixSessionCapability::Unknown;
         };
@@ -248,7 +247,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                 .remove_local_resource(&full_jid, connection);
             return;
         }
-        let now = Instant::now();
+        let now = self.host.caps_now();
         let key = observed_caps_key(presence, &full_jid);
         let cached = key
             .as_ref()
@@ -302,7 +301,7 @@ impl<H: SessionHost> ProtocolSession<H> {
         // sender instead of using this C2S rule.
         let response_from =
             effective_c2s_caps_sender(self.full_jid.as_deref(), root.attribute("from"));
-        if pending.expires_at <= Instant::now()
+        if pending.expires_at <= self.host.caps_now()
             || response_from.as_deref() != Some(pending.full_jid.as_str())
         {
             tracing::debug!(
@@ -311,13 +310,13 @@ impl<H: SessionHost> ProtocolSession<H> {
                 effective_from = ?response_from,
                 expected_from = %pending.full_jid,
                 stanza_type = %kind,
-                expired = pending.expires_at <= Instant::now(),
+                expired = pending.expires_at <= self.host.caps_now(),
                 "rearming entity capabilities after an invalid response envelope"
             );
             if self
                 .host
                 .caps_by_jid()
-                .rearm_expired(id, &pending, Instant::now())
+                .rearm_expired(id, &pending, self.host.caps_now())
             {
                 hint_caps_effects(&*self.host, pending.full_jid.clone());
             }
@@ -403,7 +402,7 @@ impl<H: SessionHost> ProtocolSession<H> {
             pending.key.clone(),
             payload.to_owned(),
             Arc::clone(&summary),
-            Instant::now(),
+            self.host.caps_now(),
         );
         let full_jid = pending.full_jid.clone();
         tracing::debug!(
@@ -527,7 +526,7 @@ pub async fn observe_federated_caps<
         .expect("canonical full JID was parsed above")
         .domainpart()
         .to_owned();
-    let now = Instant::now();
+    let now = state.caps_now();
     let key = observed_caps_key(presence, &full_jid);
     let cached = key
         .as_ref()
@@ -611,12 +610,12 @@ pub async fn handle_federated_caps_response<H: SessionCapsHost + SessionTelemetr
     let response_from = root
         .attribute("from")
         .and_then(|jid| northstar_xmpp_types::jid::canonical_session_key(jid).ok());
-    if pending.expires_at <= Instant::now()
+    if pending.expires_at <= state.caps_now()
         || response_from.as_deref() != Some(pending.full_jid.as_str())
     {
         if state
             .caps_by_jid()
-            .rearm_expired(id, &pending, Instant::now())
+            .rearm_expired(id, &pending, state.caps_now())
         {
             hint_caps_effects(state, pending.full_jid.clone());
         }
@@ -678,7 +677,7 @@ pub async fn handle_federated_caps_response<H: SessionCapsHost + SessionTelemetr
         pending.key.clone(),
         payload.to_owned(),
         Arc::clone(&summary),
-        Instant::now(),
+        state.caps_now(),
     );
     let resource = pending.full_jid;
     match state
@@ -719,7 +718,7 @@ pub fn cached_disco_result<H: SessionCapsHost>(
         );
         return None;
     }
-    let Some(query) = state.caps_cache().raw_query(&key, Instant::now()) else {
+    let Some(query) = state.caps_cache().raw_query(&key, state.caps_now()) else {
         tracing::debug!(%target, node = %key.node, version = %key.version, "entity capability cache lookup missed verified content");
         return None;
     };

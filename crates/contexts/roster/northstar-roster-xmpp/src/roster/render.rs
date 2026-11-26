@@ -1,6 +1,7 @@
 use super::MIX_ROSTER_NS;
 use northstar_roster_core::RosterChange;
 use northstar_xml_builder::XmlElement;
+use uuid::Uuid;
 
 /// Renders an RFC 6121 roster item or deletion element from a committed change.
 pub fn roster_change_item_element(
@@ -22,12 +23,12 @@ pub fn roster_change_item_element(
 }
 
 /// Renders an RFC 6121 roster push IQ stanza.
-pub fn roster_push_xml(from: &str, to: &str, version: i64, item: XmlElement) -> String {
+pub fn roster_push_xml(from: &str, to: &str, version: i64, item: XmlElement, id: Uuid) -> String {
     XmlElement::namespaced("iq", "jabber:client")
         .attr("type", "set")
         .attr("from", from)
         .attr("to", to)
-        .attr("id", format!("roster-{}", stream_id()))
+        .attr("id", format!("roster-{}", id.as_u128()))
         .child(
             XmlElement::namespaced("query", "jabber:iq:roster")
                 .attr("ver", version)
@@ -92,15 +93,14 @@ fn removed_roster_item_element(jid: &str) -> XmlElement {
         .attr("subscription", "remove")
 }
 
-pub(super) fn roster_removal_presence(from: &str, to: &str, kind: &str) -> String {
+pub(super) fn roster_removal_presence(from: &str, to: &str, kind: &str, id: Uuid) -> String {
     XmlElement::namespaced("presence", "jabber:client")
         .attr("from", from)
         .attr("to", to)
         .attr("type", kind)
-        .attr("id", uuid::Uuid::new_v4())
+        .attr("id", id)
         .finish()
 }
 
-fn stream_id() -> u128 {
-    uuid::Uuid::new_v4().as_u128()
-}
+#[cfg(test)]
+mod tests;

@@ -4,7 +4,7 @@ use anyhow::Result;
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
 use northstar_roster_application::{RosterRepository, RosterService, S2sOutboxPolicy};
 use northstar_roster_core::{
-    ClusterPresenceAuthority, LocalRosterContact, PresenceAccount, RosterChange,
+    ClusterPresenceAuthority, LocalRosterContact, PresenceAccount, RosterChange, RosterEventSource,
 };
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::outbound::OutboundSender;
@@ -66,6 +66,7 @@ pub trait RosterSessionHost: Send + Sync {
         owner: &str,
         change: &RosterChange,
         participant_id: Option<&str>,
+        events: &dyn RosterEventSource,
     ) -> impl Future<Output = Result<()>> + Send;
     /// Delivers the presence of a subscription removal to the recipient's available resources on every node.
     fn deliver_roster_removal_presence(
@@ -76,7 +77,12 @@ pub trait RosterSessionHost: Send + Sync {
         stanza: &str,
     ) -> impl Future<Output = ()> + Send;
     /// Pushes a committed blocklist change to the owner's resources that requested the blocklist, on every node.
-    fn push_blocklist_change(&self, owner: &str, payload: &str) -> impl Future<Output = ()> + Send;
+    fn push_blocklist_change(
+        &self,
+        owner: &str,
+        payload: &str,
+        events: &dyn RosterEventSource,
+    ) -> impl Future<Output = ()> + Send;
     /// Delivers the polite-blocking presence transitions of a blocklist change, on every node.
     fn deliver_blocking_presence_change(
         &self,

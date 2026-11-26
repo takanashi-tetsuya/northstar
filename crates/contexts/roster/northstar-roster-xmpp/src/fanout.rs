@@ -236,7 +236,7 @@ mod tests {
                 ..Routes::default()
             };
             let payload = "<unblock xmlns='urn:xmpp:blocking'/>";
-            push_blocklist_change(&routes, "alice@example.test", payload).await;
+            push_blocklist_change(&routes, "alice@example.test", payload, Uuid::new_v4).await;
             let push = interested_rx.try_recv().unwrap().stanza;
             assert_to(&push, "alice@example.test/interested");
             assert!(push.contains(payload));
@@ -270,6 +270,7 @@ mod tests {
                 &routes,
                 "alice@example.test",
                 "<block xmlns='urn:xmpp:blocking'/>",
+                Uuid::new_v4,
             )
             .await;
             assert!(session.disconnect.is_cancelled());
@@ -297,6 +298,7 @@ mod tests {
                 &routes,
                 "alice@example.test",
                 "<block xmlns='urn:xmpp:blocking'/>",
+                Uuid::new_v4,
             )
             .await;
             assert!(started.elapsed() >= Duration::from_secs(2));
@@ -588,7 +590,8 @@ mod tests {
                 let routes = Routes::default();
                 // Constructing a stanza with this payload would panic. The
                 // remote route ignores the closure, so it must stay unbuilt.
-                push_blocklist_change(&routes, "alice@example.test", "<unblock").await;
+                push_blocklist_change(&routes, "alice@example.test", "<unblock", Uuid::new_v4)
+                    .await;
                 assert!(routes.remote_pushes.lock().unwrap().is_empty());
 
                 let routes = Routes {
@@ -596,7 +599,7 @@ mod tests {
                     ..Routes::default()
                 };
                 let payload = "<unblock xmlns='urn:xmpp:blocking'/>";
-                push_blocklist_change(&routes, "alice@example.test", payload).await;
+                push_blocklist_change(&routes, "alice@example.test", payload, Uuid::new_v4).await;
                 let pushes = routes.remote_pushes.lock().unwrap();
                 assert_eq!(pushes.len(), 1);
                 let push = roxmltree::Document::parse(&pushes[0]).unwrap();
@@ -613,8 +616,11 @@ mod tests {
         let push = blocking_push_stanza(
             "alice@example.test/Phone",
             "<unblock xmlns='urn:xmpp:blocking'/>",
+            Uuid::nil(),
         );
         assert!(push.contains("to='alice@example.test/Phone'"));
         assert!(push.contains("<unblock xmlns='urn:xmpp:blocking'/>"));
     }
+
+    mod push_ids;
 }

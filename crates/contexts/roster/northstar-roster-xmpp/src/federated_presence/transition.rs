@@ -107,7 +107,13 @@ pub(super) async fn transition_inbound_subscription<H: FederatedPresenceHost>(
 
     if let Some(change) = transition.change.as_ref() {
         if let Err(error) = state
-            .deliver_committed_roster_change(recipient.id, &recipient.username, change, None)
+            .deliver_committed_roster_change(
+                recipient.id,
+                &recipient.username,
+                change,
+                None,
+                &northstar_roster_application::SystemRosterEvents,
+            )
             .await
         {
             state.post_accept_failure_telemetry().record_failure();

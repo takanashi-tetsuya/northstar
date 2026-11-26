@@ -335,6 +335,8 @@ impl SessionRoutesHost for ServerNode {
     }
 }
 
+impl northstar_stream::caps_effects::CapsEventSource for ServerNode {}
+
 impl SessionCapsHost for ServerNode {
     fn caps_by_jid(&self) -> &northstar_protocol_runtime::caps::CapsResourceIndex {
         ServerNode::caps_by_jid(self)

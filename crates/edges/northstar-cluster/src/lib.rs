@@ -417,6 +417,7 @@ impl ClusterManager {
             listener_rotation: Arc::clone(&self.listener_rotation),
             failure_policy: self.failure_policy(),
             publication_gate: Arc::clone(&self.publication_gate),
+            events: &northstar_roster_application::SystemRosterEvents,
         }
     }
 

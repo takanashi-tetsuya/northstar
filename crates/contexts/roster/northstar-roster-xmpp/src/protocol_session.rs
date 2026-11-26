@@ -76,7 +76,9 @@ impl<H: SessionHost + RosterSessionHost> crate::blocking::BlockingSession for Pr
     }
 
     async fn blocking_push_change(&self, owner: &str, payload: &str) {
-        self.host().push_blocklist_change(owner, payload).await;
+        self.host()
+            .push_blocklist_change(owner, payload, crate::SessionIdentity::roster_events(self))
+            .await;
     }
 
     async fn blocking_presence_change(
@@ -509,7 +511,13 @@ impl<H: SessionHost + RosterSessionHost> crate::roster::RosterSession for Protoc
         change: &RosterChange,
     ) -> Result<()> {
         self.host()
-            .deliver_committed_roster_change(owner_id, owner, change, None)
+            .deliver_committed_roster_change(
+                owner_id,
+                owner,
+                change,
+                None,
+                crate::SessionIdentity::roster_events(self),
+            )
             .await
     }
 }

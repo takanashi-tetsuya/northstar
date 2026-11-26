@@ -19,7 +19,7 @@ pub async fn deliver_service_messages<S: PresenceSession>(session: &S, from: &st
             .attr("from", session.session_local_domain())
             .attr("to", from)
             .attr("type", "headline")
-            .attr("id", uuid::Uuid::new_v4())
+            .attr("id", session.roster_events().new_protocol_id())
             .child(XmlElement::new("subject").text(subject))
             .child(XmlElement::new("body").text(claim.body()))
             .finish();

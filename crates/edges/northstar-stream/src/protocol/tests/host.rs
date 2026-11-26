@@ -1140,4 +1140,5 @@ impl crate::session_cleanup::SessionCleanup for TestCleanup {
     }
 }
 
+mod caps_events;
 mod occupant_iq;

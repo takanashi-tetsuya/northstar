@@ -18,6 +18,7 @@ pub(super) struct ClusterSignedPublisher {
     pub(super) listener_rotation: Arc<tokio::sync::Notify>,
     pub(super) failure_policy: Option<northstar_security::cluster_bus::ClusterFailurePolicy>,
     pub(super) publication_gate: Arc<tokio::sync::RwLock<()>>,
+    pub(super) events: &'static dyn northstar_roster_core::RosterEventSource,
 }
 
 /// Bounded correlated control ACKs shared by the manager and teardown notifier.
@@ -172,7 +173,7 @@ impl ClusterSignedPublisher {
             self.connection_uuid,
             self.instance_epoch.load(Ordering::Acquire),
             payload,
-            northstar_time::Utc::now().timestamp(),
+            self.events.now().timestamp(),
         )?;
         let encoded =
             serde_json::to_string(&envelope).context("could not encode signed cluster envelope")?;
@@ -222,6 +223,10 @@ impl ClusterSignedPublisher {
 }
 
 impl ClusterCorrelatedControlSender {
+    fn new_request_id(&self) -> String {
+        self.publisher.events.new_protocol_id().to_string()
+    }
+
     pub(super) async fn send_control_to_node(
         &self,
         node_id: &str,
@@ -252,7 +257,7 @@ impl ClusterCorrelatedControlSender {
         else {
             anyhow::bail!("cluster control requested without an active cluster transport");
         };
-        let request_id = uuid::Uuid::new_v4().to_string();
+        let request_id = self.new_request_id();
         let nonce = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
         let mut conn = pool.get().await?;
         let peer_version: Option<String> = conn
@@ -554,3 +559,6 @@ impl ClusterManager {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

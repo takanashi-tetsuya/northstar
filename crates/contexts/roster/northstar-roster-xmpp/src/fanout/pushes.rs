@@ -1,26 +1,30 @@
 use super::{RosterFanoutRoutes, BLOCKING_PUSH_TIMEOUT};
 use northstar_xml_builder::rewrite::set_to;
-use northstar_xml_builder::stream::stream_id;
 use northstar_xml_builder::XmlElement;
 use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
-pub fn blocking_push_stanza(target: &str, payload: &str) -> String {
+pub fn blocking_push_stanza(target: &str, payload: &str, id: Uuid) -> String {
     XmlElement::namespaced("iq", "jabber:client")
         .attr("to", target)
         .attr("type", "set")
-        .attr("id", format!("block-{}", stream_id()))
+        .attr("id", format!("block-{}", id.as_u128()))
         .validated_fragment(payload)
         .expect("blocking payload was constructed structurally")
         .finish()
 }
 
-pub async fn push_blocklist_change(routes: &impl RosterFanoutRoutes, owner: &str, payload: &str) {
+pub async fn push_blocklist_change(
+    routes: &impl RosterFanoutRoutes,
+    owner: &str,
+    payload: &str,
+    new_id: impl Fn() -> Uuid + Send + Sync,
+) {
     for (jid, session) in routes.fanout_sessions(owner) {
         if !session.blocklist_requested.load(Ordering::Acquire) {
             continue;
         }
-        let push = blocking_push_stanza(&jid, payload);
+        let push = blocking_push_stanza(&jid, payload, new_id());
         match tokio::time::timeout(BLOCKING_PUSH_TIMEOUT, session.sender.send(push)).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
@@ -42,7 +46,7 @@ pub async fn push_blocklist_change(routes: &impl RosterFanoutRoutes, owner: &str
         }
     }
     match routes
-        .remote_blocklist_push(owner, || blocking_push_stanza(owner, payload))
+        .remote_blocklist_push(owner, || blocking_push_stanza(owner, payload, new_id()))
         .await
     {
         Ok(failures) => {

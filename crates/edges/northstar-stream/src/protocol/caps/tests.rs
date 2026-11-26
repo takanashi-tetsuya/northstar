@@ -1,6 +1,6 @@
 use super::*;
 use roxmltree::Document;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn key(seed: u16) -> CapsKey {
     CapsKey {
@@ -567,3 +567,5 @@ fn pending_caps_single_flights_one_query_per_semantic_key() {
     ));
     assert_eq!(pending.len(), 1);
 }
+
+mod events;

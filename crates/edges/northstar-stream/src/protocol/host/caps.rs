@@ -2,7 +2,7 @@ use northstar_session_core::LocalCapsEpoch;
 use std::sync::Arc;
 
 /// Capability observations, verification state, and effect dispatch.
-pub trait SessionCapsHost: Send + Sync + 'static {
+pub trait SessionCapsHost: crate::caps_effects::CapsEventSource + 'static {
     /// See `ServerNode::caps_by_jid`.
     fn caps_by_jid(&self) -> &northstar_protocol_runtime::caps::CapsResourceIndex;
     /// See `ServerNode::caps_cache`.

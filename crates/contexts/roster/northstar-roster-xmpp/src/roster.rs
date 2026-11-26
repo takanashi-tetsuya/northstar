@@ -153,7 +153,13 @@ pub async fn roster_get<S: RosterSession>(
             .into_iter()
             .map(|change| {
                 let item = roster_change_item_element(&change, None);
-                roster_push_xml(&owner_jid, &target, change.version, item)
+                roster_push_xml(
+                    &owner_jid,
+                    &target,
+                    change.version,
+                    item,
+                    session.roster_events().new_protocol_id(),
+                )
             })
             .collect::<Vec<_>>();
         (iq_result_from(id, &owner_jid, ""), pushes)
@@ -225,8 +231,18 @@ pub async fn roster_set<S: RosterSession>(
         let owner_jid = format!("{}@{}", user.username, session.session_local_domain());
         let contact_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&parsed.contact)?;
         let hosted_service = session.roster_is_hosted_domain(contact_jid.domainpart());
-        let unsubscribe = roster_removal_presence(&owner_jid, &parsed.contact, "unsubscribe");
-        let unsubscribed = roster_removal_presence(&owner_jid, &parsed.contact, "unsubscribed");
+        let unsubscribe = roster_removal_presence(
+            &owner_jid,
+            &parsed.contact,
+            "unsubscribe",
+            session.roster_events().new_protocol_id(),
+        );
+        let unsubscribed = roster_removal_presence(
+            &owner_jid,
+            &parsed.contact,
+            "unsubscribed",
+            session.roster_events().new_protocol_id(),
+        );
         let remote = contact_jid.domainpart() != session.session_local_domain() && !hosted_service;
         let route = if remote {
             let policy = session.roster_outbox_policy();
@@ -622,7 +638,13 @@ mod tests {
             removed: false,
         };
         let item = roster_change_item_element(&change, None);
-        let push = roster_push_xml("alice@example.test", "alice@example.test/Phone", 42, item);
+        let push = roster_push_xml(
+            "alice@example.test",
+            "alice@example.test/Phone",
+            42,
+            item,
+            uuid::Uuid::nil(),
+        );
         assert!(push.contains("from='alice@example.test'"));
         assert!(push.contains("to='alice@example.test/Phone'"));
         assert!(push.contains("ver='42'"));

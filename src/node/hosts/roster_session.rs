@@ -86,6 +86,7 @@ impl RosterSessionHost for ServerNode {
         owner: &str,
         change: &RosterChange,
         participant_id: Option<&str>,
+        events: &dyn northstar_roster_core::RosterEventSource,
     ) -> Result<()> {
         deliver_committed_roster_change(
             &self.roster_push_delivery(),
@@ -93,6 +94,7 @@ impl RosterSessionHost for ServerNode {
             owner,
             change,
             participant_id,
+            events,
         )
         .await
     }
@@ -116,8 +118,13 @@ impl RosterSessionHost for ServerNode {
         .await;
     }
 
-    async fn push_blocklist_change(&self, owner: &str, payload: &str) {
-        fanout::push_blocklist_change(self, owner, payload).await;
+    async fn push_blocklist_change(
+        &self,
+        owner: &str,
+        payload: &str,
+        events: &dyn northstar_roster_core::RosterEventSource,
+    ) {
+        fanout::push_blocklist_change(self, owner, payload, || events.new_protocol_id()).await;
     }
 
     async fn deliver_blocking_presence_change(

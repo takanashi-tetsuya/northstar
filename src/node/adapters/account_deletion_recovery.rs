@@ -115,6 +115,7 @@ impl AccountDeletionRecoveryPorts for AccountDeletionRecoveryAdapters {
             owner,
             change,
             None,
+            &northstar_roster_application::SystemRosterEvents,
         )
         .await
     }

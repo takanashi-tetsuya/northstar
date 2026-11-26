@@ -8,6 +8,7 @@ use crate::{
 use northstar_message_application::messaging::ExactMessageRoute;
 use northstar_stream::local_routes::session_table::LocalSessionTable;
 
+mod exact_control;
 mod policy;
 mod roster;
 
@@ -36,45 +37,49 @@ pub(super) async fn resolve_stanza_delivery<'a, A: ClusterAdapters>(
     let is_message_stanza = parsed_stanza
         .as_ref()
         .is_some_and(|document| document.root_element().tag_name().name() == "message");
-    let (resolved_message_delivery, direct_delivery_contract_valid) = if !is_muc && !is_muc_private
-    {
-        match requested_node_message_delivery(json, is_message_stanza) {
-            Ok(Some(request)) => {
-                match resolve_node_message_delivery(
-                    message_policy.verifier(),
-                    request,
-                    stanza,
-                    target,
-                )
-                .await
-                {
-                    Ok(resolved) => {
-                        *acknowledged_delivery = Some(resolved.contract());
-                        (Some(resolved), true)
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            ?error,
-                            target,
-                            "rejected an unverified clustered message delivery contract"
-                        );
-                        (None, false)
+    let exact_control_version = exact_control::is_exact_control_version(json);
+    if exact_control_version && (is_muc || is_muc_private) {
+        return ListenerStep::Continue;
+    }
+    let (resolved_message_delivery, direct_delivery_contract_valid) =
+        if !is_muc && !is_muc_private && !exact_control_version {
+            match requested_node_message_delivery(json, is_message_stanza) {
+                Ok(Some(request)) => {
+                    match resolve_node_message_delivery(
+                        message_policy.verifier(),
+                        request,
+                        stanza,
+                        target,
+                    )
+                    .await
+                    {
+                        Ok(resolved) => {
+                            *acknowledged_delivery = Some(resolved.contract());
+                            (Some(resolved), true)
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                ?error,
+                                target,
+                                "rejected an unverified clustered message delivery contract"
+                            );
+                            (None, false)
+                        }
                     }
                 }
+                Ok(None) => (None, true),
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        target,
+                        "rejected an invalid clustered message delivery contract"
+                    );
+                    (None, false)
+                }
             }
-            Ok(None) => (None, true),
-            Err(error) => {
-                tracing::warn!(
-                    ?error,
-                    target,
-                    "rejected an invalid clustered message delivery contract"
-                );
-                (None, false)
-            }
-        }
-    } else {
-        (None, true)
-    };
+        } else {
+            (None, true)
+        };
     let carbons_only = json["carbons_only"].as_bool().unwrap_or(false);
     let privacy_peer_kind = parsed_stanza
         .as_ref()
@@ -127,6 +132,7 @@ pub(super) struct DirectDeliveryOptions<'a> {
     available_only: bool,
     available_nonnegative_only: bool,
     pub(super) mix_request_id: Option<uuid::Uuid>,
+    pub(super) exact_control: Option<ExactControl>,
 }
 
 pub(super) fn validate_direct_delivery<'a>(
@@ -172,10 +178,20 @@ pub(super) fn validate_direct_delivery<'a>(
             return ListenerStep::Continue;
         }
     }
-    let ListenerStep::Next(RosterPushOptions {
-        roster_version,
-        roster_annotated_stanza,
-    }) = validate_roster_push(json, stanza, roster_requested_only, expected_user_id)
+    let ListenerStep::Next((
+        RosterPushOptions {
+            roster_version,
+            roster_annotated_stanza,
+        },
+        exact_control,
+    )) = exact_control::validate_control_and_roster_push(
+        json,
+        target,
+        stanza,
+        parsed_stanza.as_ref(),
+        roster_requested_only,
+        (expected_user_id, expected_auth_generation),
+    )
     else {
         return ListenerStep::Continue;
     };
@@ -294,9 +310,10 @@ pub(super) fn validate_direct_delivery<'a>(
     } else {
         None
     };
-    let expected_connections = match json.get("expected_connections") {
-        None => None,
-        Some(value) => {
+    let expected_connections = match (json.get("expected_connections"), &exact_control) {
+        (_, Some(control)) => Some(control.expected_connections.clone()),
+        (None, None) => None,
+        (Some(value), None) => {
             let Ok(routes) = serde_json::from_value::<std::collections::BTreeMap<String, uuid::Uuid>>(
                 value.clone(),
             ) else {
@@ -356,6 +373,7 @@ pub(super) fn validate_direct_delivery<'a>(
         available_only,
         available_nonnegative_only,
         mix_request_id,
+        exact_control,
     })
 }
 

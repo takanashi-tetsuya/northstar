@@ -42,33 +42,7 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
         mix_request_id,
         ..
     } = *options;
-    if options.expected_connections.is_some() || durable_delivery.is_some() {
-        let route = ExactMessageRoute {
-            full_jid: jid.to_owned(),
-            account_id: session.user_id,
-            auth_generation: session.auth_generation,
-            connection_id: session.connection_id,
-            node_id: None,
-            priority: Some(session.priority.load(Ordering::Relaxed)),
-            available: Some(session.available.load(Ordering::Relaxed)),
-        };
-        let table = LocalSessionTable::new(Arc::clone(&dispatch.account_routes.sessions));
-        let accepted = table.with_exact_message_route(&route, |current| {
-            if !options.priority_matches(target, current) {
-                return false;
-            }
-            if let Some(durable) = durable_delivery {
-                current
-                    .sender
-                    .try_send_durable(delivery.clone(), durable)
-                    .is_ok()
-            } else {
-                current.sender.try_send(delivery.clone()).is_ok()
-            }
-        });
-        return DirectDeliverySend::Accepted(accepted == Some(true));
-    }
-    let accepted = if roster_requested_only {
+    let send_roster = |session: &OnlineSession| {
         let version = roster_version.expect("cluster roster shape validated before session fanout");
         let annotated = roster_annotated_stanza.map(|stanza| set_to(stanza, jid));
         match session.roster_sync.route(
@@ -95,6 +69,38 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
                 false
             }
         }
+    };
+    if options.expected_connections.is_some() || durable_delivery.is_some() {
+        let route = ExactMessageRoute {
+            full_jid: jid.to_owned(),
+            account_id: session.user_id,
+            auth_generation: session.auth_generation,
+            connection_id: session.connection_id,
+            node_id: None,
+            priority: Some(session.priority.load(Ordering::Relaxed)),
+            available: Some(session.available.load(Ordering::Relaxed)),
+        };
+        let table = LocalSessionTable::new(Arc::clone(&dispatch.account_routes.sessions));
+        let accepted = table.with_exact_message_route(&route, |current| {
+            if !options.priority_matches(target, current) {
+                return false;
+            }
+            if roster_requested_only && options.exact_control.is_some() {
+                return send_roster(current);
+            }
+            if let Some(durable) = durable_delivery {
+                current
+                    .sender
+                    .try_send_durable(delivery.clone(), durable)
+                    .is_ok()
+            } else {
+                current.sender.try_send(delivery.clone()).is_ok()
+            }
+        });
+        return DirectDeliverySend::Accepted(accepted == Some(true));
+    }
+    let accepted = if roster_requested_only {
+        send_roster(session)
     } else if let (Some(source), Some(request_id)) = (mix_delivery, mix_request_id) {
         return handoff_mix_delivery(
             message_policy,

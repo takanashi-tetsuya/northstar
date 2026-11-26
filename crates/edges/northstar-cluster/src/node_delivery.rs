@@ -316,28 +316,68 @@ impl ClusterNodeDelivery {
         stanza: &str,
         options: NodeDeliveryOptions<'_>,
     ) -> Result<NodeDeliveryReceipt> {
+        if options.exact_control.is_some() {
+            anyhow::ensure!(
+                options.exact_message_routes.is_none()
+                    && options.durable_delivery.is_none()
+                    && options.mix_delivery.is_none(),
+                "exact control cannot carry a cluster message delivery contract"
+            );
+            anyhow::ensure!(
+                !options.carbons_only
+                    && options.carbon_muc_scope.is_none()
+                    && !options.mix_capable_only
+                    && !options.transport_receipt_required
+                    && !options.mix_transport_receipt_required,
+                "exact control cannot request Carbons, MIX, or transport receipts"
+            );
+        }
+        let (roster_requested_only, roster_version) = options.exact_control.map_or(
+            (options.roster_requested_only, options.roster_version),
+            |control| {
+                (
+                    control.kind == ExactControlKind::RosterPush,
+                    control.roster_version,
+                )
+            },
+        );
         anyhow::ensure!(
-            !options.roster_requested_only
-                || (options.expected_user_id.is_some() && options.roster_version.is_some()),
+            options.exact_control.is_some()
+                || !roster_requested_only
+                || (options.expected_user_id.is_some() && roster_version.is_some()),
             "cluster roster delivery requires an exact account and version fence"
         );
         anyhow::ensure!(
-            options.roster_annotated_stanza.is_none() || options.roster_requested_only,
+            options.roster_annotated_stanza.is_none() || roster_requested_only,
             "annotated roster payload cannot be used for ordinary delivery"
         );
         anyhow::ensure!(
             options.presence_delivery.is_some() == options.presence_authority.is_some(),
             "cluster presence delivery requires one complete versioned authority"
         );
-        if let Some(authority) = options.presence_authority {
+        if let (Some(control), Some(delivery)) = (options.exact_control, options.presence_delivery)
+        {
+            let kind = match delivery {
+                ClusterPresenceDelivery::CurrentReplay => ExactControlKind::CurrentPresenceReplay,
+                ClusterPresenceDelivery::Subscription => ExactControlKind::SubscriptionPresence,
+            };
             anyhow::ensure!(
-                options.expected_user_id == Some(authority.recipient_id)
-                    && options.expected_auth_generation
-                        == Some(authority.recipient_auth_generation),
+                control.kind == kind,
+                "exact control kind does not match its presence delivery selector"
+            );
+        }
+        if let Some(authority) = options.presence_authority {
+            let (expected_user_id, expected_auth_generation) = options.exact_control.map_or(
+                (options.expected_user_id, options.expected_auth_generation),
+                |control| (Some(control.account_id), Some(control.auth_generation)),
+            );
+            anyhow::ensure!(
+                expected_user_id == Some(authority.recipient_id)
+                    && expected_auth_generation == Some(authority.recipient_auth_generation),
                 "cluster presence recipient fence does not match its authority"
             );
         }
-        if let Some(version) = options.roster_version {
+        if let Some(version) = roster_version.filter(|_| options.exact_control.is_none()) {
             anyhow::ensure!(
                 cluster_roster_push_version(stanza) == Some(version),
                 "cluster roster payload version does not match its delivery fence"
@@ -349,7 +389,7 @@ impl ClusterNodeDelivery {
                 "annotated roster payload exceeds the stanza limit"
             );
             anyhow::ensure!(
-                cluster_roster_push_version(annotated) == options.roster_version,
+                cluster_roster_push_version(annotated) == roster_version,
                 "annotated cluster roster payload version does not match its delivery fence"
             );
         }
@@ -369,12 +409,19 @@ impl ClusterNodeDelivery {
             },
         )?;
         let target_jid = northstar_xmpp_types::jid::canonicalize(target_jid)?;
-        let delivery_contract = outbound_delivery_contract(
-            stanza,
-            &target_jid,
-            options.durable_delivery,
-            options.mix_delivery,
-        )?;
+        let delivery_contract = if let Some(control) = options.exact_control {
+            let document =
+                roxmltree::Document::parse(stanza).context("cluster stanza is invalid XML")?;
+            validate_exact_control(control, &target_jid, &document)?;
+            None
+        } else {
+            outbound_delivery_contract(
+                stanza,
+                &target_jid,
+                options.durable_delivery,
+                options.mix_delivery,
+            )?
+        };
         if options.exclude_jids.len() > MAX_DELIVERY_EXCLUSIONS {
             anyhow::bail!("too many cluster delivery exclusions");
         }
@@ -441,7 +488,6 @@ impl ClusterNodeDelivery {
                 "MIX transport-receipted cluster delivery requires one exact bare-JID MIX source"
             );
         }
-        let legacy_exclude_jid = exclude_jids.first();
         let exact_message_version = options.exact_message_routes.is_some()
             || matches!(
                 delivery_contract,
@@ -453,54 +499,26 @@ impl ClusterNodeDelivery {
         let request_id = uuid::Uuid::new_v4().to_string();
         let nonce = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
         let channel = self.key(format!("node:{node_id}"));
-        let mut payload = serde_json::json!({
-            "protocol_version": if exact_message_version { EXACT_MESSAGE_DELIVERY_VERSION } else { NODE_PROTOCOL_VERSION },
-            "target": target_jid,
-            "stanza": stanza,
-            "delivery": delivery_contract,
-            "carbons_only": options.carbons_only,
-            "blocklist_requested_only": options.blocklist_requested_only,
-            "roster_requested_only": options.roster_requested_only,
-            "expected_user_id": options.expected_user_id,
-            "expected_auth_generation": options.expected_auth_generation,
-            "roster_version": options.roster_version,
-            "roster_annotated_stanza": options.roster_annotated_stanza,
-            "privacy_requested_only": options.privacy_requested_only,
-            "mix_capable_only": options.mix_capable_only,
-            "transport_receipt_required": options.transport_receipt_required,
-            "mix_transport_receipt_required": options.mix_transport_receipt_required,
-            "exclude_jid": legacy_exclude_jid,
-            "exclude_jids": exclude_jids,
-            "request_id": request_id,
-            "ack_nonce": nonce,
-            "primary_one_to_one": options.primary,
-            "available_only": options.available_only,
-            "available_nonnegative_only": options.available_nonnegative_only,
-            "presence_authority_version": options
-                .presence_authority
-                .map(|_| PRESENCE_AUTHORITY_VERSION),
-            "presence_owner_id": options.presence_authority.map(|value| value.owner_id),
-            "presence_owner_auth_generation": options
-                .presence_authority
-                .map(|value| value.owner_auth_generation),
-            "presence_recipient_id": options.presence_authority.map(|value| value.recipient_id),
-            "presence_recipient_auth_generation": options
-                .presence_authority
-                .map(|value| value.recipient_auth_generation),
-            "current_presence_replay": options.presence_delivery
-                == Some(ClusterPresenceDelivery::CurrentReplay),
-            "presence_subscription": options.presence_delivery
-                == Some(ClusterPresenceDelivery::Subscription),
-            "carbon_muc_room": carbon_muc_scope.as_ref().map(|scope| scope.0.as_str()),
-            "carbon_muc_nick": carbon_muc_scope.as_ref().map(|scope| scope.1.as_str()),
-        });
-        if let Some(routes) = options.exact_message_routes {
-            payload["expected_connections"] = serde_json::json!(routes);
-        }
+        let payload = build_node_delivery_payload(
+            &target_jid,
+            stanza,
+            options,
+            delivery_contract,
+            &exclude_jids,
+            carbon_muc_scope
+                .as_ref()
+                .map(|(room, nick)| (room.as_str(), nick.as_str())),
+            (&request_id, &nonce),
+        );
         let mut conn = pool.get().await?;
         let peer_version: Option<String> =
             conn.get(self.key(format!("node:{node_id}:alive"))).await?;
-        if !supports_current_cluster_protocol(peer_version.as_deref()) {
+        let peer_supported = if options.exact_control.is_some() {
+            supports_exact_control(peer_version.as_deref())
+        } else {
+            supports_current_cluster_protocol(peer_version.as_deref())
+        };
+        if !peer_supported {
             if peer_version.is_some() {
                 self.note_incompatible_peer_version(node_id, peer_version.as_deref());
             }
@@ -619,4 +637,83 @@ impl ClusterNodeDelivery {
         .await;
         result
     }
+}
+
+pub(super) fn build_node_delivery_payload(
+    target_jid: &str,
+    stanza: &str,
+    options: NodeDeliveryOptions<'_>,
+    delivery_contract: Option<NodeDeliveryContract>,
+    exclude_jids: &[String],
+    carbon_muc_scope: Option<(&str, &str)>,
+    (request_id, nonce): (&str, &str),
+) -> serde_json::Value {
+    let exact_message_version = options.exact_message_routes.is_some()
+        || matches!(
+            delivery_contract,
+            Some(NodeDeliveryContract::DurableC2sReserved { .. })
+        );
+    let legacy_exclude_jid = exclude_jids.first();
+    let mut payload = serde_json::json!({
+        "protocol_version": if exact_message_version { EXACT_MESSAGE_DELIVERY_VERSION } else { NODE_PROTOCOL_VERSION },
+        "target": target_jid,
+        "stanza": stanza,
+        "delivery": delivery_contract,
+        "carbons_only": options.carbons_only,
+        "blocklist_requested_only": options.blocklist_requested_only,
+        "roster_requested_only": options.roster_requested_only,
+        "expected_user_id": options.expected_user_id,
+        "expected_auth_generation": options.expected_auth_generation,
+        "roster_version": options.roster_version,
+        "roster_annotated_stanza": options.roster_annotated_stanza,
+        "privacy_requested_only": options.privacy_requested_only,
+        "mix_capable_only": options.mix_capable_only,
+        "transport_receipt_required": options.transport_receipt_required,
+        "mix_transport_receipt_required": options.mix_transport_receipt_required,
+        "exclude_jid": legacy_exclude_jid,
+        "exclude_jids": exclude_jids,
+        "request_id": request_id,
+        "ack_nonce": nonce,
+        "primary_one_to_one": options.primary,
+        "available_only": options.available_only,
+        "available_nonnegative_only": options.available_nonnegative_only,
+        "presence_authority_version": options
+            .presence_authority
+            .map(|_| PRESENCE_AUTHORITY_VERSION),
+        "presence_owner_id": options.presence_authority.map(|value| value.owner_id),
+        "presence_owner_auth_generation": options
+            .presence_authority
+            .map(|value| value.owner_auth_generation),
+        "presence_recipient_id": options.presence_authority.map(|value| value.recipient_id),
+        "presence_recipient_auth_generation": options
+            .presence_authority
+            .map(|value| value.recipient_auth_generation),
+        "current_presence_replay": options.presence_delivery
+            == Some(ClusterPresenceDelivery::CurrentReplay),
+        "presence_subscription": options.presence_delivery
+            == Some(ClusterPresenceDelivery::Subscription),
+        "carbon_muc_room": carbon_muc_scope.map(|scope| scope.0),
+        "carbon_muc_nick": carbon_muc_scope.map(|scope| scope.1),
+    });
+    if let Some(control) = options.exact_control {
+        payload["protocol_version"] = serde_json::json!(EXACT_CONTROL_DELIVERY_VERSION);
+        payload["exact_control"] = serde_json::json!(control);
+        payload["expected_connections"] = serde_json::json!(control.expected_connections);
+        payload["expected_user_id"] = serde_json::json!(control.account_id);
+        payload["expected_auth_generation"] = serde_json::json!(control.auth_generation);
+        payload["roster_version"] = serde_json::json!(control.roster_version);
+        payload["roster_requested_only"] =
+            serde_json::json!(control.kind == ExactControlKind::RosterPush);
+        payload["blocklist_requested_only"] =
+            serde_json::json!(control.kind == ExactControlKind::BlocklistPush);
+        payload["privacy_requested_only"] =
+            serde_json::json!(control.kind == ExactControlKind::PrivacyPush);
+        payload["current_presence_replay"] =
+            serde_json::json!(control.kind == ExactControlKind::CurrentPresenceReplay);
+        payload["presence_subscription"] =
+            serde_json::json!(control.kind == ExactControlKind::SubscriptionPresence);
+    } else if let Some(routes) = options.exact_message_routes {
+        payload["expected_connections"] = serde_json::json!(routes);
+    }
+    payload
 }

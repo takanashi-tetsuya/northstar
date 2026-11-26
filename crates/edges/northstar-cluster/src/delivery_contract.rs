@@ -3,6 +3,13 @@
 use super::*;
 pub(super) use northstar_delivery_core::node_delivery::{ClusterMixHandoff, NodeDeliveryReceipt};
 
+mod exact_control;
+
+pub use self::exact_control::{
+    supports_exact_control, validate_exact_control, ExactControl, ExactControlKind,
+    ExactControlSource, EXACT_CONTROL_DELIVERY_VERSION,
+};
+
 pub(super) const EXACT_MESSAGE_DELIVERY_VERSION: &str = "14";
 
 pub(super) fn requires_correlated_ack(peer_version: Option<&str>) -> bool {
@@ -157,6 +164,7 @@ pub(super) struct NodeDeliveryOptions<'a> {
     pub(super) mix_delivery: Option<northstar_stream::outbound::MixDelivery>,
     pub(super) presence_authority: Option<ClusterPresenceAuthority>,
     pub(super) presence_delivery: Option<ClusterPresenceDelivery>,
+    pub(super) exact_control: Option<&'a ExactControl>,
 }
 
 pub use northstar_roster_core::ClusterPresenceAuthority;

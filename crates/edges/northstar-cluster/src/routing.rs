@@ -2,6 +2,9 @@
 
 use super::*;
 
+mod blocking_presence;
+mod policy_push;
+
 impl ClusterManager {
     pub(super) async fn touch_node(&self) -> Result<()> {
         self.maintenance_redis().touch_node().await
@@ -350,51 +353,6 @@ impl ClusterManager {
         .await
     }
 
-    /// Deliver an XEP-0191 push only to resources that successfully requested
-    /// their blocklist on this (possibly resumed) session.
-    pub async fn send_to_node_blocklist(
-        &self,
-        node_id: &str,
-        target_jid: &str,
-        stanza: &str,
-    ) -> Result<bool> {
-        Ok(self
-            .send_to_node_receipt(
-                node_id,
-                target_jid,
-                stanza,
-                NodeDeliveryOptions {
-                    blocklist_requested_only: true,
-                    ..NodeDeliveryOptions::default()
-                },
-            )
-            .await?
-            .delivered)
-    }
-
-    /// Deliver an XEP-0016 list-definition push only to resources that have
-    /// requested privacy-list state during this logical (possibly resumed)
-    /// session.
-    pub async fn send_to_node_privacy(
-        &self,
-        node_id: &str,
-        target_jid: &str,
-        stanza: &str,
-    ) -> Result<bool> {
-        Ok(self
-            .send_to_node_receipt(
-                node_id,
-                target_jid,
-                stanza,
-                NodeDeliveryOptions {
-                    privacy_requested_only: true,
-                    ..NodeDeliveryOptions::default()
-                },
-            )
-            .await?
-            .delivered)
-    }
-
     /// Deliver a presence-subscription notification to available resources.
     /// RFC 6121 roster interest gates roster pushes, not subscription-related
     /// presence. Callers therefore normally pass `false`; the parameter is
@@ -424,48 +382,6 @@ impl ClusterManager {
             )
             .await?
             .delivered)
-    }
-
-    /// Ask another node that owns resources of `owner` to emit those exact
-    /// resources' polite-blocking presence transition.
-    pub async fn send_blocking_presence_change(
-        &self,
-        node_id: &str,
-        owner: &str,
-        targets: &[String],
-        patterns: &[String],
-        available: bool,
-    ) -> Result<()> {
-        let (Some(pool), _) = (&self.pool, &self.client) else {
-            return Ok(());
-        };
-        let owner = northstar_xmpp_types::jid::canonicalize_bare(owner)?;
-        if targets.len() > northstar_xep_0191::MAX_ITEMS
-            || patterns.len() > northstar_xep_0191::MAX_ITEMS
-        {
-            anyhow::bail!("too many blocking presence targets");
-        }
-        let targets = targets
-            .iter()
-            .map(|target| northstar_xmpp_types::jid::canonicalize(target))
-            .collect::<Result<Vec<_>>>()?;
-        let patterns = patterns
-            .iter()
-            .map(|pattern| northstar_xmpp_types::jid::canonicalize(pattern))
-            .collect::<Result<Vec<_>>>()?;
-        let payload = serde_json::json!({
-            "target": owner,
-            "blocking_presence_change": true,
-            "blocking_targets": targets,
-            "blocking_patterns": patterns,
-            "available": available,
-        });
-        let mut conn = pool.get().await?;
-        let channel = self.key(format!("node:{node_id}"));
-        let _ = self
-            .publish_signed(&mut conn, node_id, &channel, payload)
-            .await?;
-        Ok(())
     }
 
     /// Route a Carbon to a peer node while excluding every exact canonical

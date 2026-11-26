@@ -3,6 +3,9 @@
 use crate::ClusterManager;
 use anyhow::Result;
 
+mod blocking_presence;
+mod policy_push;
+
 pub struct RemoteRouteFailure {
     pub node_id: String,
     pub error: anyhow::Error,
@@ -48,54 +51,6 @@ impl ClusterManager {
 
     pub async fn account_has_remote_resources(&self, account: &str) -> Result<bool> {
         Ok(!self.remote_resource_nodes(account).await?.is_empty())
-    }
-
-    pub async fn route_remote_blocklist_push(
-        &self,
-        owner: &str,
-        mut push: impl FnMut() -> String + Send,
-    ) -> Result<Vec<RemoteRouteFailure>> {
-        let mut failures = Vec::new();
-        for node_id in self.remote_resource_nodes(owner).await? {
-            let stanza = push();
-            if let Err(error) = self.send_to_node_blocklist(&node_id, owner, &stanza).await {
-                failures.push(RemoteRouteFailure { node_id, error });
-            }
-        }
-        Ok(failures)
-    }
-
-    pub async fn route_remote_blocking_presence_change(
-        &self,
-        owner: &str,
-        targets: &[String],
-        patterns: &[String],
-        available: bool,
-    ) -> Result<Vec<RemoteRouteFailure>> {
-        let mut failures = Vec::new();
-        for node_id in self.remote_resource_nodes(owner).await? {
-            if let Err(error) = self
-                .send_blocking_presence_change(&node_id, owner, targets, patterns, available)
-                .await
-            {
-                failures.push(RemoteRouteFailure { node_id, error });
-            }
-        }
-        Ok(failures)
-    }
-
-    pub async fn route_remote_privacy_push(
-        &self,
-        account: &str,
-        push: &str,
-    ) -> Result<Vec<RemoteRouteFailure>> {
-        let mut failures = Vec::new();
-        for node_id in self.remote_resource_nodes(account).await? {
-            if let Err(error) = self.send_to_node_privacy(&node_id, account, push).await {
-                failures.push(RemoteRouteFailure { node_id, error });
-            }
-        }
-        Ok(failures)
     }
 
     /// A roster removal's subscription presence is best effort, as it was

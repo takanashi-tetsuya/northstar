@@ -1,4 +1,5 @@
 mod active_selection;
+mod communication_policy;
 mod decision;
 mod list_commands;
 mod query;
@@ -7,6 +8,7 @@ pub use active_selection::{
     clear_active_privacy_session, refresh_active_privacy_session, renew_active_privacy_selection,
     set_active_privacy_list, set_active_privacy_list_in_transaction,
 };
+pub use communication_policy::read_communication_policies;
 pub use decision::{
     privacy_denies, privacy_denies_from_facts, privacy_denies_in_snapshot,
     privacy_denies_in_transaction, session_privacy_denies,
@@ -51,6 +53,9 @@ pub const PRIVACY_DECISION_FACTS: &str = "SELECT requested.position AS privacy_p
 mod application_repository {
     use anyhow::Result;
     use northstar_roster_application::privacy::*;
+    use northstar_roster_application::{
+        CommunicationDecision, CommunicationPolicyQuery, CommunicationPolicyReader,
+    };
     use sqlx::PgPool;
     use uuid::Uuid;
     #[derive(Clone)]
@@ -142,6 +147,14 @@ mod application_repository {
             kind: PrivacyStanzaKind,
         ) -> Result<bool> {
             super::privacy_denies(&self.pool, owner_id, active_privacy_list, candidate, kind).await
+        }
+    }
+    impl CommunicationPolicyReader for PostgresPrivacyRepository {
+        async fn read_communication_policies(
+            &self,
+            queries: &[CommunicationPolicyQuery],
+        ) -> Result<Vec<CommunicationDecision>> {
+            super::read_communication_policies(&self.pool, queries).await
         }
     }
 }

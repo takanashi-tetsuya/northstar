@@ -8,6 +8,12 @@ use crate::{
 use northstar_message_application::messaging::ExactMessageRoute;
 use northstar_stream::local_routes::session_table::LocalSessionTable;
 
+mod policy;
+mod roster;
+
+use self::policy::permits_direct_delivery;
+use self::roster::{roster_interest_missing, validate_roster_push, RosterPushOptions};
+
 pub(super) struct StanzaDelivery<'a> {
     stanza: &'a str,
     is_message_stanza: bool,
@@ -166,37 +172,13 @@ pub(super) fn validate_direct_delivery<'a>(
             return ListenerStep::Continue;
         }
     }
-    let roster_version = match json.get("roster_version") {
-        None | Some(serde_json::Value::Null) => None,
-        Some(value) => value.as_i64(),
-    };
-    let roster_annotated_stanza = match json.get("roster_annotated_stanza") {
-        None | Some(serde_json::Value::Null) => None,
-        Some(serde_json::Value::String(value))
-            if value.len() <= northstar_stream::MAX_XMPP_FRAME_BYTES
-                && roxmltree::Document::parse(value).is_ok() =>
-        {
-            Some(value.as_str())
-        }
-        Some(_) => return ListenerStep::Continue,
-    };
-    if roster_requested_only && (expected_user_id.is_none() || roster_version.is_none()) {
+    let ListenerStep::Next(RosterPushOptions {
+        roster_version,
+        roster_annotated_stanza,
+    }) = validate_roster_push(json, stanza, roster_requested_only, expected_user_id)
+    else {
         return ListenerStep::Continue;
-    }
-    if roster_requested_only {
-        let Some(roster_version) = roster_version else {
-            return ListenerStep::Continue;
-        };
-        if cluster_roster_push_version(stanza) != Some(roster_version)
-            || roster_annotated_stanza
-                .is_some_and(|value| cluster_roster_push_version(value) != Some(roster_version))
-        {
-            return ListenerStep::Continue;
-        }
-    }
-    if !roster_requested_only && (roster_version.is_some() || roster_annotated_stanza.is_some()) {
-        return ListenerStep::Continue;
-    }
+    };
     let privacy_requested_only = json["privacy_requested_only"].as_bool().unwrap_or(false);
     let mix_capable_only = match json.get("mix_capable_only") {
         None => false,
@@ -452,7 +434,7 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
                 session.auth_generation,
             )
             || (blocklist_requested_only && !session.blocklist_requested.load(Ordering::Acquire))
-            || (roster_requested_only && !session.roster_requested.load(Ordering::Acquire))
+            || roster_interest_missing(roster_requested_only, &session)
             || (privacy_requested_only && !session.privacy_requested.load(Ordering::Acquire))
             || carbon_muc_scope.as_ref().is_some_and(|(room, nick)| {
                 session
@@ -515,29 +497,18 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
             }
             continue;
         }
-        if !blocklist_requested_only && !roster_requested_only && !privacy_requested_only {
-            if let Some((peer, kind)) = privacy_peer_kind.as_ref() {
-                match message_policy
-                    .privacy_allows_session(
-                        session.user_id,
-                        session.connection_id,
-                        active_privacy_list(&session.privacy_active).as_deref(),
-                        peer,
-                        *kind,
-                    )
-                    .await
-                {
-                    Ok(true) => {}
-                    Ok(false) => continue,
-                    Err(error) => {
-                        // Delivery policy reads are fail closed.
-                        // A database outage must never turn a deny
-                        // list into an allow list on another node.
-                        tracing::warn!(?error, %jid, "privacy policy lookup failed during clustered delivery");
-                        continue;
-                    }
-                }
-            }
+        if !permits_direct_delivery(
+            message_policy,
+            &session,
+            &jid,
+            privacy_peer_kind,
+            blocklist_requested_only,
+            roster_requested_only,
+            privacy_requested_only,
+        )
+        .await
+        {
+            continue;
         }
         if mix_capable_only {
             match mix_caps.capability(&jid) {

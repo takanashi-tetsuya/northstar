@@ -1,7 +1,8 @@
+use super::full_jid_iq::{full_jid_iq_visible, missing_full_jid_iq_needs_error};
 use super::{
-    authoritative_client_stanza, full_jid_iq_visible, is_caps_disco_get, is_stream_close,
-    missing_full_jid_iq_needs_error, pre_auth_registration_iq, resource_binding_iq, tls_failure,
-    valid_bind_payload, valid_client_stanza_namespace, valid_empty_iq_payload, xmpp_version_os,
+    authoritative_client_stanza, is_caps_disco_get, is_stream_close, pre_auth_registration_iq,
+    resource_binding_iq, tls_failure, valid_bind_payload, valid_client_stanza_namespace,
+    valid_empty_iq_payload, xmpp_version_os,
 };
 use northstar_xml_builder::stanza_validation::validate_client_stanza;
 use roxmltree::Document;

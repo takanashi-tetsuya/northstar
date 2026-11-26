@@ -2,6 +2,12 @@
 
 use super::*;
 
+mod presence;
+mod roster;
+mod unavailable;
+
+pub use self::unavailable::ClusterUnavailableDelivery;
+
 /// The remote cluster worker owns a concrete C2S route while awaiting a
 /// typed MIX hand-off.  If the request task is cancelled or the driver drops
 /// its completion channel, the route is torn down before an old queued item
@@ -178,49 +184,6 @@ pub struct ClusterNodeDelivery {
     pub(super) pending_acks: Arc<dashmap::DashMap<String, PendingClusterAck>>,
 }
 
-#[derive(Clone)]
-pub struct ClusterUnavailableDelivery {
-    pub(super) routes: ClusterListenerPresenceRoutes,
-    pub(super) sender: ClusterNodeDelivery,
-}
-
-impl ClusterUnavailableDelivery {
-    /// Preserve PostgreSQL route order and require the signed delivery ACK
-    /// before considering a cleanup unavailable notification complete.
-    pub async fn send_unavailable_to_remote_nodes(
-        &self,
-        target_jid: &str,
-        stanza: &str,
-        exclude_jid: &str,
-        bare_target: bool,
-    ) -> Result<()> {
-        for node_id in self.routes.lookup_nodes(target_jid).await? {
-            if node_id == self.routes.node_id {
-                continue;
-            }
-            let exclusions = [exclude_jid];
-            let receipt = self
-                .sender
-                .send_to_node_receipt(
-                    &node_id,
-                    target_jid,
-                    stanza,
-                    NodeDeliveryOptions {
-                        available_only: bare_target,
-                        exclude_jids: &exclusions,
-                        ..NodeDeliveryOptions::default()
-                    },
-                )
-                .await?;
-            anyhow::ensure!(
-                receipt.acknowledged,
-                "cluster presence delivery was not acknowledged"
-            );
-        }
-        Ok(())
-    }
-}
-
 impl ClusterNodeDelivery {
     pub async fn send_mix(
         &self,
@@ -299,89 +262,6 @@ impl ClusterNodeDelivery {
     ) -> Result<bool> {
         Ok(self
             .send_to_node_receipt(node_id, target_jid, stanza, NodeDeliveryOptions::default())
-            .await?
-            .delivered)
-    }
-
-    pub async fn send_roster_push(
-        &self,
-        node_id: &str,
-        target_jid: &str,
-        expected_user_id: uuid::Uuid,
-        roster_version: i64,
-        stanza: &str,
-        annotated_stanza: Option<&str>,
-    ) -> Result<bool> {
-        Ok(self
-            .send_to_node_receipt(
-                node_id,
-                target_jid,
-                stanza,
-                NodeDeliveryOptions {
-                    roster_requested_only: true,
-                    expected_user_id: Some(expected_user_id),
-                    roster_version: Some(roster_version),
-                    roster_annotated_stanza: annotated_stanza,
-                    ..NodeDeliveryOptions::default()
-                },
-            )
-            .await?
-            .delivered)
-    }
-
-    pub async fn send_account_removal_presence(
-        &self,
-        node_id: &str,
-        target_jid: &str,
-        stanza: &str,
-    ) -> Result<bool> {
-        Ok(self
-            .send_to_node_receipt(node_id, target_jid, stanza, NodeDeliveryOptions::default())
-            .await?
-            .delivered)
-    }
-
-    pub async fn send_available_presence(
-        &self,
-        node_id: &str,
-        target_jid: &str,
-        stanza: &str,
-    ) -> Result<bool> {
-        Ok(self
-            .send_to_node_receipt(
-                node_id,
-                target_jid,
-                stanza,
-                NodeDeliveryOptions {
-                    available_only: true,
-                    ..NodeDeliveryOptions::default()
-                },
-            )
-            .await?
-            .delivered)
-    }
-
-    pub async fn send_current_presence_replay(
-        &self,
-        node_id: &str,
-        target_jid: &str,
-        stanza: &str,
-        authority: ClusterPresenceAuthority,
-    ) -> Result<bool> {
-        Ok(self
-            .send_to_node_receipt(
-                node_id,
-                target_jid,
-                stanza,
-                NodeDeliveryOptions {
-                    available_only: true,
-                    expected_user_id: Some(authority.recipient_id),
-                    expected_auth_generation: Some(authority.recipient_auth_generation),
-                    presence_authority: Some(authority),
-                    presence_delivery: Some(ClusterPresenceDelivery::CurrentReplay),
-                    ..NodeDeliveryOptions::default()
-                },
-            )
             .await?
             .delivered)
     }

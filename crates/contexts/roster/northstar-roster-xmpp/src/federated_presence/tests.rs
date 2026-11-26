@@ -1,4 +1,5 @@
-use super::*;
+use super::render::{canonical_subscription_stanza, presence_probe_status_response};
+use roxmltree::Document;
 
 #[test]
 fn probe_status_responses_preserve_correlation_and_escape_addresses() {

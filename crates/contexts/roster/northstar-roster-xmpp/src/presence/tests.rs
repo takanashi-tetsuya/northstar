@@ -1,10 +1,13 @@
-use super::{
+use super::availability::{
     directed_presence_capacity_reached, directed_presence_target_is_outside_bare_scope,
-    full_jid_probe_available_response, refresh_avatar_presence_with_hash,
-    set_last_broadcast_presence, should_probe_contact_on_presence,
-    should_resend_pending_outbound_subscription, stamped_subscription_presence,
-    unsubscribed_probe_response, AvatarPresenceGate,
+    unsubscribed_probe_response,
 };
+use super::avatar::refresh_avatar_presence_with_hash;
+use super::broadcast::{set_last_broadcast_presence, should_probe_contact_on_presence};
+use super::subscriptions::{
+    should_resend_pending_outbound_subscription, stamped_subscription_presence,
+};
+use super::{full_jid_probe_available_response, AvatarPresenceGate};
 use northstar_presence_core::{directed_recipient_matches, offline_replay_became_eligible};
 use northstar_stream::local_routes::session::{test_online_session, OnlineSession};
 use std::cell::{Cell, RefCell};

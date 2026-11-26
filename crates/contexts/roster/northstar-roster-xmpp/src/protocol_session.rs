@@ -3,11 +3,10 @@
 //! it.
 
 use crate::presence::{
-    announced_priority, announced_show, broadcast_presence, deliver_service_messages,
-    directed_presence_gate, inject_vcard_avatar_hash, route_directed_presence, PresenceGate,
+    broadcast_presence, deliver_service_messages, directed_presence_gate, inject_vcard_avatar_hash,
+    route_directed_presence, PresenceGate,
 };
 use crate::roster::RosterGetOutcome;
-use crate::PostAcceptFailureTelemetry;
 use crate::PresenceRouting;
 use crate::RosterSessionHost;
 use anyhow::Result;
@@ -18,7 +17,6 @@ use northstar_roster_application::privacy::{PrivacyRepository, PrivacyService};
 use northstar_roster_application::{
     BeginRosterSyncError, RosterRepository, RosterService, RosterSyncPermit, S2sOutboxPolicy,
 };
-use northstar_roster_application::{RosterFlushBatch, RosterSyncGate};
 use northstar_roster_core::PresenceAccount;
 use northstar_roster_core::{LocalRosterContact, RosterChange};
 use northstar_stream::protocol::{ProtocolSession, SessionHost, SessionIdentityHost};
@@ -27,7 +25,12 @@ use northstar_xml_builder::stanza::stanza_error;
 use roxmltree::Node;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+
+mod presence_staging;
+mod roster_sync;
+
+use self::presence_staging::{stage_availability, stage_show_and_priority, StagedAvailability};
+use self::roster_sync::{flush_roster_sync, RosterSyncFlush};
 
 // From src/xmpp/protocol/roster_identity.rs.
 impl<H: SessionHost> crate::SessionIdentity for ProtocolSession<H> {
@@ -553,77 +556,6 @@ impl<H: SessionHost + RosterSessionHost> RosterHandlers for ProtocolSession<H> {
     }
 }
 
-struct RosterSyncFlush {
-    failure_telemetry: PostAcceptFailureTelemetry,
-    outbound: northstar_stream::outbound::OutboundSender,
-    gate: Arc<RosterSyncGate>,
-    disconnect: tokio_util::sync::CancellationToken,
-    permit: RosterSyncPermit,
-    snapshot_version: i64,
-    initial_delta: Vec<String>,
-    target: String,
-}
-
-async fn flush_roster_sync(request: RosterSyncFlush) {
-    let RosterSyncFlush {
-        failure_telemetry,
-        outbound,
-        gate,
-        disconnect,
-        permit,
-        snapshot_version,
-        initial_delta,
-        target,
-    } = request;
-    async fn enqueue(
-        outbound: &northstar_stream::outbound::OutboundSender,
-        stanza: String,
-    ) -> bool {
-        matches!(
-            tokio::time::timeout(Duration::from_secs(5), outbound.send(stanza)).await,
-            Ok(Ok(()))
-        )
-    }
-
-    for stanza in initial_delta {
-        if !enqueue(&outbound, stanza).await {
-            gate.fail(permit);
-            outbound.disconnect_backpressured_transport();
-            disconnect.cancel();
-            failure_telemetry.record_failure();
-            tracing::warn!(%target, "roster delta could not enter the transport; forcing a full resync");
-            return;
-        }
-    }
-
-    let mut batch = gate.start_flush(permit, snapshot_version);
-    loop {
-        match batch {
-            RosterFlushBatch::Batch(pushes) => {
-                for (version, stanza) in pushes {
-                    if !enqueue(&outbound, stanza).await {
-                        gate.fail(permit);
-                        outbound.disconnect_backpressured_transport();
-                        disconnect.cancel();
-                        failure_telemetry.record_failure();
-                        tracing::warn!(%target, version, "buffered roster push could not enter the transport; forcing a full resync");
-                        return;
-                    }
-                }
-                batch = gate.next_flush_batch(permit);
-            }
-            RosterFlushBatch::Complete => return,
-            RosterFlushBatch::Failed | RosterFlushBatch::Superseded => {
-                outbound.disconnect_backpressured_transport();
-                disconnect.cancel();
-                failure_telemetry.record_failure();
-                tracing::warn!(%target, "roster synchronization fence failed; forcing a full resync");
-                return;
-            }
-        }
-    }
-}
-
 // From src/xmpp/protocol/presence.rs.
 /// The presence handlers the root calls on the session.
 #[allow(async_fn_in_trait)] // Called on the root's concrete session type only.
@@ -690,32 +622,15 @@ impl<H: RosterSessionHost + PresenceRouting> PresenceHandlers for ProtocolSessio
             self.presence.mix_presence_fallback_suppressed.clear();
         }
         let user = self.authenticated.as_ref().expect("authenticated session");
-        let now_available = kind == "available";
-        let was_available = self
-            .available
-            .as_ref()
-            .is_some_and(|available| available.load(Ordering::Acquire));
-        let first_available = now_available && !was_available;
-        let previous_priority = self.priority.load(Ordering::Relaxed);
-        let availability_generation = if was_available != now_available {
-            self.presence
-                .availability_generation
-                .fetch_add(1, Ordering::AcqRel)
-                + 1
-        } else {
-            self.presence
-                .availability_generation
-                .load(Ordering::Acquire)
-        };
-        if let Some(available) = &self.available {
-            available.store(now_available, Ordering::Release);
-        }
-        self.commit_caps_observation(root, &from);
+        let StagedAvailability {
+            now_available,
+            was_available,
+            first_available,
+            previous_priority,
+            availability_generation,
+        } = stage_availability(self, root, kind, &from);
         drop(mix_presence_epoch);
-        let show = announced_show(root, kind);
-        self.show.store(show, Ordering::Relaxed);
-        let priority = announced_priority(root, kind);
-        self.priority.store(priority, Ordering::Relaxed);
+        let priority = stage_show_and_priority(self, root, kind);
         self.presence.route_presence_seq += 1;
         self.host().publish_route_presence(
             &from,

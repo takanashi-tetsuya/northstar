@@ -612,7 +612,7 @@ for (const context of fs.readdirSync(contextsDirectory, { withFileTypes: true })
   for (const crate of fs.readdirSync(contextDirectory, { withFileTypes: true }).filter((entry) => entry.isDirectory())) {
     const file = path.join(contextDirectory, crate.name, 'src', 'protocol_session.rs');
     if (!fs.existsSync(file)) continue;
-    const parts = fs.readFileSync(file, 'utf8').split(/^\/\/ From src\/xmpp\/protocol\/([\w/]+)\.rs\.$/m);
+    const parts = readProductionModule(path.relative(root, file), { root }).split(/^\/\/ From src\/xmpp\/protocol\/([\w/]+)\.rs\.$/m);
     for (let index = 1; index < parts.length; index += 2) {
       const name = `${parts[index].split('/')[0]}.rs`;
       sessionImplSections.set(name, `${sessionImplSections.get(name) ?? ''}\n${parts[index + 1]}`);
@@ -2544,8 +2544,8 @@ if (!passkeyFinishSource.includes('State(state): State<PasskeyLoginFinishContext
   throw new Error('Passkey login completion must use its narrow service context');
 }
 const presenceProtocol = protocolModuleSource('presence.rs');
-const presenceClusterRouting = read('crates/edges/northstar-cluster/src/presence_routing.rs');
-const presenceDelivery = read('crates/contexts/roster/northstar-roster-xmpp/src/presence_delivery.rs');
+const presenceClusterRouting = readProductionModule('crates/edges/northstar-cluster/src/presence_routing.rs', { root });
+const presenceDelivery = readProductionModule('crates/contexts/roster/northstar-roster-xmpp/src/presence_delivery.rs', { root });
 if (/\bself\.(?:state|host)\s*\.metrics\b/.test(presenceProtocol)
     || /\b(?:self|host)\s*\.\s*metrics\b/.test(presenceDelivery)
     || /\.metrics\b/.test(presenceClusterRouting)
@@ -2716,7 +2716,8 @@ if (!clusterWorkers.includes('account_revocation_worker_context(state)')
 }
 const c2sTelemetry = read('crates/contexts/session/northstar-session-application/src/telemetry.rs');
 const c2sProtocol = readRoleSplitFile('crates/edges/northstar-stream/src/protocol.rs', { root });
-const c2sDispatch = read('crates/edges/northstar-stream/src/protocol/dispatch.rs');
+const c2sDispatchPath = 'crates/edges/northstar-stream/src/protocol/dispatch.rs';
+const c2sDispatch = readProductionModule(c2sDispatchPath, { root });
 if (!read('crates/contexts/session/northstar-session-application/src/post_actions.rs')
       .includes('struct PostActionTelemetry')
     || !c2sTelemetry.includes('struct InboundStanzaTelemetry')
@@ -2737,7 +2738,7 @@ if (!read('crates/contexts/session/northstar-session-application/src/post_action
     || /\b(?:ServerNode|Metrics|PgPool|C2sRuntimePorts)\b/.test(c2sTelemetry)
     || !c2sProtocol.includes('c2s_post_action_telemetry()')
     || /(?:self\.)?(?:state|host)\.metrics\.post_action_/.test(c2sProtocol)
-    || !/pub async fn handle\(&mut self, xml: &str\) -> Result<Action> \{\s*self\.host\.inbound_stanza_telemetry\(\)\.received\(\);/.test(c2sDispatch)
+    || !/pub async fn handle\(&mut self, xml: &str\) -> Result<Action> \{\s*self\.host\.inbound_stanza_telemetry\(\)\.received\(\);/.test(read(c2sDispatchPath))
     || /self\.(?:state|host)\.metrics\b/.test(c2sDispatch)
     || ['privacy.rs', 'blocking.rs', 'roster.rs'].some((name) =>
       /\b(?:self\.)?(?:state|host)\s*\.\s*metrics\b/.test(protocolModuleSource(name, read)))

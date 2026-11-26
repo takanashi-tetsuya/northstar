@@ -34,7 +34,7 @@ impl PreferencePatch {
 pub struct CommittedPreference {
     pub participant_id: MixLocalParticipantId,
     pub preference: MixParticipantPreference,
-    pub roster_changes: Vec<(Uuid, northstar_roster_core::RosterChange)>,
+    pub roster_changes: Vec<CommittedMixRosterDelta>,
 }
 
 #[derive(Clone, Debug, Default)]

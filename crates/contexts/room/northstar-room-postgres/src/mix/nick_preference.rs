@@ -1,6 +1,8 @@
 //! MIX nick registration and participant preferences.
 
 use super::*;
+use northstar_room_application::mix_service::{CommittedMixRosterDelta, PreferencePatch};
+use northstar_room_core::mix::{MixChannelId, MixLocalParticipantId, MixParticipantId};
 
 #[derive(Clone, Debug)]
 pub enum RegisterMixNickOutcome {
@@ -214,7 +216,7 @@ pub fn validate_mix_participant_preference(preference: &MixParticipantPreference
 
 enum PreferenceUpdate<'a> {
     Replacement(&'a MixParticipantPreference),
-    Patch(northstar_room_application::mix_service::PreferencePatch),
+    Patch(PreferencePatch),
 }
 
 fn incompatible_preference(channel: &MixChannel, preference: &MixParticipantPreference) -> bool {
@@ -241,22 +243,29 @@ pub async fn update_mix_participant_preference(
     Ok(apply_preference_update(
         effects,
         pool,
-        northstar_room_core::mix::MixChannelId::new(channel_id),
+        MixChannelId::new(channel_id),
         &actor,
         PreferenceUpdate::Replacement(preference),
         payloads,
         federated,
     )
     .await?
-    .map(|(outcome, _)| outcome))
+    .map(|outcome| MixParticipantPreferenceUpdateOutcome {
+        participant: outcome.participant,
+        roster_changes: outcome
+            .roster_changes
+            .into_iter()
+            .map(|(delta, _)| (delta.account.id, delta.change))
+            .collect(),
+    }))
 }
 
 pub(crate) async fn apply_preference_patch(
     effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
-    channel_id: northstar_room_core::mix::MixChannelId,
+    channel_id: MixChannelId,
     actor: &northstar_room_core::mix::MixRealJid,
-    patch: northstar_room_application::mix_service::PreferencePatch,
+    patch: PreferencePatch,
     payloads: &dyn MixEventPayloadRenderer,
     federated: Option<&FederatedMixMutation>,
 ) -> Result<Option<northstar_room_application::mix_service::CommittedPreference>> {
@@ -270,34 +279,50 @@ pub(crate) async fn apply_preference_patch(
         federated,
     )
     .await?
-    .map(|(outcome, preference)| {
-        northstar_room_application::mix_service::CommittedPreference {
-            participant_id: northstar_room_core::mix::MixLocalParticipantId::new(
-                outcome.participant.participant_id,
-            ),
-            preference,
-            roster_changes: outcome.roster_changes,
-        }
-    }))
+    .map(
+        |outcome| northstar_room_application::mix_service::CommittedPreference {
+            participant_id: MixLocalParticipantId::new(outcome.participant.participant_id),
+            preference: outcome.preference,
+            roster_changes: outcome
+                .roster_changes
+                .into_iter()
+                .filter_map(|(delta, disabled)| (!disabled).then_some(delta))
+                .collect(),
+        },
+    ))
+}
+
+struct PreferenceCommit {
+    participant: MixParticipant,
+    preference: MixParticipantPreference,
+    roster_changes: Vec<(CommittedMixRosterDelta, bool)>,
 }
 
 async fn apply_preference_update(
     effects: &impl crate::effects::RoomEffects,
     pool: &PgPool,
-    channel_id: northstar_room_core::mix::MixChannelId,
+    channel_key: MixChannelId,
     actor: &northstar_room_core::mix::MixRealJid,
     update: PreferenceUpdate<'_>,
     payloads: &dyn MixEventPayloadRenderer,
     federated: Option<&FederatedMixMutation>,
-) -> Result<
-    Option<(
-        MixParticipantPreferenceUpdateOutcome,
-        MixParticipantPreference,
-    )>,
-> {
-    let channel_id = channel_id.as_uuid();
+) -> Result<Option<PreferenceCommit>> {
     let (mut transaction, delivery_fence) = begin_mix_delivery_admission(pool).await?;
     guard_federated_mix_mutation_tx(&mut transaction, federated).await?;
+    let accounts = if matches!(
+        &update,
+        PreferenceUpdate::Patch(PreferencePatch {
+            share_presence: None,
+            ..
+        })
+    ) {
+        BTreeMap::new()
+    } else {
+        let candidates =
+            hosted_pam_candidates_tx(&mut transaction, &channel_key, Some(actor)).await?;
+        lock_pam_accounts_with_generation_tx(&mut transaction, &candidates).await?
+    };
+    let channel_id = channel_key.as_uuid();
     let channel = sqlx::query("SELECT * FROM mix_channels WHERE id = $1 FOR UPDATE")
         .bind(channel_id)
         .fetch_optional(&mut *transaction)
@@ -351,6 +376,17 @@ async fn apply_preference_update(
             }
             preference
         }
+    };
+    let channel_jid = channel.jid();
+    let local_users = if old_preference.share_presence != preference.share_presence {
+        let users = hosted_pam_candidates_tx(&mut transaction, &channel_key, Some(actor)).await?;
+        anyhow::ensure!(
+            users.iter().all(|user| accounts.contains_key(user)),
+            "MIX preference PAM membership changed during admission"
+        );
+        users
+    } else {
+        Vec::new()
     };
     sqlx::query(
         "INSERT INTO mix_participant_preferences (channel_id, participant_id, jid_visibility, private_messages, vcard, share_presence) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (channel_id, participant_id) DO UPDATE SET jid_visibility = EXCLUDED.jid_visibility, private_messages = EXCLUDED.private_messages, vcard = EXCLUDED.vcard, share_presence = EXCLUDED.share_presence, updated_at = NOW()",
@@ -485,28 +521,27 @@ async fn apply_preference_update(
         payloads,
     )
     .await?;
-    let mut roster_changes = Vec::new();
-    if old_preference.share_presence != preference.share_presence {
-        let local_users = sqlx::query_scalar::<_, Uuid>(
-            "SELECT user_id FROM mix_pam_memberships
-              WHERE channel_jid=$1 AND participant_id=$2 ORDER BY user_id",
+    let mut roster_changes = Vec::with_capacity(local_users.len());
+    let annotation =
+        MixParticipantId::Local(MixLocalParticipantId::new(participant.participant_id));
+    for user_id in local_users {
+        let (account, disabled, auth_generation) = &accounts[&user_id];
+        let change = upsert_mix_roster_tx(
+            effects,
+            &mut transaction,
+            user_id,
+            &channel_jid,
+            channel.name.as_deref(),
+            preference.share_presence,
         )
-        .bind(channel.jid())
-        .bind(participant.participant_id.to_string())
-        .fetch_all(&mut *transaction)
         .await?;
-        for user_id in local_users {
-            let change = upsert_mix_roster_tx(
-                effects,
-                &mut transaction,
-                user_id,
-                &channel.jid(),
-                channel.name.as_deref(),
-                preference.share_presence,
-            )
-            .await?;
-            roster_changes.push((user_id, change));
-        }
+        roster_changes.push((
+            CommittedMixRosterDelta {
+                auth_generation: Some(*auth_generation),
+                ..CommittedMixRosterDelta::new(account.clone(), change, Some(annotation.clone()))
+            },
+            *disabled,
+        ));
     }
     finalize_federated_mix_mutation_tx(
         effects,
@@ -519,11 +554,9 @@ async fn apply_preference_update(
     )
     .await?;
     transaction.commit().await?;
-    Ok(Some((
-        MixParticipantPreferenceUpdateOutcome {
-            participant,
-            roster_changes,
-        },
+    Ok(Some(PreferenceCommit {
+        participant,
         preference,
-    )))
+        roster_changes,
+    }))
 }

@@ -1,4 +1,4 @@
-use super::Repository;
+use super::{Call, Repository};
 use anyhow::Result;
 use northstar_room_application::mix_service::{
     CommittedPreference, ConfigPatch, FederatedMixMutation, InfoPatch, MixAdministrationRepository,
@@ -8,12 +8,24 @@ use northstar_room_application::mix_service::{
 impl MixAdministrationRepository for Repository {
     async fn update_preference(
         &self,
-        _channel_id: MixChannelId,
-        _actor: &MixRealJid,
-        _patch: PreferencePatch,
+        channel_id: MixChannelId,
+        actor: &MixRealJid,
+        patch: PreferencePatch,
         _federated: Option<&FederatedMixMutation>,
     ) -> Result<Option<CommittedPreference>> {
-        panic!("unexpected repository call: update_preference")
+        self.0.record(Call::PreferenceWrite(
+            channel_id.as_uuid(),
+            actor.to_string(),
+            patch,
+        ));
+        Ok(Some(
+            self.0
+                .preference_commit
+                .lock()
+                .unwrap()
+                .take()
+                .expect("unexpected repository call: update_preference"),
+        ))
     }
 
     async fn update_info(

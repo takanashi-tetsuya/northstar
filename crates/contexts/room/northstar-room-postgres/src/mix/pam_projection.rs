@@ -10,14 +10,26 @@ pub(super) async fn lock_pam_accounts_tx(
     transaction: &mut Transaction<'_, Postgres>,
     users: &[Uuid],
 ) -> Result<BTreeMap<Uuid, (MixAccount, bool)>> {
+    Ok(lock_pam_accounts_with_generation_tx(transaction, users)
+        .await?
+        .into_iter()
+        .map(|(id, (account, disabled, _))| (id, (account, disabled)))
+        .collect())
+}
+
+pub(super) async fn lock_pam_accounts_with_generation_tx(
+    transaction: &mut Transaction<'_, Postgres>,
+    users: &[Uuid],
+) -> Result<BTreeMap<Uuid, (MixAccount, bool, i64)>> {
     if users.is_empty() {
         return Ok(BTreeMap::new());
     }
-    let rows =
-        sqlx::query("SELECT id,username,is_disabled FROM northstar_lock_user_rows_update($1)")
-            .bind(users)
-            .fetch_all(&mut **transaction)
-            .await?;
+    let rows = sqlx::query(
+        "SELECT id,username,is_disabled,auth_generation FROM northstar_lock_user_rows_update($1)",
+    )
+    .bind(users)
+    .fetch_all(&mut **transaction)
+    .await?;
     Ok(rows
         .into_iter()
         .map(|row| {
@@ -25,7 +37,10 @@ pub(super) async fn lock_pam_accounts_tx(
                 id: row.get("id"),
                 username: row.get("username"),
             };
-            (account.id, (account, row.get("is_disabled")))
+            (
+                account.id,
+                (account, row.get("is_disabled"), row.get("auth_generation")),
+            )
         })
         .collect())
 }
@@ -36,20 +51,29 @@ pub(super) async fn lock_hosted_pam_accounts_tx(
     actor: Option<&MixRealJid>,
     explicit_user: Option<Uuid>,
 ) -> Result<BTreeMap<Uuid, (MixAccount, bool)>> {
-    let mut users: Vec<Uuid> = sqlx::query_scalar(
+    let mut users = hosted_pam_candidates_tx(transaction, channel, actor).await?;
+    users.extend(explicit_user);
+    lock_pam_accounts_tx(transaction, &users).await
+}
+
+pub(super) async fn hosted_pam_candidates_tx(
+    transaction: &mut Transaction<'_, Postgres>,
+    channel: &MixChannelId,
+    actor: Option<&MixRealJid>,
+) -> Result<Vec<Uuid>> {
+    sqlx::query_scalar(
         "SELECT pam.user_id FROM mix_channels channel
            JOIN mix_pam_memberships pam ON pam.channel_jid=channel.localpart || '@' || channel.service_domain
           WHERE channel.id=$1 AND ($2::text IS NULL OR EXISTS (
               SELECT 1 FROM mix_participants participant
                WHERE participant.channel_id=channel.id AND participant.jid=$2
-                 AND participant.participant_id::text=pam.participant_id))",
+                 AND participant.participant_id::text=pam.participant_id)) ORDER BY pam.user_id",
     )
     .bind(channel.as_uuid())
     .bind(actor.map(MixRealJid::as_str))
     .fetch_all(&mut **transaction)
-    .await?;
-    users.extend(explicit_user);
-    lock_pam_accounts_tx(transaction, &users).await
+    .await
+    .map_err(Into::into)
 }
 
 pub(super) fn pam_account_matches(

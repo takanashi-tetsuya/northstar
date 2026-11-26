@@ -62,21 +62,8 @@ pub(super) async fn set_user_preference(
             "not-acceptable",
         ));
     };
-    for (user_id, change) in &outcome.roster_changes {
-        if let Some(user) = state
-            .mix_service()
-            .find_enabled_user_by_id(*user_id)
-            .await?
-        {
-            state
-                .deliver_roster_change(
-                    *user_id,
-                    &user.username,
-                    change,
-                    Some(&outcome.participant_id.to_string()),
-                )
-                .await?;
-        }
+    for delta in &outcome.roster_changes {
+        crate::session::push_mix_roster_update(state, delta).await?;
     }
     let preference_payload = XmlElement::namespaced("user-preference", ANON_NS)
         .validated_fragment(&preference_result_form(&outcome.preference))?
@@ -88,3 +75,6 @@ pub(super) async fn set_user_preference(
         &preference_payload,
     ))
 }
+
+#[cfg(test)]
+mod tests;

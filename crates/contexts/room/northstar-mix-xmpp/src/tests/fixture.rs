@@ -14,6 +14,7 @@ pub enum Call {
     Claim(mix_worker::ClaimCommand),
     PamClaim(i64),
     User(String, usize),
+    UserById(Uuid),
     Block(Uuid, String, usize),
     Archive(mix_worker::ArchiveCommand, usize),
     ReflectedRetraction(Uuid, String, Uuid, Uuid, String),
@@ -34,6 +35,8 @@ pub enum Call {
     Channel(String, String),
     Member(Uuid, String),
     Preference(Uuid, String),
+    PreferenceWrite(Uuid, String, PreferencePatch),
+    RosterChange(Uuid, String, i64, Option<String>),
     Store(bool),
     Retract(Uuid, String, Uuid),
     MamBatch(String, Vec<String>),
@@ -78,6 +81,7 @@ pub struct State {
     pub foreground_owner: Mutex<Option<foreground::Observation>>,
     pub mam_outcome: Mutex<Option<MixMamReadOutcome>>,
     pub mutation_iq: Mutex<Option<(String, [u8; 32])>>,
+    pub preference_commit: Mutex<Option<CommittedPreference>>,
     pub reject_mam: AtomicBool,
     pub outbox_wakes: std::sync::atomic::AtomicUsize,
     pub publisher_visibility: Mutex<VecDeque<&'static str>>,
@@ -400,7 +404,6 @@ impl MixRepository for Repository {
         authorized_mix_jid_map_entries(channel_id: Uuid, actor: &str, limit: i64) -> MixReadOutcome<Vec<(String, String)>>;
         issue_mix_invitation(channel_id: Uuid, inviter: &str, invitee: &str, token: &str, lifetime: northstar_time::Duration, federated: Option<&FederatedMixMutation>) -> bool;
         mix_private_message_recipient(channel_id: Uuid, sender: &str, recipient_id: Uuid) -> Option<(MixParticipant, MixParticipant)>;
-        find_enabled_user_by_id(user_id: Uuid) -> Option<MixAccount>;
         relay_profile_snapshot(query: MixRelayProfileQuery) -> MixRelayProfileResult;
         latest_roster_change_for_contact(user_id: Uuid, contact_jid: &str) -> Option<northstar_roster_core::RosterChange>;
         mix_muc_mirror_for_mix(mix_channel_id: Uuid) -> Option<MixMucMirror>;
@@ -408,6 +411,11 @@ impl MixRepository for Repository {
         mix_muc_mirror_service_complete(mix_domain: &str) -> bool;
         enqueue_s2s_response_batch(target_domain: &str, responses: &[String], policy: S2sOutboxPolicy) -> ();
         admit_federated_mix_iq_result(authenticated_domain: &str, actor_jid: &str, request_id: &str, request_digest: &[u8; 32], response: &str, policy: S2sOutboxPolicy) -> FederatedMixIqReplay;
+    }
+
+    async fn find_enabled_user_by_id(&self, user_id: Uuid) -> Result<Option<MixAccount>> {
+        self.0.record(Call::UserById(user_id));
+        anyhow::bail!("unexpected repository call: find_enabled_user_by_id")
     }
 }
 
@@ -708,6 +716,7 @@ impl Context {
             foreground_owner: Mutex::new(None),
             mam_outcome: Mutex::new(None),
             mutation_iq: Mutex::new(None),
+            preference_commit: Mutex::new(None),
             reject_mam: AtomicBool::new(false),
             outbox_wakes: std::sync::atomic::AtomicUsize::new(0),
             publisher_visibility: Mutex::new(VecDeque::new()),

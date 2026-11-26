@@ -12,6 +12,7 @@ pub use self::remote_join::RemotePamJoinOptions;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommittedMixRosterDelta {
     pub account: MixAccount,
+    pub auth_generation: Option<i64>,
     pub version: i64,
     pub change: RosterChange,
     pub participant_annotation: Option<MixParticipantId>,
@@ -25,6 +26,7 @@ impl CommittedMixRosterDelta {
     ) -> Self {
         Self {
             account,
+            auth_generation: None,
             version: change.version,
             participant_annotation: if change.removed {
                 None

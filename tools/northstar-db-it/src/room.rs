@@ -19,6 +19,7 @@ mod mix_muc;
 mod mix_pam_durability;
 mod mix_pam_ingress;
 mod mix_pam_projection;
+mod mix_preference_roster_lock;
 mod mix_presence_recovery;
 mod mix_publisher_visibility;
 mod mix_sequence_retention;

@@ -897,12 +897,26 @@ impl MixHost for Host {
     }
     async fn deliver_roster_change(
         &self,
-        _owner_id: Uuid,
-        _owner: &str,
-        _change: &northstar_roster_core::RosterChange,
-        _participant_id: Option<&str>,
+        owner_id: Uuid,
+        owner: &str,
+        change: &northstar_roster_core::RosterChange,
+        participant_id: Option<&str>,
     ) -> Result<()> {
-        panic!("unexpected roster");
+        assert!(
+            self.context
+                .state
+                .calls()
+                .iter()
+                .any(|call| matches!(call, Call::PreferenceWrite(..))),
+            "unexpected roster"
+        );
+        self.context.state.record(Call::RosterChange(
+            owner_id,
+            owner.to_owned(),
+            change.version,
+            participant_id.map(str::to_owned),
+        ));
+        Ok(())
     }
 }
 struct Session {

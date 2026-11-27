@@ -17,9 +17,10 @@ mod administration;
 mod direct_invitation_stub;
 mod hosted_disco;
 mod pam_delivery_repository;
+mod presence_decisions;
 mod publication_stub;
-mod service_messages;
 mod resource_policy;
+mod service_messages;
 
 mod invitation_stub;
 
@@ -1077,7 +1078,6 @@ mod sm {
     }
 }
 
-mod communication_policy;
 mod notification;
 mod pam_projection_repository;
 mod prepared_message_history;

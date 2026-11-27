@@ -51,6 +51,7 @@ pub trait RosterSessionHost:
     + crate::SubscriptionRetryWake
     + DirectedPresenceHost
     + crate::fanout::PolicyPushLocalRoutes
+    + crate::exact_presence::ExactPresenceHost
 {
     /// The node's gate for projecting the current avatar into cached presence.
     fn avatar_presence_gate(&self) -> &AvatarPresenceGate;
@@ -304,22 +305,6 @@ pub trait PresenceDeliveryHost: FederatedPresenceHost + DirectedPresenceTranspor
         &self,
         target: &str,
         stanza: &str,
-    ) -> impl Future<Output = ()> + Send;
-    /// Hands a full-JID presence probe to the other nodes holding `owner_full`. True when one took it.
-    fn delegate_authorized_full_presence_probe_remote(
-        &self,
-        owner_full: &str,
-        requester: &str,
-        authority: Option<ClusterPresenceAuthority>,
-    ) -> impl Future<Output = Result<bool>> + Send;
-    /// Asks the other nodes holding `owner_lookup` to replay its current presence to `recipient`, only the
-    /// availability fact when `availability_only`.
-    fn replay_current_presence_from_remote_owners(
-        &self,
-        owner_lookup: &str,
-        recipient: &str,
-        availability_only: bool,
-        authority: ClusterPresenceAuthority,
     ) -> impl Future<Output = ()> + Send;
 }
 

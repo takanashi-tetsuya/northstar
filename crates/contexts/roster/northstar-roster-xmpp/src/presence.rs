@@ -51,6 +51,7 @@ pub trait PresenceSession:
     + RosterSession
     + crate::SubscriptionRetryWake
     + DirectedPresenceSession
+    + crate::exact_presence::ExactPresenceSession
 {
     /// The presence service, over the repository the composition root binds.
     fn presence_service(
@@ -134,6 +135,8 @@ pub trait PresenceSession:
         from: &str,
         stanza: &str,
     ) -> impl Future<Output = ()> + Send;
+    /// The process-local epoch of the last committed broadcast presence.
+    fn presence_broadcast_epoch(&self) -> Option<u64>;
     /// Whether a resource of the local account `bare` is available on this node.
     fn presence_has_available_resource(&self, bare: &str) -> bool;
     /// Whether another node holds a resource of the local account `bare`.

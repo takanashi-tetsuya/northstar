@@ -255,3 +255,5 @@ mod exact_control_contract;
 mod policy_push_exact;
 #[path = "terminal_exact.rs"]
 mod terminal_exact;
+#[path = "presence_exact.rs"]
+mod presence_exact;

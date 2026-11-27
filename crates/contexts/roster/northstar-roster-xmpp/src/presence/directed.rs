@@ -7,7 +7,7 @@ use super::subscriptions::stamped_subscription_presence;
 use super::{inject_vcard_avatar_hash, PresenceSession};
 use anyhow::Result;
 use northstar_roster_application::presence::SubscriptionRoute;
-use northstar_roster_application::privacy::PrivacyStanzaKind;
+use northstar_roster_application::CommunicationDecision;
 use northstar_xml_builder::rewrite::set_from;
 use northstar_xml_builder::stanza::{blocked_stanza_error, stanza_error};
 use northstar_xmpp_types::jid::CanonicalJid;
@@ -40,7 +40,7 @@ pub async fn directed_presence_gate<S: PresenceSession>(
     root: Node<'_, '_>,
     target_jid: &CanonicalJid,
     kind: &str,
-    from: &str,
+    _from: &str,
 ) -> Result<PresenceGate> {
     let subscription_kind = matches!(
         kind,
@@ -50,36 +50,21 @@ pub async fn directed_presence_gate<S: PresenceSession>(
         return Ok(PresenceGate::Open);
     }
     let to = target_jid.to_string();
-    let user = session.session_account().expect("authenticated session");
-    if session
+    let actor = session
+        .roster_actor()
+        .ok_or_else(|| anyhow::anyhow!("directed presence requires a bound actor"))?;
+    let decision = session
         .presence_service()
-        .is_blocked_for_account(user.id, bare_jid(from), &to)
-        .await?
-    {
-        return Ok(PresenceGate::Closed(if kind == "error" {
-            None
-        } else {
-            Some(blocked_stanza_error(root))
-        }));
-    }
-    let active_privacy = session.privacy_active_list();
-    if session
-        .privacy_service()
-        .denies(
-            user.id,
-            active_privacy.as_deref(),
-            &to,
-            PrivacyStanzaKind::PresenceOut,
-        )
-        .await?
-    {
-        return Ok(PresenceGate::Closed(if kind == "error" {
-            None
-        } else {
-            Some(stanza_error(root, "cancel", "service-unavailable"))
-        }));
-    }
-    Ok(PresenceGate::Open)
+        .outbound_policy(&actor, session.privacy_active_list().is_some(), &to)
+        .await?;
+    Ok(match decision {
+        CommunicationDecision::Allow => PresenceGate::Open,
+        _ if kind == "error" => PresenceGate::Closed(None),
+        CommunicationDecision::OwnerBlocks => {
+            PresenceGate::Closed(Some(blocked_stanza_error(root)))
+        }
+        _ => PresenceGate::Closed(Some(stanza_error(root, "cancel", "service-unavailable"))),
+    })
 }
 
 /// Routes directed presence to remote domains, external components or local resources.

@@ -282,16 +282,21 @@ impl ClusterCorrelatedControlSender {
         );
         fields.insert("request_id".to_owned(), request_id.clone().into());
         fields.insert("ack_nonce".to_owned(), nonce.clone().into());
-        let version = if fields
+        let blocking_presence_change = fields
             .get("blocking_presence_change")
             .and_then(serde_json::Value::as_bool)
+            == Some(true);
+        let exact_presence_probe = fields
+            .get("presence_probe")
+            .and_then(serde_json::Value::as_bool)
             == Some(true)
-        {
+            && fields.contains_key("captured_presence_probe");
+        let protocol_version = if blocking_presence_change || exact_presence_probe {
             crate::EXACT_CONTROL_DELIVERY_VERSION
         } else {
             NODE_PROTOCOL_VERSION
         };
-        fields.insert("protocol_version".to_owned(), version.into());
+        fields.insert("protocol_version".to_owned(), protocol_version.into());
         let channel = self.publisher.key(format!("node:{node_id}"));
         let mut acknowledgement = register_pending_ack_in(
             &self.pending_ack_slots,

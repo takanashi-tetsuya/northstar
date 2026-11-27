@@ -33,7 +33,7 @@ pub(crate) struct ListenerResponse {
     pub(crate) node_id: String,
     pub(crate) recipient: String,
     pub(crate) stanza: String,
-    pub(crate) presence_authority: Option<ClusterPresenceAuthority>,
+    pub(crate) exact_control: Option<ExactControl>,
 }
 
 #[derive(Default)]
@@ -48,7 +48,18 @@ impl ListenerResponses {
             .bytes
             .saturating_add(response.node_id.len())
             .saturating_add(response.recipient.len())
-            .saturating_add(response.stanza.len());
+            .saturating_add(response.stanza.len())
+            .saturating_add(response.exact_control.as_ref().map_or(0, |control| {
+                control
+                    .source
+                    .as_ref()
+                    .map_or(0, |source| source.full_jid.len())
+                    + control
+                        .expected_connections
+                        .keys()
+                        .map(String::len)
+                        .sum::<usize>()
+            }));
         anyhow::ensure!(
             self.items.len() < MAX_PENDING_CLUSTER_ACKS && bytes <= MAX_CLUSTER_PAYLOAD_BYTES,
             "Redis listener response batch exceeded its count or byte budget"
@@ -127,14 +138,14 @@ pub(super) async fn complete_listener_responses<A: ClusterAdapters>(
 ) -> Result<()> {
     for response in responses.items {
         authority.validate(&context.admission, &context.security)?;
-        let result = if let Some(presence_authority) = response.presence_authority {
+        let result = if let Some(control) = &response.exact_control {
             context
                 .sender
                 .send_current_presence_replay(
                     &response.node_id,
                     &response.recipient,
                     &response.stanza,
-                    presence_authority,
+                    control,
                 )
                 .await
         } else {
@@ -150,7 +161,7 @@ pub(super) async fn complete_listener_responses<A: ClusterAdapters>(
                 }
             }
             Err(error) => {
-                if response.presence_authority.is_some() {
+                if response.exact_control.is_some() {
                     context.message_policy.presence_probe_failed();
                 }
                 return Err(error.context("cluster listener remote presence response failed"));

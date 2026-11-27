@@ -66,19 +66,8 @@ impl ClusterManager {
         stanza: &str,
         authority: crate::ClusterPresenceAuthority,
     ) {
-        if let Ok(nodes) = self.remote_resource_nodes(target_bare).await {
-            for node_id in nodes {
-                let _ = self
-                    .send_to_node_presence_subscription(
-                        &node_id,
-                        target_bare,
-                        stanza,
-                        false,
-                        authority,
-                    )
-                    .await;
-            }
-        }
+        self.route_presence_subscription_remote(target_bare, stanza, authority)
+            .await;
     }
 
     pub async fn route_remote_available_presence_to_node(

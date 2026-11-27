@@ -15,10 +15,12 @@ use northstar_roster_core::RosterAuthorization;
 mod blocking;
 mod persistence;
 mod presence;
+mod presence_decisions;
 
 pub use self::blocking::*;
 pub use self::persistence::*;
 pub use self::presence::*;
+pub use self::presence_decisions::{decide_probe, read_broadcast_facts};
 
 /// Read a block fact in an existing snapshot using the same lookup as the pool path.
 pub async fn is_blocked_in_snapshot(

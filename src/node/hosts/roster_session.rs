@@ -32,6 +32,7 @@ use northstar_stream::transport::Action;
 use roxmltree::Node;
 use uuid::Uuid;
 
+mod exact_presence;
 mod privacy_selection;
 mod roster_journal;
 mod subscription_retry;
@@ -586,37 +587,6 @@ impl PresenceDeliveryHost for ServerNode {
         let telemetry = self.post_accept_failure_telemetry();
         self.cluster
             .broadcast_available_presence_remote(target, stanza, move || telemetry.record_failure())
-            .await
-    }
-
-    async fn delegate_authorized_full_presence_probe_remote(
-        &self,
-        owner_full: &str,
-        requester: &str,
-        authority: Option<ClusterPresenceAuthority>,
-    ) -> Result<bool> {
-        self.cluster
-            .delegate_authorized_full_presence_probe_remote(owner_full, requester, authority)
-            .await
-    }
-
-    async fn replay_current_presence_from_remote_owners(
-        &self,
-        owner_lookup: &str,
-        recipient: &str,
-        availability_only: bool,
-        authority: ClusterPresenceAuthority,
-    ) {
-        self.cluster
-            .replay_current_presence_from_remote_owners(
-                owner_lookup,
-                recipient,
-                availability_only,
-                authority,
-                &northstar_cluster::presence_routing::PresenceProbeTelemetry::new(
-                    &self.metrics.cluster_presence_probe_failures_total,
-                ),
-            )
             .await
     }
 }

@@ -155,8 +155,13 @@ impl ClusterAccountTeardownNotifier {
             Some(ClusterControlOutcome::WrongOwner) => {
                 anyhow::bail!("cluster session termination reached the wrong process owner")
             }
-            _ => {
+            None => {
                 anyhow::bail!("cluster session termination acknowledgement omitted its outcome")
+            }
+            Some(_) => {
+                anyhow::bail!(
+                    "cluster session termination acknowledgement carried an unrelated outcome"
+                )
             }
         }
     }

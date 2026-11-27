@@ -314,6 +314,7 @@ impl ClusterManager {
                 stanza,
                 NodeDeliveryOptions {
                     available_only: true,
+                    legacy_directed_or_blocking_presence: true,
                     exclude_jids: &exclude_jids,
                     ..NodeDeliveryOptions::default()
                 },
@@ -322,68 +323,59 @@ impl ClusterManager {
             .delivered)
     }
 
-    /// Ask the node that owns one or more resources of `owner` to replay
-    /// those resources' current available presence to every available
-    /// resource of `recipient`. This closes the RFC 6121 initial-presence
-    /// probe gap when the contact and requester are attached to different
-    /// application nodes.
-    pub async fn request_presence_probe_from_node(
+    pub(crate) async fn request_presence_probe_from_node(
         &self,
-        node_id: &str,
-        owner: &str,
-        recipient: &str,
-        availability_only: bool,
-        authority: ClusterPresenceAuthority,
-    ) -> Result<()> {
-        let owner = northstar_xmpp_types::jid::canonicalize(owner)?;
-        let recipient = northstar_xmpp_types::jid::canonicalize(recipient)?;
-        self.send_control_to_node(
-            node_id,
-            &owner,
-            serde_json::json!({
-                "target": owner,
-                "presence_probe": true,
-                "recipient": recipient,
-                "availability_only": availability_only,
-                "presence_authority_version": PRESENCE_AUTHORITY_VERSION,
-                "presence_owner_id": authority.owner_id,
-                "presence_owner_auth_generation": authority.owner_auth_generation,
-                "presence_recipient_id": authority.recipient_id,
-                "presence_recipient_auth_generation": authority.recipient_auth_generation,
-            }),
-        )
-        .await
+        node: &str,
+        target: &str,
+        probe: &crate::presence_routing::CapturedPresenceProbe,
+    ) -> Result<northstar_roster_application::probe_decision::ProbeStatus> {
+        use northstar_roster_application::probe_decision::ProbeStatus;
+
+        let ack = self
+            .correlated_control_sender()
+            .send_control_to_node_ack(
+                node,
+                target,
+                serde_json::json!({
+                    "target": target,
+                    "presence_probe": true,
+                    "captured_presence_probe": probe,
+                }),
+            )
+            .await?;
+        match (ack.control_processed, ack.control_outcome) {
+            (Some(true), Some(ClusterControlOutcome::PresenceSilent)) => Ok(ProbeStatus::Silent),
+            (Some(true), Some(ClusterControlOutcome::PresenceUnsubscribed)) => {
+                Ok(ProbeStatus::Unsubscribed)
+            }
+            (Some(true), Some(ClusterControlOutcome::PresenceUnavailable)) => {
+                Ok(ProbeStatus::Unavailable)
+            }
+            (Some(true), Some(ClusterControlOutcome::PresenceAvailable)) => {
+                Ok(ProbeStatus::Available)
+            }
+            _ => anyhow::bail!("cluster presence probe was rejected"),
+        }
     }
 
-    /// Deliver a presence-subscription notification to available resources.
-    /// RFC 6121 roster interest gates roster pushes, not subscription-related
-    /// presence. Callers therefore normally pass `false`; the parameter is
-    /// retained for rolling compatibility with older cluster senders.
+    /// Delivers a subscription notification to the node's captured available resources.
     pub async fn send_to_node_presence_subscription(
         &self,
         node_id: &str,
         target_jid: &str,
         stanza: &str,
-        roster_requested_only: bool,
+        _roster_requested_only: bool,
         authority: ClusterPresenceAuthority,
     ) -> Result<bool> {
-        Ok(self
-            .send_to_node_receipt(
-                node_id,
+        let routes = self
+            .capture_remote_message_routes(
                 target_jid,
-                stanza,
-                NodeDeliveryOptions {
-                    available_only: true,
-                    roster_requested_only,
-                    expected_user_id: Some(authority.recipient_id),
-                    expected_auth_generation: Some(authority.recipient_auth_generation),
-                    presence_authority: Some(authority),
-                    presence_delivery: Some(ClusterPresenceDelivery::Subscription),
-                    ..NodeDeliveryOptions::default()
-                },
+                authority.recipient_id,
+                authority.recipient_auth_generation,
             )
-            .await?
-            .delivered)
+            .await?;
+        self.send_captured_subscription(node_id, target_jid, stanza, authority, &routes)
+            .await
     }
 
     /// Route a Carbon to a peer node while excluding every exact canonical

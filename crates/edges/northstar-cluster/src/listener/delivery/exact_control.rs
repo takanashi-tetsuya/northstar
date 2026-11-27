@@ -107,8 +107,9 @@ fn selectors_match(json: &Value, kind: ExactControlKind) -> bool {
         ("roster_requested_only", kind == RosterPush),
         ("blocklist_requested_only", kind == BlocklistPush),
         ("privacy_requested_only", kind == PrivacyPush),
-        ("presence_subscription", kind == SubscriptionPresence),
-        ("current_presence_replay", kind == CurrentPresenceReplay),
+        ("presence_subscription", false),
+        ("current_presence_replay", false),
+        ("legacy_directed_or_blocking_presence", false),
         ("carbons_only", false),
         ("mix_capable_only", false),
         ("transport_receipt_required", false),
@@ -133,7 +134,6 @@ impl<A: crate::ClusterAdapters> crate::listener_dispatch::ClusterListenerDispatc
         json: &Value,
     ) -> Option<(usize, Option<String>)> {
         use super::super::{envelope::prepare_listener_command, presence, ListenerCommand};
-        use super::{fan_out_direct_delivery, resolve_stanza_delivery, validate_direct_delivery};
 
         let ListenerStep::Next(ListenerCommand {
             target, mut turn, ..
@@ -148,6 +148,59 @@ impl<A: crate::ClusterAdapters> crate::listener_dispatch::ClusterListenerDispatc
         else {
             return None;
         };
+        self.test_delivery_after_presence_validation(
+            policy,
+            mix_caps,
+            json,
+            authority,
+            target,
+            parsed_stanza,
+            &mut turn,
+        )
+        .await
+    }
+
+    pub(crate) async fn test_subscription_after_authority_validation(
+        &self,
+        admission: &crate::ClusterListenerAdmission,
+        policy: &crate::ClusterListenerMessagePolicy<A>,
+        mix_caps: &crate::listener_mix_caps::ClusterListenerMixCaps,
+        json: &Value,
+        authority: crate::ClusterPresenceAuthority,
+    ) -> Option<(usize, Option<String>)> {
+        use super::super::{envelope::prepare_listener_command, ListenerCommand};
+        let ListenerStep::Next(ListenerCommand {
+            target, mut turn, ..
+        }) = prepare_listener_command(admission, json, crate::DELIVERY_CONTRACT_PROTOCOL_VERSION)
+        else {
+            return None;
+        };
+        let stanza = roxmltree::Document::parse(json["stanza"].as_str()?).ok()?;
+        self.test_delivery_after_presence_validation(
+            policy,
+            mix_caps,
+            json,
+            Some(authority),
+            target,
+            Some(stanza),
+            &mut turn,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn test_delivery_after_presence_validation(
+        &self,
+        policy: &crate::ClusterListenerMessagePolicy<A>,
+        mix_caps: &crate::listener_mix_caps::ClusterListenerMixCaps,
+        json: &Value,
+        authority: Option<crate::ClusterPresenceAuthority>,
+        target: &str,
+        parsed_stanza: Option<Document<'_>>,
+        turn: &mut super::super::ListenerTurn,
+    ) -> Option<(usize, Option<String>)> {
+        use super::{fan_out_direct_delivery, resolve_stanza_delivery, validate_direct_delivery};
+        let stanza = json["stanza"].as_str()?;
         let ListenerStep::Next((delivery, _)) = resolve_stanza_delivery(
             policy,
             json,
@@ -155,7 +208,7 @@ impl<A: crate::ClusterAdapters> crate::listener_dispatch::ClusterListenerDispatc
             stanza,
             &parsed_stanza,
             (false, false),
-            &mut turn,
+            turn,
         )
         .await
         else {
@@ -166,10 +219,7 @@ impl<A: crate::ClusterAdapters> crate::listener_dispatch::ClusterListenerDispatc
         else {
             return None;
         };
-        fan_out_direct_delivery(
-            self, policy, mix_caps, target, &delivery, &options, &mut turn,
-        )
-        .await;
-        Some((turn.delivered, turn.accepted_full_jid))
+        fan_out_direct_delivery(self, policy, mix_caps, target, &delivery, &options, turn).await;
+        Some((turn.delivered, turn.accepted_full_jid.take()))
     }
 }

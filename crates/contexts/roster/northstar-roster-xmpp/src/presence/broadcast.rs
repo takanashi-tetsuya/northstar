@@ -1,6 +1,9 @@
 use super::availability::broadcast_directed_unavailable;
 use super::PresenceSession;
+use crate::exact_presence::{ExactPresenceHost, PresenceEffect};
 use anyhow::Result;
+use northstar_roster_application::probe_decision::{BroadcastFacts, PresenceRoute};
+use northstar_roster_core::{ExactPresenceRoute, RosterActor};
 
 mod audience;
 mod initial;
@@ -20,12 +23,12 @@ pub(super) async fn set_last_broadcast_presence(
     set_last: impl FnOnce(Option<String>),
 ) -> Result<String> {
     let _guard = gate.lock(from).await;
-    let prepared =
-        prepared::prepare(raw, available, from, async { Ok(Vec::new()) }, avatar_hash).await?;
+    let prepared = prepared::prepare(raw, available, from, async { Ok(()) }, avatar_hash).await?;
     set_last(prepared.cached);
     Ok(prepared.wire)
 }
 
+/// Samples the broadcast audience and projects the avatar before the presence is committed.
 pub(crate) async fn prepare_broadcast_presence<S: PresenceSession>(
     session: &S,
     raw: &str,
@@ -37,14 +40,52 @@ pub(crate) async fn prepare_broadcast_presence<S: PresenceSession>(
         raw,
         kind == "available",
         from,
-        read_broadcast_roster(session, user.id),
+        capture_broadcast_audience(session),
         session.presence_service().avatar_hash(user.id),
     )
     .await
 }
 
-/// Broadcasts initial, status or unavailable presence to roster contacts, the account's other
-/// resources and directed presence targets.
+pub(crate) struct BroadcastAudience {
+    actor: RosterActor,
+    roster: Vec<BroadcastFacts>,
+    siblings: Vec<PresenceRoute>,
+}
+
+async fn capture_broadcast_audience<S: PresenceSession>(session: &S) -> Result<BroadcastAudience> {
+    let user = session.session_account().expect("authenticated session");
+    let actor = session
+        .roster_actor()
+        .ok_or_else(|| anyhow::anyhow!("broadcast presence requires a bound actor"))?;
+    let roster = read_broadcast_roster(session, &actor).await?;
+    let host = session.exact_presence_host();
+    let mut siblings = host
+        .capture_presence_routes(actor.bare_jid(), &user, true)
+        .await?;
+    if !siblings
+        .iter()
+        .any(|route| route.exact.connection_id == actor.connection_id)
+    {
+        siblings.push(PresenceRoute {
+            exact: ExactPresenceRoute {
+                account_id: actor.account_id,
+                auth_generation: actor.auth_generation,
+                connection_id: actor.connection_id,
+                full_jid: actor.full_jid.clone(),
+                node_id: None,
+            },
+            active_list: session.privacy_active_list(),
+        });
+    }
+    Ok(BroadcastAudience {
+        actor,
+        roster,
+        siblings,
+    })
+}
+
+/// Broadcasts the committed presence to the sampled roster, the account's sibling routes and
+/// directed presence targets.
 pub(crate) async fn broadcast_presence<S: PresenceSession>(
     session: &S,
     prepared: PreparedBroadcastPresence,
@@ -52,30 +93,49 @@ pub(crate) async fn broadcast_presence<S: PresenceSession>(
     from: &str,
     first_available: bool,
 ) -> Result<()> {
-    let user = session.session_account().expect("authenticated session");
     let PreparedBroadcastPresence {
-        roster,
+        audience:
+            BroadcastAudience {
+                actor,
+                roster,
+                siblings,
+            },
         wire: rewritten,
         ..
     } = prepared;
-    let account = format!("{}@{}", user.username, session.session_local_domain());
+    let host = session.exact_presence_host();
+    let effect = PresenceEffect::Broadcast {
+        source_epoch: session.presence_broadcast_epoch(),
+    };
     let audience_result = broadcast_audience(
         session,
-        &user,
+        &actor,
         roster,
-        &account,
-        from,
         &rewritten,
         first_available,
+        &siblings,
+        effect,
     )
     .await;
 
     // RFC 6121 requires every available resource of the same account
     // to observe initial/subsequent presence. Unavailable presence is
     // also echoed to the resource that generated it.
-    session
-        .presence_echo_to_account(&account, from, &rewritten)
-        .await;
+    for sibling in siblings {
+        let self_echo = sibling.exact.connection_id == actor.connection_id;
+        let to = if sibling.exact.node_id.is_some() {
+            actor.bare_jid()
+        } else {
+            &sibling.exact.full_jid
+        };
+        let delivery = northstar_xml_builder::rewrite::set_to(&rewritten, to);
+        if let Err(error) = host
+            .send_presence_route(&actor, &sibling, &delivery, effect, !self_echo)
+            .await
+        {
+            tracing::warn!(?error, target = %sibling.exact.full_jid, "sibling presence delivery failed");
+        }
+    }
 
     if kind == "unavailable" {
         broadcast_directed_unavailable(session, &rewritten, from).await;

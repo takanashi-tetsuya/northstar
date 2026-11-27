@@ -8,6 +8,7 @@ use uuid::Uuid;
 mod communication_policy;
 mod service_messages;
 mod subscription_retry;
+mod decisions;
 
 #[derive(Clone)]
 pub struct PostgresPresenceRepository {

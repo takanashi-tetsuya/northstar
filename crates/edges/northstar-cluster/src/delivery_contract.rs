@@ -153,6 +153,7 @@ pub(super) struct NodeDeliveryOptions<'a> {
     pub(super) exclude_jids: &'a [&'a str],
     pub(super) primary: bool,
     pub(super) available_only: bool,
+    pub(super) legacy_directed_or_blocking_presence: bool,
     pub(super) available_nonnegative_only: bool,
     /// Restrict a sent Carbon for a MUC private message to resources sharing
     /// the sender's exact room/nick membership (XEP-0280 section 6.1).
@@ -166,7 +167,6 @@ pub(super) struct NodeDeliveryOptions<'a> {
     /// ownership; it is never inferred from a stanza-id.
     pub(super) mix_delivery: Option<northstar_stream::outbound::MixDelivery>,
     pub(super) presence_authority: Option<ClusterPresenceAuthority>,
-    pub(super) presence_delivery: Option<ClusterPresenceDelivery>,
     pub(super) exact_control: Option<&'a ExactControl>,
 }
 
@@ -305,6 +305,10 @@ pub(super) enum ClusterControlOutcome {
     WrongOwner,
     BlockingSnapshot(Vec<crate::listener_blocking::wire::SnapshotEntry>),
     BlockingPresence { failed: usize },
+    PresenceSilent,
+    PresenceUnsubscribed,
+    PresenceUnavailable,
+    PresenceAvailable,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

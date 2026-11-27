@@ -231,7 +231,15 @@ pub(super) fn validate_direct_delivery<'a>(
         return ListenerStep::Continue;
     };
     let primary_one_to_one = json["primary_one_to_one"].as_bool().unwrap_or(false);
-    let available_only = json["available_only"].as_bool().unwrap_or(false);
+    let available_only = json["available_only"].as_bool().unwrap_or(false)
+        || exact_control.as_ref().is_some_and(|control| {
+            matches!(
+                control.kind,
+                crate::ExactControlKind::SubscriptionPresence
+                    | crate::ExactControlKind::AvailablePresence
+                    | crate::ExactControlKind::CurrentPresenceReplay
+            )
+        });
     let available_nonnegative_only = json["available_nonnegative_only"]
         .as_bool()
         .unwrap_or(false);
@@ -600,14 +608,52 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
             }
             break;
         }
-        let captured_terminal_policy = options
-            .exact_control
-            .as_ref()
-            .is_some_and(|control| control.kind == ExactControlKind::TeardownUnavailable);
-        // The validated transport receipt identifies server return-control.
-        if !options.transport_receipt_required
-            && !captured_terminal_policy
-            && !permits_direct_delivery(
+        // Exact presence is screened against the captured privacy selector. A validated
+        // transport receipt identifies server return-control, and a captured teardown
+        // audience was already screened by its sender.
+        let exact_kind = options.exact_control.as_ref().map(|control| control.kind);
+        let captured_terminal_policy = exact_kind == Some(ExactControlKind::TeardownUnavailable);
+        let exact_presence_selector = if matches!(
+            exact_kind,
+            Some(
+                ExactControlKind::AvailablePresence
+                    | ExactControlKind::UnavailablePresence
+                    | ExactControlKind::CurrentPresenceReplay
+                    | ExactControlKind::ProbeResponse
+                    | ExactControlKind::SubscriptionPresence
+            )
+        ) {
+            let Some((peer, _)) = privacy_peer_kind else {
+                continue;
+            };
+            let selector = session.privacy_active_snapshot();
+            let route = northstar_roster_application::probe_decision::PresenceRoute {
+                exact: northstar_roster_core::ExactPresenceRoute {
+                    account_id: session.user_id,
+                    auth_generation: session.auth_generation,
+                    connection_id: session.connection_id,
+                    full_jid: jid.clone(),
+                    node_id: None,
+                },
+                active_list: selector.clone(),
+            };
+            let mut query =
+                route.policy(peer, northstar_roster_application::PolicyDirection::Inbound);
+            query.check_owner_block = exact_kind != Some(ExactControlKind::SubscriptionPresence)
+                && northstar_xmpp_types::jid_text::bare_jid(peer)
+                    != northstar_xmpp_types::jid_text::bare_jid(&jid);
+            if !message_policy
+                .presence
+                .read_communication_policy(&query)
+                .await
+                .is_ok_and(|decision| decision.allows())
+            {
+                continue;
+            }
+            Some(selector)
+        } else if options.transport_receipt_required
+            || captured_terminal_policy
+            || permits_direct_delivery(
                 message_policy,
                 &session,
                 &jid,
@@ -617,8 +663,10 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
             )
             .await
         {
+            None
+        } else {
             continue;
-        }
+        };
         if mix_capable_only {
             match mix_caps.capability(&jid) {
                 ClusterMixCapability::Supported => {
@@ -673,6 +721,7 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
                 jid: &jid,
                 target,
                 delivery: &delivery,
+                exact_presence_selector: exact_presence_selector.as_ref(),
             },
             options,
             mix_delivery,
@@ -724,6 +773,9 @@ impl DirectDeliveryOptions<'_> {
         available: bool,
         priority: i16,
     ) -> bool {
+        if self.available_only && self.exact_control.is_some() {
+            return available;
+        }
         target.contains('/')
             || if self.available_nonnegative_only {
                 available && priority >= 0

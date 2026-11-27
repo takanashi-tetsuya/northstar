@@ -35,7 +35,7 @@ async fn a_paused_projection_failure_leaves_the_old_probe_snapshot() {
                 async move {
                     match roster_pause {
                         Some(pause) => Err(pause.await),
-                        None => Ok(Vec::new()),
+                        None => Ok(()),
                     }
                 },
                 async move {

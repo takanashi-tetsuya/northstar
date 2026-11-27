@@ -2562,7 +2562,9 @@ if (/\bself\.(?:state|host)\s*\.metrics\b/.test(presenceProtocol)
     || /\b(?:self|host)\s*\.\s*metrics\b/.test(presenceDelivery)
     || /\.metrics\b/.test(presenceClusterRouting)
     || !presenceClusterRouting.includes("telemetry: &PresenceProbeTelemetry<'_>")
-    || countMatches(presenceClusterRouting, /\btelemetry\.failed\(\)/g) !== 2) {
+    || countMatches(presenceClusterRouting, /\btelemetry\.failed\(\)/g) !== 1
+    || !/self\.request_captured_remote_presence\(query, owners, Some\(telemetry\)\)\s*\.await/.test(presenceClusterRouting)
+    || !/match self\s*\.request_presence_probe_from_node\(node, query\.target, &probe\)\s*\.await\s*\{[\s\S]*?Err\(error\) => \{\s*if let Some\(telemetry\) = telemetry \{\s*telemetry\.failed\(\);/.test(presenceClusterRouting)) {
   throw new Error('cross-node presence replay failures must use their one-counter telemetry port');
 }
 // reads the whole module including test-only child files

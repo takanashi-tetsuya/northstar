@@ -7,8 +7,8 @@ mod directed_ports;
 mod subscription;
 
 pub use self::current::{
-    account_has_available_resource, answer_full_presence_probe, send_current_availability,
-    send_current_availability_exact,
+    account_has_available_resource, answer_full_presence_probe, answer_local_probe,
+    replay_to_captured_routes, send_current_availability, send_current_availability_exact,
 };
 pub use self::directed::{
     deliver_directed_presence, deliver_exact_directed, directed_presence_recipient,

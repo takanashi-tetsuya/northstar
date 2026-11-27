@@ -29,6 +29,8 @@ pub use self::subscription_retry::SubscriptionRetryWake;
 
 use northstar_roster_core::PresenceAccount;
 
+pub mod exact_presence;
+
 /// The client session's identity, which every handler of this crate starts from.
 pub trait SessionIdentity: Sync {
     /// The authenticated account, or `None` before authentication.

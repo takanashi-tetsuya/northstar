@@ -126,7 +126,11 @@ impl std::fmt::Display for SubscriptionOutboxAdmissionError {
 }
 
 pub trait PresenceRepository:
-    ServiceMessageRepository + crate::CommunicationPolicyReader + Send + Sync
+    ServiceMessageRepository
+    + crate::CommunicationPolicyReader
+    + crate::probe_decision::PresenceDecisionReader
+    + Send
+    + Sync
 {
     fn roster_subscriptions(
         &self,
@@ -254,26 +258,49 @@ impl<R: PresenceRepository> PresenceService<R> {
     }
 
     /// Blocking takes precedence over the active/default privacy list.
-    pub async fn outbound_denied(
+    pub async fn outbound_policy(
         &self,
-        owner_id: Uuid,
-        owner_bare_jid: &str,
-        active_list: Option<&str>,
+        actor: &crate::RosterActor,
+        expects_active: bool,
         candidate: &str,
-    ) -> Result<bool> {
-        if self
-            .is_blocked_for_account(owner_id, owner_bare_jid, candidate)
-            .await?
-        {
-            return Ok(true);
-        }
-        self.privacy_denies(
-            owner_id,
-            active_list,
-            candidate,
-            northstar_xep_0016::PrivacyStanzaKind::PresenceOut,
-        )
+    ) -> Result<crate::CommunicationDecision> {
+        self.read_communication_policy(&crate::CommunicationPolicyQuery {
+            account_id: actor.account_id,
+            expected_auth_generation: Some(actor.auth_generation),
+            subject: crate::PolicySubject::Connection {
+                connection_id: actor.connection_id,
+                expects_active,
+            },
+            peer: candidate.to_owned(),
+            kind: northstar_xep_0016::PrivacyStanzaKind::PresenceOut,
+            direction: crate::PolicyDirection::Outbound,
+            check_owner_block: northstar_xmpp_types::jid_text::bare_jid(candidate)
+                != actor.bare_jid(),
+            check_peer_block: false,
+        })
         .await
+    }
+
+    pub async fn read_communication_policy(
+        &self,
+        query: &crate::CommunicationPolicyQuery,
+    ) -> Result<crate::CommunicationDecision> {
+        crate::CommunicationPolicyReader::read_communication_policy(&self.repository, query).await
+    }
+
+    pub async fn read_broadcast_facts(
+        &self,
+        query: crate::probe_decision::BroadcastQuery<'_>,
+    ) -> Result<Vec<crate::probe_decision::BroadcastFacts>> {
+        crate::probe_decision::PresenceDecisionReader::read_broadcast_facts(&self.repository, query)
+            .await
+    }
+
+    pub async fn decide_probe(
+        &self,
+        query: crate::probe_decision::ProbeQuery<'_>,
+    ) -> Result<crate::probe_decision::ProbeDecision> {
+        crate::probe_decision::PresenceDecisionReader::decide_probe(&self.repository, query).await
     }
 
     pub async fn avatar_hash(&self, user_id: Uuid) -> Result<Option<String>> {

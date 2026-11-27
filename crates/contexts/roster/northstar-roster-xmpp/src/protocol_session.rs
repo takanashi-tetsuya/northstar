@@ -29,6 +29,7 @@ use std::sync::Arc;
 
 mod actor;
 mod blocking_mutation_host;
+mod exact_presence;
 mod presence_staging;
 mod roster_sync;
 
@@ -379,6 +380,10 @@ impl<H: SessionHost + RosterSessionHost> crate::presence::PresenceSession for Pr
                 self.presence.broadcast_presence_epoch,
             )
             .await;
+    }
+
+    fn presence_broadcast_epoch(&self) -> Option<u64> {
+        self.presence.broadcast_presence_epoch
     }
 
     fn presence_has_available_resource(&self, bare: &str) -> bool {

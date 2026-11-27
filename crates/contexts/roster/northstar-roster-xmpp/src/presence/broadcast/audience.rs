@@ -1,69 +1,78 @@
 use super::super::availability::remove_directed_presence_for_bare;
 use super::super::PresenceSession;
 use super::initial::{probe_initial_contact, resend_pending_subscription};
+use crate::exact_presence::{ExactPresenceHost, PresenceEffect};
 use anyhow::Result;
-use northstar_roster_application::blocking::RosterEntry;
-use northstar_roster_core::PresenceAccount;
+use northstar_roster_application::probe_decision::{
+    BroadcastCandidate, BroadcastFacts, BroadcastQuery, PresenceRoute,
+};
+use northstar_roster_core::RosterActor;
 use northstar_xml_builder::rewrite::set_to;
-use northstar_xmpp_types::jid_text::bare_jid;
+use northstar_xmpp_types::jid::CanonicalJid;
 use std::ops::ControlFlow;
-use uuid::Uuid;
 
 pub(super) async fn read_broadcast_roster<S: PresenceSession>(
     session: &S,
-    owner: Uuid,
-) -> Result<Vec<RosterEntry>> {
-    session.blocking_service().roster(owner).await
+    actor: &RosterActor,
+) -> Result<Vec<BroadcastFacts>> {
+    let host = session.exact_presence_host();
+    let mut candidates = Vec::new();
+    for (jid, _, _, _) in session.blocking_service().roster(actor.account_id).await? {
+        let peer = CanonicalJid::parse_bare(&jid)?;
+        let account = match peer.localpart() {
+            Some(name) if peer.domainpart() == session.session_local_domain() => {
+                session.presence_service().find_enabled_user(name).await?
+            }
+            _ => None,
+        };
+        let routes = match &account {
+            Some(account) => host.capture_presence_routes(&jid, account, true).await?,
+            None => Vec::new(),
+        };
+        candidates.push(BroadcastCandidate {
+            jid,
+            account,
+            routes,
+        });
+    }
+    session
+        .presence_service()
+        .read_broadcast_facts(BroadcastQuery {
+            actor,
+            expects_active: session.privacy_active_list().is_some(),
+            local_domain: session.session_local_domain(),
+            candidates: &candidates,
+        })
+        .await
 }
 
 pub(super) async fn broadcast_audience<S: PresenceSession>(
     session: &S,
-    user: &PresenceAccount,
-    roster: Vec<RosterEntry>,
-    account: &str,
-    from: &str,
+    actor: &RosterActor,
+    roster: Vec<BroadcastFacts>,
     rewritten: &str,
     first_available: bool,
+    replay_recipients: &[PresenceRoute],
+    effect: PresenceEffect,
 ) -> Result<()> {
-    let active_privacy = session.privacy_active_list();
-    for (jid, _, subscription, ask) in roster {
-        if session
-            .presence_service()
-            .outbound_denied(user.id, bare_jid(from), active_privacy.as_deref(), &jid)
-            .await?
-        {
-            continue;
-        }
-        let contact_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&jid).ok();
-        let local_contact = match contact_jid.as_ref().and_then(|jid| jid.localpart()) {
-            Some(username)
-                if contact_jid
-                    .as_ref()
-                    .is_some_and(|jid| jid.domainpart() == session.session_local_domain()) =>
-            {
-                session
-                    .presence_service()
-                    .find_enabled_user(username)
-                    .await?
-            }
-            _ => None,
-        };
-        if let Some(contact) = local_contact.as_ref() {
-            let contact_bare = format!("{}@{}", contact.username, session.session_local_domain());
-            if session
-                .presence_service()
-                .is_blocked_for_account(contact.id, &contact_bare, from)
-                .await?
-            {
-                continue;
-            }
-        }
+    let user = &session.session_account().expect("authenticated session");
+    let account = actor.bare_jid();
+    let host = session.exact_presence_host();
+    for BroadcastFacts {
+        jid,
+        subscription,
+        ask,
+        account: local_contact,
+        recipients,
+    } in roster
+    {
+        let contact = CanonicalJid::parse_bare(&jid)?;
         if let ControlFlow::Break(()) = resend_pending_subscription(
             session,
             user,
             account,
             &jid,
-            contact_jid.as_ref(),
+            Some(&contact),
             local_contact.as_ref(),
             first_available,
             ask.as_deref(),
@@ -74,25 +83,39 @@ pub(super) async fn broadcast_audience<S: PresenceSession>(
         }
         if matches!(subscription.as_str(), "from" | "both") {
             let delivery = set_to(rewritten, &jid);
-            if let Ok(contact) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&jid) {
-                if contact.domainpart() == session.session_local_domain() {
-                    session
-                        .presence_deliver_to_contact(&jid, from, &delivery)
-                        .await?;
-                } else if session.presence_route_allowed(contact.domainpart())
-                    && session
-                        .presence_send_federated(
-                            contact.domainpart(),
-                            delivery,
-                            Some(from.to_owned()),
-                        )
+            if local_contact.is_some() {
+                for route in recipients {
+                    if let Err(error) = host
+                        .send_presence_route(actor, &route, &delivery, effect, true)
                         .await
-                {
-                    remove_directed_presence_for_bare(session, &jid);
+                    {
+                        tracing::warn!(?error, target = %route.exact.full_jid, "broadcast presence delivery failed");
+                    }
                 }
+            } else if session.presence_route_allowed(contact.domainpart())
+                && session
+                    .presence_send_federated(
+                        contact.domainpart(),
+                        delivery,
+                        Some(actor.full_jid.clone()),
+                    )
+                    .await
+            {
+                remove_directed_presence_for_bare(session, &jid);
             }
         }
-        probe_initial_contact(session, first_available, &subscription, &jid, account).await;
+        if let Some(owner) = local_contact {
+            if super::should_probe_contact_on_presence(first_available, &subscription) {
+                if let Err(error) = host
+                    .replay_presence_to_routes(&owner, &jid, account, replay_recipients)
+                    .await
+                {
+                    tracing::warn!(?error, owner = %jid, "initial presence replay failed");
+                }
+            }
+        } else {
+            probe_initial_contact(session, first_available, &subscription, &jid, account).await;
+        }
     }
     Ok(())
 }

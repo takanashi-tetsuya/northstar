@@ -289,7 +289,7 @@ fn response(stanza: String) -> ListenerResponse {
         node_id: "n".into(),
         recipient: "r".into(),
         stanza,
-        presence_authority: None,
+        exact_control: None,
     }
 }
 

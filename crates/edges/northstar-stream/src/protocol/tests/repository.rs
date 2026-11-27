@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 mod administration;
+mod presence_decisions;
 mod publication_stub;
 mod service_messages;
 

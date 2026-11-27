@@ -6,6 +6,7 @@ use anyhow::Result;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod probe;
+pub(crate) use probe::CapturedPresenceProbe;
 
 /// Failure to replay current presence across a cluster route.
 pub struct PresenceProbeTelemetry<'a> {
@@ -78,15 +79,22 @@ impl ClusterManager {
         stanza: &str,
         authority: ClusterPresenceAuthority,
     ) {
-        if let Ok(nodes) = self.lookup_nodes(target).await {
-            for node_id in nodes {
-                if node_id != self.node_id {
-                    let _ = self
-                        .send_to_node_presence_subscription(
-                            &node_id, target, stanza, false, authority,
-                        )
-                        .await;
-                }
+        if let Ok(routes) = self
+            .capture_remote_message_routes(
+                target,
+                authority.recipient_id,
+                authority.recipient_auth_generation,
+            )
+            .await
+        {
+            let nodes: std::collections::BTreeSet<_> = routes
+                .iter()
+                .filter_map(|route| route.node_id.as_deref())
+                .collect();
+            for node in nodes {
+                let _ = self
+                    .send_captured_subscription(node, target, stanza, authority, &routes)
+                    .await;
             }
         }
     }

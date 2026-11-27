@@ -12,6 +12,7 @@ pub(super) struct DirectDeliveryRecipient<'a> {
     pub(super) jid: &'a str,
     pub(super) target: &'a str,
     pub(super) delivery: &'a String,
+    pub(super) exact_presence_selector: Option<&'a Option<String>>,
 }
 
 pub(super) enum DirectDeliverySend {
@@ -34,6 +35,7 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
         jid,
         target,
         delivery,
+        exact_presence_selector,
     } = recipient;
     let DirectDeliveryOptions {
         roster_requested_only,
@@ -74,7 +76,10 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
         };
         let table = LocalSessionTable::new(Arc::clone(&dispatch.account_routes.sessions));
         let accepted = table.with_exact_message_route(&route, |current| {
-            if !options.priority_matches_state(target, available, priority) {
+            if !options.priority_matches_state(target, available, priority)
+                || exact_presence_selector
+                    .is_some_and(|selector| &current.privacy_active_snapshot() != selector)
+            {
                 return DirectDeliverySend::Accepted(false);
             }
             if let Some(control) = &options.exact_control {

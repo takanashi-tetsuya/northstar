@@ -1,25 +1,24 @@
 use anyhow::Result;
-use northstar_roster_application::blocking::RosterEntry;
 use northstar_xml_builder::rewrite::{project_presence_avatar, set_from};
 use std::future::Future;
 
-pub(crate) struct PreparedBroadcastPresence {
-    pub(super) roster: Vec<RosterEntry>,
+pub(crate) struct PreparedBroadcastPresence<A = super::BroadcastAudience> {
+    pub(super) audience: A,
     pub(super) wire: String,
     pub(crate) cached: Option<String>,
 }
 
-pub(super) async fn prepare(
+pub(super) async fn prepare<A>(
     raw: &str,
     available: bool,
     from: &str,
-    roster: impl Future<Output = Result<Vec<RosterEntry>>>,
+    audience: impl Future<Output = Result<A>>,
     avatar_hash: impl Future<Output = Result<Option<String>>>,
-) -> Result<PreparedBroadcastPresence> {
-    let roster = roster.await?;
+) -> Result<PreparedBroadcastPresence<A>> {
+    let audience = audience.await?;
     if !available {
         return Ok(PreparedBroadcastPresence {
-            roster,
+            audience,
             wire: set_from(raw, from),
             cached: None,
         });
@@ -36,7 +35,7 @@ pub(super) async fn prepare(
         set_from(&cached, from)
     };
     Ok(PreparedBroadcastPresence {
-        roster,
+        audience,
         wire,
         cached: Some(cached),
     })

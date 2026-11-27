@@ -144,22 +144,6 @@ fn newly_accepted_grants(
         .collect()
 }
 
-pub(super) async fn answer_directed_presence_probe<S: PresenceSession>(
-    session: &S,
-    owner_full: &str,
-    owner_bare: &str,
-    requester: &str,
-    probe_id: Option<&str>,
-) -> Result<bool> {
-    if !session.presence_directed_recipient(owner_full, requester) {
-        return Ok(false);
-    }
-    session
-        .presence_answer_full_probe(owner_full, owner_bare, requester, probe_id)
-        .await?;
-    Ok(true)
-}
-
 pub(super) async fn broadcast_directed_unavailable<S: PresenceSession>(
     session: &S,
     unavailable: &str,

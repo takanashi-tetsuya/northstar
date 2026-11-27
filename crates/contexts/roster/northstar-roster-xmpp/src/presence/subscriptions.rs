@@ -116,6 +116,26 @@ pub(super) async fn update_presence_subscription<S: PresenceSession>(
     let actor_jid = format!("{}@{}", actor.username, session.session_local_domain());
     let target_jid = format!("{}@{}", target.username, session.session_local_domain());
     let stamped_stanza = set_to(&set_from(raw, &actor_jid), &target_jid);
+    let replay = match transition.effect {
+        LocalPresenceEffect::AutoApproved => Some((&target, &target_jid, &actor, &actor_jid)),
+        LocalPresenceEffect::Forward if kind == "subscribed" => {
+            Some((&actor, &actor_jid, &target, &target_jid))
+        }
+        _ => None,
+    };
+    use crate::exact_presence::ExactPresenceHost;
+    let host = session.exact_presence_host();
+    let routes = if let Some((_, _, recipient, address)) = replay {
+        match host.capture_presence_routes(address, recipient, true).await {
+            Ok(routes) => routes,
+            Err(error) => {
+                tracing::warn!(?error, %address, "could not capture approval replay routes");
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
 
     // RFC 6121 requires the subscription notification to be delivered
     // before the resulting roster push.  Keep that ordering explicit here
@@ -172,9 +192,12 @@ pub(super) async fn update_presence_subscription<S: PresenceSession>(
     }
     match transition.effect {
         LocalPresenceEffect::AutoApproved => {
-            session
-                .presence_send_current_exact(&target, &actor, &target_jid, &actor_jid)
-                .await;
+            if let Err(error) = host
+                .replay_presence_to_routes(&target, &target_jid, &actor_jid, &routes)
+                .await
+            {
+                tracing::warn!(?error, owner = %target_jid, "approval presence replay failed");
+            }
             return Ok(SubscriptionMutationDisposition::Accepted(false));
         }
         LocalPresenceEffect::Suppressed => {
@@ -188,9 +211,12 @@ pub(super) async fn update_presence_subscription<S: PresenceSession>(
         }
     }
     if kind == "subscribed" {
-        session
-            .presence_send_current_exact(&actor, &target, &actor_jid, &target_jid)
-            .await;
+        if let Err(error) = host
+            .replay_presence_to_routes(&actor, &actor_jid, &target_jid, &routes)
+            .await
+        {
+            tracing::warn!(?error, owner = %actor_jid, "approval presence replay failed");
+        }
     }
     // Subscription stanzas were routed above to preserve notification ->
     // roster-push ordering and exact available-resource semantics.

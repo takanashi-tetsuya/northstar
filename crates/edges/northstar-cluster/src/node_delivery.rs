@@ -3,6 +3,7 @@
 use super::*;
 
 mod presence;
+pub(crate) use presence::presence_control;
 mod roster;
 mod unavailable;
 
@@ -359,7 +360,8 @@ impl ClusterNodeDelivery {
                     && options.carbon_muc_scope.is_none()
                     && !options.mix_capable_only
                     && !options.transport_receipt_required
-                    && !options.mix_transport_receipt_required,
+                    && !options.mix_transport_receipt_required
+                    && !options.legacy_directed_or_blocking_presence,
                 "exact control cannot request Carbons, MIX, or transport receipts"
             );
         }
@@ -383,20 +385,12 @@ impl ClusterNodeDelivery {
             "annotated roster payload cannot be used for ordinary delivery"
         );
         anyhow::ensure!(
-            options.presence_delivery.is_some() == options.presence_authority.is_some(),
+            options
+                .exact_control
+                .is_some_and(|control| { control.kind == ExactControlKind::SubscriptionPresence })
+                == options.presence_authority.is_some(),
             "cluster presence delivery requires one complete versioned authority"
         );
-        if let (Some(control), Some(delivery)) = (options.exact_control, options.presence_delivery)
-        {
-            let kind = match delivery {
-                ClusterPresenceDelivery::CurrentReplay => ExactControlKind::CurrentPresenceReplay,
-                ClusterPresenceDelivery::Subscription => ExactControlKind::SubscriptionPresence,
-            };
-            anyhow::ensure!(
-                control.kind == kind,
-                "exact control kind does not match its presence delivery selector"
-            );
-        }
         if let Some(authority) = options.presence_authority {
             let (expected_user_id, expected_auth_generation) = options.exact_control.map_or(
                 (options.expected_user_id, options.expected_auth_generation),
@@ -731,13 +725,14 @@ pub(super) fn build_node_delivery_payload(
         "presence_recipient_auth_generation": options
             .presence_authority
             .map(|value| value.recipient_auth_generation),
-        "current_presence_replay": options.presence_delivery
-            == Some(ClusterPresenceDelivery::CurrentReplay),
-        "presence_subscription": options.presence_delivery
-            == Some(ClusterPresenceDelivery::Subscription),
+        "current_presence_replay": false,
+        "presence_subscription": false,
         "carbon_muc_room": carbon_muc_scope.map(|scope| scope.0),
         "carbon_muc_nick": carbon_muc_scope.map(|scope| scope.1),
     });
+    if options.legacy_directed_or_blocking_presence {
+        payload["legacy_directed_or_blocking_presence"] = serde_json::json!(true);
+    }
     if let Some(control) = options.exact_control {
         payload["protocol_version"] = serde_json::json!(EXACT_CONTROL_DELIVERY_VERSION);
         payload["exact_control"] = serde_json::json!(control);
@@ -751,10 +746,6 @@ pub(super) fn build_node_delivery_payload(
             serde_json::json!(control.kind == ExactControlKind::BlocklistPush);
         payload["privacy_requested_only"] =
             serde_json::json!(control.kind == ExactControlKind::PrivacyPush);
-        payload["current_presence_replay"] =
-            serde_json::json!(control.kind == ExactControlKind::CurrentPresenceReplay);
-        payload["presence_subscription"] =
-            serde_json::json!(control.kind == ExactControlKind::SubscriptionPresence);
     } else if let Some(routes) = options.exact_message_routes {
         payload["expected_connections"] = serde_json::json!(routes);
         if let Some(check_only) = options.exact_iq_check_only {

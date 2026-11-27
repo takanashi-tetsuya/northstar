@@ -16,6 +16,7 @@ mod events;
 pub mod notification_admission;
 pub mod presence;
 pub mod privacy;
+pub mod probe_decision;
 pub mod repository;
 pub mod s2s_roster_authorization;
 pub mod service;

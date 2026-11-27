@@ -6,6 +6,8 @@
 use anyhow::Result;
 use uuid::Uuid;
 
+pub mod commands;
+
 pub use northstar_xep_0016::{
     PrivacyAction, PrivacyItem, PrivacyList, PrivacyMatchType, PrivacyStanzaKind, MAX_PRIVACY_ITEMS,
 };

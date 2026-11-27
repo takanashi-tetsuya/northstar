@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
+use northstar_roster_application::privacy::commands::PolicyCommandRepository;
 use northstar_roster_application::{RosterRepository, RosterService, S2sOutboxPolicy};
 use northstar_roster_core::{
     ClusterPresenceAuthority, LocalRosterContact, PresenceAccount, RosterChange, RosterEventSource,
@@ -197,6 +198,8 @@ pub trait RosterSessionHost: Send + Sync {
     fn full_presence_target_routed(&self, full_jid: &str) -> impl Future<Output = bool> + Send;
     /// Dispatches the push notification of an offline account.
     fn notify_offline_account(&self, user_id: Uuid) -> impl Future<Output = Result<()>> + Send;
+    /// The account-fenced command repository for privacy and blocklist IQs.
+    fn privacy_commands(&self) -> &impl PolicyCommandRepository;
 }
 
 /// Where a client's presence leaves the roster context: presence addressed to the MIX, MUC and PubSub services,

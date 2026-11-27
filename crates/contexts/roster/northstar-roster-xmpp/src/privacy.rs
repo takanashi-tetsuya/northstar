@@ -1,6 +1,7 @@
 //! XEP-0016 privacy lists.
 
 use anyhow::Result;
+use northstar_roster_application::privacy::commands::PolicyCommandRepository;
 use northstar_roster_application::privacy::{PrivacyRepository, PrivacyService};
 use northstar_xml_builder::stanza::{iq_error, iq_result};
 use roxmltree::Node;
@@ -30,6 +31,8 @@ pub trait PrivacySession: crate::SessionIdentity {
     fn privacy_connection_id(&self) -> uuid::Uuid;
     /// The privacy service, over the repository the composition root binds.
     fn privacy_service(&self) -> &PrivacyService<impl PrivacyRepository>;
+    /// The account-fenced command repository for privacy and blocklist IQs.
+    fn privacy_commands(&self) -> &impl PolicyCommandRepository;
     /// Records that this session asked for privacy lists, which makes it a target of later pushes.
     fn privacy_mark_requested(&self);
     /// The name of the session's active list.
@@ -80,8 +83,8 @@ pub async fn privacy_set<S: PrivacySession>(
     let mut changed_list = None;
     let result = match control.tag_name().name() {
         "active" => active_selection::select_active(session, id, &user, control).await?,
-        "default" => list_commands::select_default(session, id, &user, control).await?,
-        "list" => list_commands::edit_list(session, id, &user, control, &mut changed_list).await?,
+        "default" => list_commands::select_default(session, id, control).await?,
+        "list" => list_commands::edit_list(session, id, control, &mut changed_list).await?,
         _ => return Ok((iq_error(id, "bad-request"), None)),
     };
     let result = match result {
@@ -122,7 +125,11 @@ mod tests {
 
     fn parse(xml: &str) -> PrivacyList {
         let document = Document::parse(xml).unwrap();
-        parse_list(document.root_element()).unwrap()
+        let (name, items) = parse_list(document.root_element()).unwrap();
+        PrivacyList {
+            name: name.into_inner(),
+            items,
+        }
     }
 
     #[test]
@@ -172,7 +179,7 @@ mod tests {
                 presence_out: false,
             }],
         };
-        let xml = render_list(&list);
+        let xml = render_list(&list.name, &list.items);
         assert!(Document::parse(&xml).is_ok());
         assert!(xml.contains("a&apos;b") && xml.contains("R&amp;D"));
     }
@@ -221,3 +228,6 @@ mod tests {
         assert!(northstar_roster_application::privacy::default_change_conflicts(1, true));
     }
 }
+
+#[cfg(test)]
+mod command_tests;

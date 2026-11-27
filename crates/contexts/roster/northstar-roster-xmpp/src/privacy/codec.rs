@@ -1,7 +1,7 @@
 use super::PRIVACY_NS;
 use anyhow::Result;
-use northstar_roster_application::privacy::{
-    PrivacyAction, PrivacyItem, PrivacyList, PrivacyMatchType, MAX_PRIVACY_ITEMS,
+use northstar_xep_0016::{
+    PrivacyAction, PrivacyItem, PrivacyListName, PrivacyMatcher, MAX_PRIVACY_ITEMS,
 };
 use northstar_xml_builder::XmlElement;
 use roxmltree::Node;
@@ -28,23 +28,17 @@ fn has_non_whitespace_text(node: Node<'_, '_>) -> bool {
         .any(|child| child.text().is_some_and(|text| !text.trim().is_empty()))
 }
 
-fn valid_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= 128 && !name.chars().any(char::is_control)
-}
-
-pub(super) fn valid_named_empty_control(node: Node<'_, '_>, expected: &str) -> bool {
-    node.tag_name().name() == expected
-        && node.tag_name().namespace() == Some(PRIVACY_NS)
-        && node.attributes().len() == 1
-        && node.attribute("name").is_some_and(valid_name)
-        && element_children(node).is_empty()
-        && !has_non_whitespace_text(node)
-}
-
 pub(super) fn parse_optional_name_control(
     node: Node<'_, '_>,
     expected: &str,
 ) -> Result<Option<String>, ()> {
+    parse_name_control(node, expected).map(|name| name.map(PrivacyListName::into_inner))
+}
+
+pub(super) fn parse_name_control(
+    node: Node<'_, '_>,
+    expected: &str,
+) -> Result<Option<PrivacyListName>, ()> {
     if node.tag_name().name() != expected
         || node.tag_name().namespace() != Some(PRIVACY_NS)
         || node.attributes().len() > 1
@@ -54,13 +48,12 @@ pub(super) fn parse_optional_name_control(
         return Err(());
     }
     match node.attribute("name") {
-        Some(name) if valid_name(name) => Ok(Some(name.to_owned())),
-        Some(_) => Err(()),
+        Some(name) => PrivacyListName::parse(name).map(Some).ok_or(()),
         None => Ok(None),
     }
 }
 
-pub(super) fn parse_list(node: Node<'_, '_>) -> Result<PrivacyList, ()> {
+pub(super) fn parse_list(node: Node<'_, '_>) -> Result<(PrivacyListName, Vec<PrivacyItem>), ()> {
     if node.tag_name().name() != "list"
         || node.tag_name().namespace() != Some(PRIVACY_NS)
         || node.attributes().len() != 1
@@ -70,7 +63,7 @@ pub(super) fn parse_list(node: Node<'_, '_>) -> Result<PrivacyList, ()> {
     }
     let name = node
         .attribute("name")
-        .filter(|name| valid_name(name))
+        .and_then(PrivacyListName::parse)
         .ok_or(())?;
     let children = element_children(node);
     if children.len() > MAX_PRIVACY_ITEMS {
@@ -103,19 +96,19 @@ pub(super) fn parse_list(node: Node<'_, '_>) -> Result<PrivacyList, ()> {
             Some("deny") => PrivacyAction::Deny,
             _ => return Err(()),
         };
-        let (match_type, match_value) = match (item.attribute("type"), item.attribute("value")) {
-            (None, None) => (None, None),
+        let matcher = match (item.attribute("type"), item.attribute("value")) {
+            (None, None) => PrivacyMatcher::Everyone,
             (Some("jid"), Some(value)) => {
                 let value = northstar_xmpp_types::jid::canonicalize(value).map_err(|_| ())?;
-                (Some(PrivacyMatchType::Jid), Some(value))
+                PrivacyMatcher::Jid(value)
             }
             (Some("group"), Some(value)) if !value.is_empty() && value.len() <= 1023 => {
-                (Some(PrivacyMatchType::Group), Some(value.to_owned()))
+                PrivacyMatcher::Group(value.to_owned())
             }
             (Some("subscription"), Some(value))
                 if matches!(value, "none" | "to" | "from" | "both") =>
             {
-                (Some(PrivacyMatchType::Subscription), Some(value.to_owned()))
+                PrivacyMatcher::Subscription(value.to_owned())
             }
             _ => return Err(()),
         };
@@ -141,6 +134,7 @@ pub(super) fn parse_list(node: Node<'_, '_>) -> Result<PrivacyList, ()> {
                 _ => return Err(()),
             }
         }
+        let (match_type, match_value) = matcher.matcher_parts();
         items.push(PrivacyItem {
             order,
             action,
@@ -153,15 +147,12 @@ pub(super) fn parse_list(node: Node<'_, '_>) -> Result<PrivacyList, ()> {
         });
     }
     items.sort_by_key(|item| item.order);
-    Ok(PrivacyList {
-        name: name.to_owned(),
-        items,
-    })
+    Ok((name, items))
 }
 
-pub(super) fn render_list(list: &PrivacyList) -> String {
-    let mut rendered_list = XmlElement::new("list").attr("name", &list.name);
-    for item in &list.items {
+pub(super) fn render_list(name: &str, items: &[PrivacyItem]) -> String {
+    let mut rendered_list = XmlElement::new("list").attr("name", name);
+    for item in items {
         let mut rendered_item = XmlElement::new("item")
             .attr("action", item.action.as_str())
             .attr("order", item.order);

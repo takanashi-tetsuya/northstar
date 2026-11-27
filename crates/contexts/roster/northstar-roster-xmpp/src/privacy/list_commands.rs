@@ -1,8 +1,8 @@
-use super::codec::{parse_list, parse_optional_name_control};
+use super::codec::{parse_list, parse_name_control};
 use super::{PrivacySession, PrivacySetControl};
 use anyhow::Result;
+use northstar_roster_application::privacy::commands::{ActorOutcome, PolicyCommandRepository};
 use northstar_roster_application::privacy::{PrivacyListMutationOutcome, PrivacySelectionOutcome};
-use northstar_roster_core::PresenceAccount;
 use northstar_xml_builder::stanza::iq_error;
 use roxmltree::Node;
 use std::ops::ControlFlow;
@@ -10,27 +10,23 @@ use std::ops::ControlFlow;
 pub(super) async fn select_default<S: PrivacySession>(
     session: &S,
     id: &str,
-    user: &PresenceAccount,
     control: Node<'_, '_>,
 ) -> Result<PrivacySetControl> {
-    let Ok(name) = parse_optional_name_control(control, "default") else {
+    let Some(actor) = session.roster_actor() else {
+        return Ok(ControlFlow::Break((iq_error(id, "not-authorized"), None)));
+    };
+    let Ok(name) = parse_name_control(control, "default") else {
         return Ok(ControlFlow::Break((iq_error(id, "bad-request"), None)));
     };
-    let account = format!("{}@{}", user.username, session.session_local_domain());
-    let remote_resource_exists = session.privacy_has_remote_resources(&account).await?;
     let result = match session
-        .privacy_service()
-        .select_default(
-            user.id,
-            name.as_deref(),
-            session.privacy_local_resources(&account),
-            remote_resource_exists,
-        )
+        .privacy_commands()
+        .select_default_privacy_list(&actor, name.as_ref())
         .await?
     {
-        PrivacySelectionOutcome::Updated => Ok(()),
-        PrivacySelectionOutcome::Missing => Err("item-not-found"),
-        PrivacySelectionOutcome::Conflict => Err("conflict"),
+        ActorOutcome::Current((PrivacySelectionOutcome::Updated, _)) => Ok(()),
+        ActorOutcome::Current((PrivacySelectionOutcome::Missing, _)) => Err("item-not-found"),
+        ActorOutcome::Current((PrivacySelectionOutcome::Conflict, _)) => Err("conflict"),
+        ActorOutcome::Stale => Err("not-authorized"),
     };
     Ok(ControlFlow::Continue(result))
 }
@@ -38,47 +34,56 @@ pub(super) async fn select_default<S: PrivacySession>(
 pub(super) async fn edit_list<S: PrivacySession>(
     session: &S,
     id: &str,
-    user: &PresenceAccount,
     control: Node<'_, '_>,
     changed_list: &mut Option<String>,
 ) -> Result<PrivacySetControl> {
-    let Ok(list) = parse_list(control) else {
+    let Some(actor) = session.roster_actor() else {
+        return Ok(ControlFlow::Break((iq_error(id, "not-authorized"), None)));
+    };
+    let Ok((name, items)) = parse_list(control) else {
         return Ok(ControlFlow::Break((iq_error(id, "bad-request"), None)));
     };
-    let result = if list.items.is_empty() {
-        let active_somewhere = session.privacy_list_active_locally(
-            &format!("{}@{}", user.username, session.session_local_domain()),
-            &list.name,
-        );
+    let result = if items.is_empty() {
         match session
-            .privacy_service()
-            .remove_list(user.id, &list.name, active_somewhere)
+            .privacy_commands()
+            .remove_privacy_list(&actor, &name)
             .await?
         {
-            PrivacyListMutationOutcome::Removed => {
-                *changed_list = Some(list.name.clone());
+            ActorOutcome::Current((PrivacyListMutationOutcome::Removed, _)) => {
+                *changed_list = Some(name.into_inner());
                 Ok(())
             }
-            PrivacyListMutationOutcome::Missing => Err("item-not-found"),
-            PrivacyListMutationOutcome::Conflict => Err("conflict"),
-            PrivacyListMutationOutcome::Stored | PrivacyListMutationOutcome::QuotaExceeded => {
+            ActorOutcome::Current((PrivacyListMutationOutcome::Missing, _)) => {
+                Err("item-not-found")
+            }
+            ActorOutcome::Current((PrivacyListMutationOutcome::Conflict, _)) => Err("conflict"),
+            ActorOutcome::Stale => Err("not-authorized"),
+            ActorOutcome::Current((
+                PrivacyListMutationOutcome::Stored | PrivacyListMutationOutcome::QuotaExceeded,
+                _,
+            )) => {
                 unreachable!("remove-list returned a replace outcome")
             }
         }
     } else {
         match session
-            .privacy_service()
-            .replace_list(user.id, &list)
+            .privacy_commands()
+            .replace_privacy_list(&actor, &name, &items)
             .await?
         {
-            PrivacyListMutationOutcome::Stored => {
-                *changed_list = Some(list.name.clone());
+            ActorOutcome::Current(PrivacyListMutationOutcome::Stored) => {
+                *changed_list = Some(name.into_inner());
                 Ok(())
             }
-            PrivacyListMutationOutcome::QuotaExceeded => Err("resource-constraint"),
-            PrivacyListMutationOutcome::Removed
-            | PrivacyListMutationOutcome::Missing
-            | PrivacyListMutationOutcome::Conflict => {
+            ActorOutcome::Current(PrivacyListMutationOutcome::QuotaExceeded) => {
+                Err("resource-constraint")
+            }
+            ActorOutcome::Stale => Err("not-authorized"),
+            ActorOutcome::Current(
+                PrivacyListMutationOutcome::Removed
+                | PrivacyListMutationOutcome::Missing
+                | PrivacyListMutationOutcome::Conflict,
+            ) => {
                 unreachable!("replace-list returned a remove outcome")
             }
         }

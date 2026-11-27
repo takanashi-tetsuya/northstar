@@ -6,6 +6,7 @@ use northstar_mix_xmpp::MixHandlers;
 use northstar_muc_xmpp::MucHandlers;
 use northstar_pubsub_xmpp::PubSubHandlers;
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
+use northstar_roster_application::privacy::commands::PolicyCommandRepository;
 use northstar_roster_application::{RosterRepository, RosterService, S2sOutboxPolicy};
 use northstar_roster_core::{
     ClusterPresenceAuthority, LocalRosterContact, PresenceAccount, RosterChange,
@@ -34,6 +35,10 @@ impl RosterSessionHost for ServerNode {
 
     fn blocking_service(&self) -> &BlockingService<impl BlockingRepository> {
         self.roster.blocking_service()
+    }
+
+    fn privacy_commands(&self) -> &impl PolicyCommandRepository {
+        self.roster.privacy_service().command_repository()
     }
 
     fn post_accept_failure_telemetry(&self) -> PostAcceptFailureTelemetry {

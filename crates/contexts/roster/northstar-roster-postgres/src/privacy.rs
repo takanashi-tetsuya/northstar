@@ -1,4 +1,5 @@
 mod active_selection;
+mod command_repository;
 mod communication_policy;
 mod decision;
 mod list_commands;
@@ -60,7 +61,7 @@ mod application_repository {
     use uuid::Uuid;
     #[derive(Clone)]
     pub struct PostgresPrivacyRepository {
-        pool: PgPool,
+        pub(super) pool: PgPool,
     }
     impl PostgresPrivacyRepository {
         pub fn new(pool: PgPool) -> Self {

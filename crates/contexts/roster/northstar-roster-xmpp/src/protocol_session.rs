@@ -13,6 +13,7 @@ use anyhow::Result;
 use northstar_federation_core::FederationRoute as _;
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
 use northstar_roster_application::presence::{PresenceRepository, PresenceService};
+use northstar_roster_application::privacy::commands::PolicyCommandRepository;
 use northstar_roster_application::privacy::{PrivacyRepository, PrivacyService};
 use northstar_roster_application::{
     BeginRosterSyncError, RosterRepository, RosterService, RosterSyncPermit, S2sOutboxPolicy,
@@ -152,6 +153,10 @@ impl<H: SessionHost + RosterSessionHost> crate::privacy::PrivacySession for Prot
 
     fn privacy_service(&self) -> &PrivacyService<impl PrivacyRepository> {
         self.host().privacy_service()
+    }
+
+    fn privacy_commands(&self) -> &impl PolicyCommandRepository {
+        self.host().privacy_commands()
     }
 
     fn privacy_mark_requested(&self) {

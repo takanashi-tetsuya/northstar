@@ -678,18 +678,6 @@ mod replay_ports {
         }
 
         #[allow(clippy::too_many_arguments)]
-        async fn pending_presence_page(
-            &self,
-            _recipient_id: Uuid,
-            _owner_bare_jid: &str,
-            _active_privacy_list: Option<&str>,
-            _after: Option<&PendingPresenceCursor>,
-            _domain: &str,
-        ) -> Result<PendingPresencePage> {
-            panic!("unexpected port call: pending_presence_page")
-        }
-
-        #[allow(clippy::too_many_arguments)]
         async fn fence_socket_write(
             &self,
             _delivery: northstar_delivery_core::DurableDelivery,
@@ -1829,7 +1817,11 @@ fn registration_requirement() -> northstar_abuse_policy::WorkRequirement {
 
 mod pam_projection_repository;
 #[cfg(test)]
+mod pending_presence;
+#[cfg(test)]
 mod presence_recovery;
 mod relay_return;
 #[cfg(test)]
 mod replay_authority;
+#[cfg(test)]
+mod subscription_retry;

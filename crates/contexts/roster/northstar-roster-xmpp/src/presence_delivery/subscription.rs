@@ -3,6 +3,9 @@ use crate::PresenceDeliveryHost;
 use anyhow::Result;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_roster_core::PresenceAccount;
+use northstar_stream::local_routes::pending_subscription::{
+    deliver_pending_subscription, PendingSubscriptionKey,
+};
 use northstar_xml_builder::rewrite::set_to;
 use std::sync::atomic::Ordering;
 
@@ -14,6 +17,7 @@ pub async fn deliver_subscription_presence<H: PresenceDeliveryHost>(
     owner_bare: &str,
     recipient_bare: &str,
     stanza: &str,
+    pending: Option<PendingSubscriptionKey>,
 ) -> Result<()> {
     let mut targets = host.session_entries_for(recipient_bare);
     // RFC 6121 subscription-related presence is delivered to
@@ -27,11 +31,26 @@ pub async fn deliver_subscription_presence<H: PresenceDeliveryHost>(
             && session.available.load(Ordering::Acquire)
     });
     for (target_full, session) in targets {
+        let epoch = session.availability_generation.load(Ordering::Acquire);
         if host
             .privacy_allows_session(&session, owner_bare, PrivacyStanzaKind::PresenceIn)
             .await?
         {
-            let _ = session.sender.try_send(set_to(stanza, &target_full));
+            let delivery = set_to(stanza, &target_full);
+            if let Some(key) = &pending {
+                deliver_pending_subscription(&session, epoch, key.clone(), || {
+                    host.send_presence_if_owner_current(
+                        &target_full,
+                        &session,
+                        recipient.id,
+                        recipient.auth_generation,
+                        &session.sender,
+                        &delivery,
+                    )
+                });
+            } else {
+                let _ = session.sender.try_send(delivery);
+            }
         }
     }
     host.route_presence_subscription_remote(

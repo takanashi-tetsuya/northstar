@@ -4,6 +4,7 @@
 pub mod admin_sessions;
 pub mod muc;
 pub mod muc_table;
+pub mod pending_subscription;
 pub mod push_targets;
 pub mod session;
 pub mod session_table;

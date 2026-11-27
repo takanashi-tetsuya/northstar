@@ -1,5 +1,11 @@
 use super::*;
-use northstar_session_application::replay::{ReplayMessage, ReplayPreparation};
+use crate::local_routes::{
+    pending_subscription::deliver_pending_subscription, session::OnlineSession,
+};
+use northstar_session_application::replay::{
+    pending_presence::PendingPresenceAuthority, PendingPresenceReplay, ReplayMessage,
+    ReplayPreparation,
+};
 use std::{
     future::Future,
     sync::RwLock,
@@ -11,6 +17,7 @@ pub struct ReplayTarget {
     pub(super) route: ReplayRoute,
     privacy_active: Arc<RwLock<Option<String>>>,
     is_current: Arc<dyn Fn() -> bool + Send + Sync>,
+    pub(super) pending_route: Option<OnlineSession>,
 }
 
 impl ReplayTarget {
@@ -23,6 +30,7 @@ impl ReplayTarget {
             route,
             privacy_active,
             is_current,
+            pending_route: None,
         }
     }
 
@@ -40,7 +48,14 @@ impl ReplayTarget {
         let expected = route.clone();
         let host = Arc::downgrade(session.host());
         let disconnect = session.disconnect.clone();
-        Self::new(
+        let pending_route = crate::protocol::host::SessionRoutesHost::session_entries_for(
+            &**session.host(),
+            full_jid,
+        )
+        .into_iter()
+        .find(|(jid, entry)| jid == full_jid && matches_route(&route, entry))
+        .map(|(_, entry)| entry);
+        let mut target = Self::new(
             route,
             session.privacy_active.clone(),
             Arc::new(move || {
@@ -53,16 +68,16 @@ impl ReplayTarget {
                         .iter()
                         .any(|(jid, entry)| {
                             jid == &expected.full_jid
-                                && entry.connection_id == expected.connection_id
-                                && entry.user_id == expected.recipient_id
-                                && entry.auth_generation == expected.auth_generation
+                                && matches_route(&expected, entry)
                                 && entry.routable.load(Ordering::Acquire)
                                 && entry.lifecycle.load(Ordering::Acquire) == 0
                                 && !entry.disconnect.is_cancelled()
                         })
                     })
             }),
-        )
+        );
+        target.pending_route = pending_route;
+        target
     }
 
     pub(super) fn current(&self) -> bool {
@@ -82,6 +97,65 @@ impl ReplayTarget {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .eq(expected)
     }
+}
+
+fn matches_route(route: &ReplayRoute, session: &OnlineSession) -> bool {
+    session.connection_id == route.connection_id
+        && session.user_id == route.recipient_id
+        && session.auth_generation == route.auth_generation
+}
+
+pub(super) async fn handoff_pending(
+    service: &ReplayService<impl ReplayAuthorityRepository>,
+    outbound: &crate::outbound::OutboundSender,
+    target: &ReplayTarget,
+    availability: &AvailabilityFence,
+    selection: &Option<String>,
+    pending: &PendingPresenceReplay,
+    stanza: String,
+) -> Result<()> {
+    let Some(session) = &target.pending_route else {
+        return Ok(());
+    };
+    let current = || target.current() && availability.current() && target.selection_is(selection);
+    let mut policy_result = Ok(());
+    let send = outbound.send_if_current_and(
+        stanza,
+        current,
+        async {
+            let authority = PendingPresenceAuthority {
+                route: &target.route,
+                expects_active: selection.is_some(),
+            };
+            match service
+                .pending_presence_is_current(authority, pending)
+                .await
+            {
+                Ok(allowed) => allowed,
+                Err(error) => {
+                    policy_result = Err(error);
+                    false
+                }
+            }
+        },
+        || {
+            // The sink already owns the queue permit and sends synchronously.
+            deliver_pending_subscription(
+                session,
+                availability.expected_generation,
+                (&pending.cursor).into(),
+                || true,
+            )
+        },
+    );
+    tokio::select! {
+        biased;
+        _ = session.disconnect.cancelled() => return Ok(()),
+        result = send => {
+            result.map_err(|_| anyhow::anyhow!("pending subscription replay queue closed"))?;
+        }
+    }
+    policy_result
 }
 
 pub(super) enum ReplayHandoff {

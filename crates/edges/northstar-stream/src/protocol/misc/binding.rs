@@ -200,6 +200,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                 connected_at: std::time::Instant::now(),
                 last_activity: Arc::clone(&self.last_activity),
                 disconnect: self.disconnect.clone(),
+                pending_subscription_delivery: Arc::default(),
             },
         );
         // Release the entry guard before touching PostgreSQL on a collision.

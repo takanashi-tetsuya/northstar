@@ -46,7 +46,7 @@ impl<H: SessionHost> crate::SessionIdentity for ProtocolSession<H> {
     }
 
     fn session_local_domain(&self) -> &str {
-        self.host().local_domain()
+        SessionIdentityHost::local_domain(&**self.host())
     }
 
     fn roster_actor(&self) -> Option<northstar_roster_core::RosterActor> {
@@ -233,7 +233,12 @@ impl<H: RosterSessionHost + crate::privacy::PrivacySelectionHost> PrivacyHandler
 
 // From src/xmpp/protocol/presence/session.rs.
 impl<H: SessionHost + RosterSessionHost> crate::presence::PresenceSession for ProtocolSession<H> {
-    fn presence_service(&self) -> &PresenceService<impl PresenceRepository> {
+    fn presence_service(
+        &self,
+    ) -> &PresenceService<
+        impl PresenceRepository
+            + northstar_roster_application::subscription_retry::SubscriptionRetryRepository,
+    > {
         self.host().presence_service()
     }
 
@@ -335,9 +340,19 @@ impl<H: SessionHost + RosterSessionHost> crate::presence::PresenceSession for Pr
         owner_bare: &str,
         recipient_bare: &str,
         stanza: &str,
+        pending: Option<
+            northstar_stream::local_routes::pending_subscription::PendingSubscriptionKey,
+        >,
     ) -> Result<()> {
         self.host()
-            .deliver_subscription_presence(owner, recipient, owner_bare, recipient_bare, stanza)
+            .deliver_subscription_presence(
+                owner,
+                recipient,
+                owner_bare,
+                recipient_bare,
+                stanza,
+                pending,
+            )
             .await
     }
 
@@ -696,11 +711,6 @@ impl<H: RosterSessionHost + PresenceRouting> PresenceHandlers for ProtocolSessio
                 .expect("a bound resource has availability state")
                 .clone();
             let generation = self.presence.availability_generation.clone();
-            let account = format!(
-                "{}@{}",
-                user.username,
-                SessionIdentityHost::local_domain(&**self.host())
-            );
             let bind2_mam_catchup = self.bind2_mam_catchup;
             let include_offline = priority >= 0 && !bind2_mam_catchup;
             self.defer_after_transport("available-offline-replay", async move {
@@ -708,7 +718,6 @@ impl<H: RosterSessionHost + PresenceRouting> PresenceHandlers for ProtocolSessio
                     replay_service,
                     outbound,
                     replay_target,
-                    account,
                     bind2_mam_catchup,
                     include_offline,
                     available,

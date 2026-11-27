@@ -3,7 +3,9 @@ use crate::local_routes::session::OnlineSession;
 /// Presence services and per-session privacy policy.
 pub trait SessionPresencePolicyHost: Send + Sync + 'static {
     /// The repository behind [`SessionPresencePolicyHost::presence_service`].
-    type PresenceStore: northstar_roster_application::presence::PresenceRepository + 'static;
+    type PresenceStore: northstar_roster_application::presence::PresenceRepository
+        + northstar_roster_application::subscription_retry::SubscriptionRetryRepository
+        + 'static;
     /// The repository behind [`SessionPresencePolicyHost::privacy_service`].
     type PrivacyStore: northstar_roster_application::privacy::PrivacyRepository + 'static;
     /// See `ServerNode::presence_service`.

@@ -67,6 +67,7 @@ pub struct LocalSubscriptionTransition {
     pub actor_subscription: String,
     pub actor_change: Option<RosterChange>,
     pub target_change: Option<RosterChange>,
+    pub pending_created_at_micros: Option<i64>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -183,7 +184,7 @@ pub trait PresenceRepository: ServiceMessageRepository + Send + Sync {
 
 #[derive(Clone)]
 pub struct PresenceService<R> {
-    repository: R,
+    pub(super) repository: R,
 }
 impl<R: PresenceRepository> PresenceService<R> {
     /// Cleanup must notify existing subscribers even after credentials expire.

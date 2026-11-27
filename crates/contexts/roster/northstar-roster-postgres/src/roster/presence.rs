@@ -5,6 +5,7 @@ use super::*;
 mod inbound;
 mod local;
 mod outbound;
+mod retry;
 
 pub use self::inbound::transition_inbound_remote_presence_subscription;
 pub use self::local::{
@@ -18,6 +19,7 @@ pub use self::outbound::{
     transition_remote_presence_subscription_in_transaction,
     transition_remote_presence_subscription_with_outbox_authorized,
 };
+pub use self::retry::{pending_retry_identity, retry_outbound_subscription};
 
 pub fn add_subscription_direction(current: &str, direction: &str) -> &'static str {
     match (current, direction) {

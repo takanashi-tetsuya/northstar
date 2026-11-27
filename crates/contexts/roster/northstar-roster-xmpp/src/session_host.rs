@@ -40,7 +40,9 @@ impl PostAcceptFailureTelemetry {
 
 /// What the node provides to the roster, blocking and privacy handlers of a client session, beyond the session
 /// core's host. The composition root implements it.
-pub trait RosterSessionHost: Send + Sync + crate::blocking::BlockingMutationHost {
+pub trait RosterSessionHost:
+    Send + Sync + crate::blocking::BlockingMutationHost + crate::SubscriptionRetryWake
+{
     /// The node's gate for projecting the current avatar into cached presence.
     fn avatar_presence_gate(&self) -> &AvatarPresenceGate;
     /// The roster service, over the repository the composition root binds.
@@ -129,6 +131,9 @@ pub trait RosterSessionHost: Send + Sync + crate::blocking::BlockingMutationHost
         owner_bare: &str,
         recipient_bare: &str,
         stanza: &str,
+        pending: Option<
+            northstar_stream::local_routes::pending_subscription::PendingSubscriptionKey,
+        >,
     ) -> impl Future<Output = Result<()>> + Send;
     /// Delivers a subscription approval to the available resources of `recipient` on every node, except the local
     /// resource `skip_full`.

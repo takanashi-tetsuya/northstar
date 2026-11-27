@@ -18,6 +18,7 @@ pub mod privacy;
 pub mod repository;
 pub mod s2s_roster_authorization;
 pub mod service;
+pub mod subscription_retry;
 pub use communication_policy::*;
 pub use events::SystemRosterEvents;
 pub use repository::*;

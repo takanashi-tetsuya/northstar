@@ -43,6 +43,7 @@ fn session(user_id: uuid::Uuid, generation: i64, routable: bool) -> OnlineSessio
         connected_at: Instant::now(),
         last_activity: Arc::new(std::sync::RwLock::new(Instant::now())),
         disconnect: tokio_util::sync::CancellationToken::new(),
+        pending_subscription_delivery: Arc::default(),
     }
 }
 

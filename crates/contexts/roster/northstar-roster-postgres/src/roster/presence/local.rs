@@ -209,6 +209,7 @@ pub fn suppressed_local_presence_transition() -> LocalPresenceTransition {
         target_changed: false,
         actor_change: None,
         target_change: None,
+        pending_created_at_micros: None,
     }
 }
 
@@ -356,14 +357,16 @@ pub async fn transition_local_presence_subscription_in_transaction<E: RosterTran
         _ => unreachable!("presence kind validated before transaction"),
     }
 
-    if insert_outbound_pending {
-        sqlx::query("INSERT INTO pending_presence_subscriptions(requester_id,recipient_id,stanza) VALUES($1,$2,$3) ON CONFLICT(requester_id,recipient_id) DO NOTHING")
+    let pending_created_at_micros = if insert_outbound_pending {
+        sqlx::query_scalar("INSERT INTO pending_presence_subscriptions(requester_id,recipient_id,stanza) VALUES($1,$2,$3) ON CONFLICT(requester_id,recipient_id) DO NOTHING RETURNING (EXTRACT(EPOCH FROM created_at) * 1000000)::bigint")
             .bind(actor_id)
             .bind(target_id)
             .bind(stamped_stanza)
-            .execute(&mut **transaction)
-            .await?;
-    }
+            .fetch_optional(&mut **transaction)
+            .await?
+    } else {
+        None
+    };
     if delete_outbound_pending {
         sqlx::query(
             "DELETE FROM pending_presence_subscriptions WHERE requester_id=$1 AND recipient_id=$2",
@@ -436,5 +439,6 @@ pub async fn transition_local_presence_subscription_in_transaction<E: RosterTran
         target_changed,
         actor_change,
         target_change,
+        pending_created_at_micros,
     })
 }

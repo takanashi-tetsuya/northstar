@@ -3,9 +3,9 @@
 
 use anyhow::{Context, Result};
 use northstar_session_application::replay::{
-    AuthorizedReplayClaim, ReplayAuthorityRepository, ReplayBusyUntil, ReplayMessageAuthority,
-    ReplayPageAuthority, ReplayRepository, ReplayRoute, ReplayService, ReplaySession,
-    ReplayStartOutcome,
+    pending_presence::PendingPresenceAuthority, AuthorizedReplayClaim, ReplayAuthorityRepository,
+    ReplayBusyUntil, ReplayMessageAuthority, ReplayPageAuthority, ReplayRepository, ReplayRoute,
+    ReplayService, ReplaySession, ReplayStartOutcome,
 };
 use northstar_xml_builder::escape::attr_escape;
 use rand::Rng;
@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 mod authority;
 pub use authority::ReplayTarget;
-use authority::{handoff, ReplayHandoff};
+use authority::{handoff, handoff_pending, ReplayHandoff};
 
 const OUTBOUND_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(5);
 const RECOVERY_AUTHORITY_HOLD_TIMEOUT: Duration = Duration::from_millis(750);
@@ -363,7 +363,6 @@ pub async fn replay_newly_available_resource(
     service: ReplayService<impl ReplayAuthorityRepository>,
     outbound: crate::outbound::OutboundSender,
     target: ReplayTarget,
-    account: String,
     bind2_mam_catchup: bool,
     include_offline: bool,
     available: Arc<AtomicBool>,
@@ -404,13 +403,12 @@ pub async fn replay_newly_available_resource(
             return;
         }
         let active_privacy_list = target.selected_privacy();
+        let authority = PendingPresenceAuthority {
+            route: &target.route,
+            expects_active: active_privacy_list.is_some(),
+        };
         let page = match service
-            .pending_presence_page(
-                recipient_id,
-                &account,
-                active_privacy_list.as_deref(),
-                cursor.as_ref(),
-            )
+            .pending_presence_page(authority, cursor.as_ref())
             .await
         {
             Ok(page) => page,
@@ -427,18 +425,28 @@ pub async fn replay_newly_available_resource(
             {
                 return;
             }
-            let candidate = pending.requester;
-            let request = pending.stanza.map_or_else(
+            let request = pending.stanza.as_deref().map_or_else(
                 || {
                     format!(
                         "<presence xmlns='jabber:client' from='{}' to='{}' type='subscribe'/>",
-                        attr_escape(&candidate),
+                        attr_escape(&pending.requester),
                         attr_escape(full_jid),
                     )
                 },
-                |stanza| northstar_xml_builder::rewrite::set_to(&stanza, full_jid),
+                |stanza| northstar_xml_builder::rewrite::set_to(stanza, full_jid),
             );
-            if outbound.send(request).await.is_err() {
+            if let Err(error) = handoff_pending(
+                &service,
+                &outbound,
+                &target,
+                &availability,
+                &active_privacy_list,
+                &pending,
+                request,
+            )
+            .await
+            {
+                tracing::warn!(?error, %recipient_id, "pending subscription handoff stopped");
                 return;
             }
         }

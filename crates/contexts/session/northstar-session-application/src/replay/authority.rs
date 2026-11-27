@@ -57,7 +57,9 @@ pub enum ReplayPreparation {
     StaleRoute,
 }
 
-pub trait ReplayAuthorityRepository: ReplayRepository {
+pub trait ReplayAuthorityRepository:
+    ReplayRepository + super::pending_presence::PendingPresenceRepository
+{
     fn claim_current_page(
         &self,
         session: &ReplaySession,

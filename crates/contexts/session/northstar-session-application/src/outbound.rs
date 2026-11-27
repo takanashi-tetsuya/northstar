@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 mod volatile_policy;
-use volatile_policy::{FinalOutboundPolicy, VolatilePolicySink};
+use volatile_policy::{FinalOutboundAdmission, FinalOutboundPolicy, VolatilePolicySink};
 
 /// The transport's sealed authentication control. The session layer only
 /// checks that the queued bytes are the sealed control; the transport reads
@@ -386,12 +386,31 @@ impl OutboundSender {
         F: Fn() -> bool + Send + Sync,
         P: std::future::Future<Output = bool> + Send,
     {
+        self.send_if_current_and(stanza, is_current, policy, || true)
+            .await
+    }
+
+    /// After capacity and policy are confirmed, run the last admission check
+    /// immediately before the reserved queue slot accepts the stanza.
+    pub async fn send_if_current_and<F, P, A>(
+        &self,
+        stanza: String,
+        is_current: F,
+        policy: P,
+        admit: A,
+    ) -> Result<bool, mpsc::error::SendError<String>>
+    where
+        F: Fn() -> bool + Send + Sync,
+        P: std::future::Future<Output = bool> + Send,
+        A: FnOnce() -> bool + Send,
+    {
         match self
             .inner
             .enqueue_with_policy(
                 OutboundItem::plain(stanza),
                 &is_current,
                 Some(Box::pin(policy)),
+                Some(Box::new(admit)),
             )
             .await
         {
@@ -544,7 +563,7 @@ impl OrderedOutboundSink<OutboundItem> for TokioOutboundSink {
         item: OutboundItem,
         is_current: &'a (dyn Fn() -> bool + Send + Sync),
     ) -> OutboundFuture<'a, OutboundItem, GuardedEnqueue<OutboundItem>> {
-        self.enqueue_with_policy(item, is_current, None)
+        self.enqueue_with_policy(item, is_current, None, None)
     }
 }
 
@@ -554,6 +573,7 @@ impl VolatilePolicySink for TokioOutboundSink {
         item: OutboundItem,
         is_current: &'a (dyn Fn() -> bool + Send + Sync),
         policy: Option<FinalOutboundPolicy<'a>>,
+        admit: Option<FinalOutboundAdmission<'a>>,
     ) -> OutboundFuture<'a, OutboundItem, GuardedEnqueue<OutboundItem>> {
         Box::pin(async move {
             if !is_current() {
@@ -585,6 +605,9 @@ impl VolatilePolicySink for TokioOutboundSink {
                 if !is_current() {
                     return Ok(GuardedEnqueue::Stale(item));
                 }
+            }
+            if admit.is_some_and(|admit| !admit()) {
+                return Ok(GuardedEnqueue::Stale(item));
             }
             permit.send(item);
             Ok(GuardedEnqueue::Queued)

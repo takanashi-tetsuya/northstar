@@ -71,14 +71,7 @@ impl<R: FederationOutboxRepository> FederationOutboxService<R> {
             .await
         {
             Ok(()) => {
-                // Enqueue commits before either wake-up. The component's
-                // current socket owner claims its own durable rows.
-                let route = self
-                    .components
-                    .wake_route(&self.component_domains, target_domain);
-                if route == ComponentRoute::NotConfigured {
-                    let _ = self.wake.try_send(());
-                }
+                self.wake_admitted_route(target_domain);
                 true
             }
             Err(error) => {
@@ -96,6 +89,16 @@ impl<R: FederationOutboxRepository> FederationOutboxService<R> {
     /// Call only after a caller-owned outbox transaction commits.
     pub fn wake_outbox(&self) {
         let _ = self.wake.try_send(());
+    }
+
+    /// Wake the current component owner or the federation dispatcher after commit.
+    pub fn wake_admitted_route(&self, target_domain: &str) {
+        let route = self
+            .components
+            .wake_route(&self.component_domains, target_domain);
+        if route == ComponentRoute::NotConfigured {
+            self.wake_outbox();
+        }
     }
 
     /// The MAM service needs only a clone of this edge-triggered sender.

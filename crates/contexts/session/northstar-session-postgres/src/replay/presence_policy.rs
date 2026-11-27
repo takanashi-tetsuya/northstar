@@ -1,31 +1,47 @@
 //! Query pending presence requests and apply consistent privacy and roster policy snapshots.
 
 use super::*;
+use northstar_session_application::replay::pending_presence::PendingPresenceAuthority;
+use northstar_xep_0016::{
+    PrivacyAction, PrivacyItem, PrivacyList, PrivacyMatchType, PrivacyStanzaKind,
+};
+use northstar_xmpp_types::jid::CanonicalJid;
 
+#[cfg(test)]
 pub(super) async fn pending_presence_replay_page_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     recipient_id: Uuid,
     local_domain: &str,
     after: Option<&PendingPresenceCursor>,
 ) -> Result<Vec<PendingPresenceReplay>> {
-    let after_created_at = after.map(|cursor| cursor.created_at);
-    let after_source = after.map_or(0_i16, |cursor| cursor.source);
-    let after_key = after.map_or("", |cursor| cursor.key.as_str());
+    pending_presence_rows(transaction, recipient_id, local_domain, after, false).await
+}
+
+async fn pending_presence_rows(
+    transaction: &mut Transaction<'_, Postgres>,
+    recipient_id: Uuid,
+    local_domain: &str,
+    cursor: Option<&PendingPresenceCursor>,
+    exact: bool,
+) -> Result<Vec<PendingPresenceReplay>> {
+    let after_created_at = cursor.map(|cursor| cursor.created_at);
+    let after_source = cursor.map_or(0_i16, |cursor| cursor.source);
+    let after_key = cursor.map_or("", |cursor| cursor.key.as_str());
     let rows = sqlx::query(
         "WITH pending AS ( \
              SELECT p.created_at,0::SMALLINT AS source,p.requester_id::TEXT AS cursor_key, \
-                    u.username || '@' || $6 AS requester,p.stanza \
+                    u.username || '@' || $6 AS requester,p.stanza,u.auth_generation \
                FROM pending_presence_subscriptions p \
-               JOIN users u ON u.id=p.requester_id \
+               JOIN users u ON u.id=p.requester_id AND NOT u.is_disabled \
               WHERE p.recipient_id=$1 \
              UNION ALL \
              SELECT p.created_at,1::SMALLINT AS source,p.from_jid AS cursor_key, \
-                    p.from_jid AS requester,p.stanza \
+                    p.from_jid AS requester,p.stanza,NULL::BIGINT \
                FROM federated_presence_pending p WHERE p.recipient_id=$1 \
          ) \
-         SELECT created_at,source,cursor_key,requester,stanza FROM pending \
-          WHERE $2::TIMESTAMPTZ IS NULL \
-             OR (created_at,source,cursor_key) > ($2,$3,$4) \
+         SELECT created_at,source,cursor_key,requester,stanza,auth_generation FROM pending \
+          WHERE CASE WHEN $7 THEN (created_at,source,cursor_key) = ($2,$3,$4) \
+             ELSE $2::TIMESTAMPTZ IS NULL OR (created_at,source,cursor_key) > ($2,$3,$4) END \
           ORDER BY created_at,source,cursor_key LIMIT $5",
     )
     .bind(recipient_id)
@@ -34,12 +50,14 @@ pub(super) async fn pending_presence_replay_page_in_transaction(
     .bind(after_key)
     .bind(REPLAY_PAGE_SIZE)
     .bind(local_domain)
+    .bind(exact)
     .fetch_all(&mut **transaction)
     .await?;
     Ok(rows
         .into_iter()
         .map(|row| PendingPresenceReplay {
             requester: row.get("requester"),
+            requester_auth_generation: row.get("auth_generation"),
             stanza: row.get("stanza"),
             cursor: PendingPresenceCursor {
                 created_at: row.get("created_at"),
@@ -48,23 +66,6 @@ pub(super) async fn pending_presence_replay_page_in_transaction(
             },
         })
         .collect())
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct ReplayPrivacyRule {
-    pub(super) deny: bool,
-    pub(super) match_type: Option<String>,
-    pub(super) match_value: Option<String>,
-    pub(super) message: bool,
-    pub(super) iq: bool,
-    pub(super) presence_in: bool,
-    pub(super) presence_out: bool,
-}
-
-#[derive(Clone, Debug)]
-pub(super) enum ReplayPrivacyPolicy {
-    None,
-    Rules(Vec<ReplayPrivacyRule>),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -80,7 +81,7 @@ pub(super) async fn replay_policy_snapshot(
     candidates: &[String],
 ) -> Result<(
     Vec<String>,
-    ReplayPrivacyPolicy,
+    Option<PrivacyList>,
     HashMap<String, ReplayRosterPolicy>,
 )> {
     let blocked_patterns = sqlx::query_scalar::<_, String>(
@@ -102,7 +103,7 @@ pub(super) async fn replay_policy_snapshot(
     };
     let privacy = if let Some(selected) = selected {
         let rows = sqlx::query(
-            "SELECT l.name,i.action,i.match_type,i.match_value,
+            "SELECT l.name,i.item_order,i.action,i.match_type,i.match_value,
                     i.filter_message,i.filter_iq,i.filter_presence_in,i.filter_presence_out
                FROM privacy_lists l
                LEFT JOIN privacy_list_items i
@@ -111,7 +112,7 @@ pub(super) async fn replay_policy_snapshot(
               ORDER BY i.item_order",
         )
         .bind(owner_id)
-        .bind(selected)
+        .bind(&selected)
         .fetch_all(&mut **transaction)
         .await?;
         anyhow::ensure!(
@@ -125,13 +126,21 @@ pub(super) async fn replay_policy_snapshot(
                 // row and permits all traffic.
                 continue;
             };
-            anyhow::ensure!(
-                action == "allow" || action == "deny",
-                "invalid privacy action in offline replay snapshot"
-            );
-            rules.push(ReplayPrivacyRule {
-                deny: action == "deny",
-                match_type: row.try_get::<Option<String>, _>("match_type")?,
+            let match_type: Option<String> = row.try_get("match_type")?;
+            rules.push(PrivacyItem {
+                order: u32::try_from(row.try_get::<i64, _>("item_order")?).map_err(|_| {
+                    anyhow::anyhow!("stored privacy-list order exceeds xs:unsignedInt")
+                })?,
+                action: if action == "allow" {
+                    PrivacyAction::Allow
+                } else {
+                    PrivacyAction::Deny
+                },
+                match_type: match_type.as_deref().map(|value| match value {
+                    "jid" => PrivacyMatchType::Jid,
+                    "group" => PrivacyMatchType::Group,
+                    _ => PrivacyMatchType::Subscription,
+                }),
                 match_value: row.try_get::<Option<String>, _>("match_value")?,
                 message: row.try_get::<bool, _>("filter_message")?,
                 iq: row.try_get::<bool, _>("filter_iq")?,
@@ -139,9 +148,12 @@ pub(super) async fn replay_policy_snapshot(
                 presence_out: row.try_get::<bool, _>("filter_presence_out")?,
             });
         }
-        ReplayPrivacyPolicy::Rules(rules)
+        Some(PrivacyList {
+            name: selected,
+            items: rules,
+        })
     } else {
-        ReplayPrivacyPolicy::None
+        None
     };
 
     let mut candidate_bares = candidates
@@ -162,8 +174,10 @@ pub(super) async fn replay_policy_snapshot(
     .await?;
     let mut roster = HashMap::with_capacity(roster_rows.len());
     for row in roster_rows {
-        let groups =
-            serde_json::from_value::<Vec<String>>(row.try_get::<serde_json::Value, _>("groups")?)?;
+        let groups = row
+            .try_get::<Option<serde_json::Value>, _>("groups")?
+            .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+            .unwrap_or_default();
         roster.insert(
             row.get("contact_jid"),
             ReplayRosterPolicy {
@@ -180,7 +194,7 @@ pub(super) fn replay_policy_denies(
     candidate: &str,
     kind: northstar_xep_0016::PrivacyStanzaKind,
     blocked_patterns: &[String],
-    privacy: &ReplayPrivacyPolicy,
+    privacy: &Option<PrivacyList>,
     roster: &HashMap<String, ReplayRosterPolicy>,
 ) -> Result<bool> {
     let owner = northstar_xmpp_types::jid::CanonicalJid::parse_bare(owner_bare_jid)?;
@@ -193,91 +207,106 @@ pub(super) fn replay_policy_denies(
     {
         return Ok(true);
     }
-    let rules = match privacy {
-        ReplayPrivacyPolicy::None => return Ok(false),
-        ReplayPrivacyPolicy::Rules(rules) => rules,
-    };
-    let roster = roster.get(&candidate.bare());
-    for rule in rules {
-        let stanza_matches = if !(rule.message || rule.iq || rule.presence_in || rule.presence_out)
-        {
-            true
-        } else {
-            match kind {
-                northstar_xep_0016::PrivacyStanzaKind::Message => rule.message,
-                northstar_xep_0016::PrivacyStanzaKind::Iq => rule.iq,
-                northstar_xep_0016::PrivacyStanzaKind::PresenceIn => rule.presence_in,
-                northstar_xep_0016::PrivacyStanzaKind::PresenceOut => rule.presence_out,
-            }
-        };
-        if !stanza_matches {
-            continue;
-        }
-        let entity_matches = match (rule.match_type.as_deref(), rule.match_value.as_deref()) {
-            (None, None) => true,
-            (Some("jid"), Some(value)) => {
-                northstar_xmpp_types::jid_scope_matches(value, &candidate.to_string())
-            }
-            (Some("group"), Some(value)) => {
-                roster.is_some_and(|entry| entry.groups.iter().any(|group| group == value))
-            }
-            (Some("subscription"), Some(value)) => {
-                roster.map_or("none", |entry| entry.subscription.as_str()) == value
-            }
-            _ => false,
-        };
-        if entity_matches {
-            return Ok(rule.deny);
-        }
-    }
-    Ok(false)
+    let entry = roster.get(&candidate.bare());
+    Ok(privacy.as_ref().is_some_and(|list| {
+        northstar_xep_0016::list_denies(
+            list,
+            &candidate.to_string(),
+            entry.map(|entry| entry.subscription.as_str()),
+            entry.map_or(&[], |entry| entry.groups.as_slice()),
+            kind,
+        )
+    }))
 }
 
-/// A bounded union page of local and federated subscription requests whose
-/// XEP-0191/XEP-0016 decision is derived from one repeatable-read snapshot.
-/// Pending requests are intentionally not consumed: RFC 6121 shows the same
-/// outstanding request once to each newly available resource.
-pub async fn pending_presence_replay_page_filtered(
+/// Read one bounded union page using the exact connection's durable selector.
+pub(crate) async fn pending_presence_replay_page_filtered(
     pool: &PgPool,
-    recipient_id: Uuid,
-    owner_bare_jid: &str,
+    authority: PendingPresenceAuthority<'_>,
     local_domain: &str,
-    active_privacy_list: Option<&str>,
     after: Option<&PendingPresenceCursor>,
 ) -> Result<PendingPresenceReplayPage> {
+    pending_presence_snapshot(pool, authority, local_domain, after, false).await
+}
+
+/// Recheck the exact creation identity, requester incarnation and stored bytes.
+pub(crate) async fn pending_presence_is_current(
+    pool: &PgPool,
+    authority: PendingPresenceAuthority<'_>,
+    local_domain: &str,
+    pending: &PendingPresenceReplay,
+) -> Result<bool> {
+    let snapshot =
+        pending_presence_snapshot(pool, authority, local_domain, Some(&pending.cursor), true)
+            .await?;
+    Ok(snapshot.items.first() == Some(pending))
+}
+
+async fn pending_presence_snapshot(
+    pool: &PgPool,
+    authority: PendingPresenceAuthority<'_>,
+    local_domain: &str,
+    cursor: Option<&PendingPresenceCursor>,
+    exact: bool,
+) -> Result<PendingPresenceReplayPage> {
+    let full_jid = CanonicalJid::parse(&authority.route.full_jid)?;
     let local_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
-    let owner_bare_jid = northstar_xmpp_types::jid::canonicalize_bare(owner_bare_jid)?;
+    anyhow::ensure!(
+        full_jid.domainpart() == local_domain
+            && full_jid.resourcepart().is_some()
+            && !authority.route.connection_id.is_nil(),
+        "pending presence replay requires a bound local resource"
+    );
     let mut transaction = pool.begin().await?;
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
         .execute(&mut *transaction)
         .await?;
-    let rows = pending_presence_replay_page_in_transaction(
-        &mut transaction,
-        recipient_id,
-        &local_domain,
-        after,
+    let recipient_id = authority.route.recipient_id;
+    let selector = sqlx::query(
+        "SELECT active.list_name, active.expires_at > statement_timestamp() AS active_valid
+           FROM users recipient
+           LEFT JOIN privacy_active_sessions active
+             ON active.owner_id=recipient.id AND active.connection_id=$4
+          WHERE recipient.id=$1 AND recipient.auth_generation=$2
+            AND recipient.username=$3 AND NOT recipient.is_disabled",
     )
+    .bind(recipient_id)
+    .bind(authority.route.auth_generation)
+    .bind(full_jid.localpart())
+    .bind(authority.route.connection_id)
+    .fetch_optional(&mut *transaction)
     .await?;
+    let Some(selector) = selector else {
+        return Ok(empty_pending_page());
+    };
+    let active: Option<String> = selector.try_get("list_name")?;
+    let valid: Option<bool> = selector.try_get("active_valid")?;
+    if valid == Some(false) || (authority.expects_active && active.is_none()) {
+        return Ok(empty_pending_page());
+    }
+    let rows =
+        pending_presence_rows(&mut transaction, recipient_id, &local_domain, cursor, exact).await?;
     let next_cursor = rows.last().map(|row| row.cursor.clone());
     let complete = rows.len() < REPLAY_PAGE_SIZE as usize;
     let candidates = rows
         .iter()
         .map(|row| row.requester.clone())
         .collect::<Vec<_>>();
-    let (blocked_patterns, privacy, roster) = replay_policy_snapshot(
+    let (blocked, privacy, roster) = replay_policy_snapshot(
         &mut transaction,
         recipient_id,
-        active_privacy_list,
+        active.as_deref(),
         &candidates,
     )
     .await?;
+    let owner_bare = full_jid.bare();
     let mut items = Vec::with_capacity(rows.len());
     for row in rows {
         if !replay_policy_denies(
-            &owner_bare_jid,
+            &owner_bare,
             &row.requester,
-            northstar_xep_0016::PrivacyStanzaKind::PresenceIn,
-            &blocked_patterns,
+            PrivacyStanzaKind::PresenceIn,
+            &blocked,
             &privacy,
             &roster,
         )? {
@@ -290,4 +319,12 @@ pub async fn pending_presence_replay_page_filtered(
         next_cursor,
         complete,
     })
+}
+
+fn empty_pending_page() -> PendingPresenceReplayPage {
+    PendingPresenceReplayPage {
+        items: Vec::new(),
+        next_cursor: None,
+        complete: true,
+    }
 }

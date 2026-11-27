@@ -26,6 +26,7 @@ use roxmltree::Node;
 use uuid::Uuid;
 
 mod privacy_selection;
+mod subscription_retry;
 
 impl RosterSessionHost for ServerNode {
     fn avatar_presence_gate(&self) -> &northstar_roster_xmpp::AvatarPresenceGate {
@@ -199,6 +200,9 @@ impl RosterSessionHost for ServerNode {
         owner_bare: &str,
         recipient_bare: &str,
         stanza: &str,
+        pending: Option<
+            northstar_stream::local_routes::pending_subscription::PendingSubscriptionKey,
+        >,
     ) -> Result<()> {
         presence_delivery::deliver_subscription_presence(
             self,
@@ -207,6 +211,7 @@ impl RosterSessionHost for ServerNode {
             owner_bare,
             recipient_bare,
             stanza,
+            pending,
         )
         .await
     }

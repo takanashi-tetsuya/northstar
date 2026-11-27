@@ -145,6 +145,7 @@ pub struct LocalPresenceTransition {
     pub target_changed: bool,
     pub actor_change: Option<RosterChange>,
     pub target_change: Option<RosterChange>,
+    pub pending_created_at_micros: Option<i64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

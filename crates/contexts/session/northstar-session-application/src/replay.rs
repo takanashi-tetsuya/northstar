@@ -10,6 +10,7 @@ use std::{future::Future, pin::Pin, sync::Arc};
 use uuid::Uuid;
 
 mod authority;
+pub mod pending_presence;
 pub use authority::*;
 
 pub const OWNER_LEASE_SECONDS: i64 = 90;
@@ -140,16 +141,17 @@ pub enum ReplayPageOutcome {
     LeaseLost,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PendingPresenceCursor {
     pub created_at: DateTime<Utc>,
     pub source: i16,
     pub key: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PendingPresenceReplay {
     pub requester: String,
+    pub requester_auth_generation: Option<i64>,
     pub stanza: Option<String>,
     pub cursor: PendingPresenceCursor,
 }
@@ -223,14 +225,6 @@ pub trait ReplayRepository: ReplayLeaseRepository {
         &self,
         session: &ReplaySession,
     ) -> impl std::future::Future<Output = Result<bool>> + Send;
-    fn pending_presence_page(
-        &self,
-        recipient_id: Uuid,
-        owner_bare_jid: &str,
-        active_privacy_list: Option<&str>,
-        after: Option<&PendingPresenceCursor>,
-        domain: &str,
-    ) -> impl std::future::Future<Output = Result<PendingPresencePage>> + Send;
     fn fence_socket_write(
         &self,
         delivery: northstar_delivery_core::DurableDelivery,
@@ -375,24 +369,6 @@ impl<R: ReplayRepository> ReplayService<R> {
 
     pub async fn finish(&self, session: &ReplaySession) -> Result<bool> {
         self.repository.finish(session).await
-    }
-
-    pub async fn pending_presence_page(
-        &self,
-        recipient_id: Uuid,
-        owner_bare_jid: &str,
-        active_privacy_list: Option<&str>,
-        after: Option<&PendingPresenceCursor>,
-    ) -> Result<PendingPresencePage> {
-        self.repository
-            .pending_presence_page(
-                recipient_id,
-                owner_bare_jid,
-                active_privacy_list,
-                after,
-                &self.domain,
-            )
-            .await
     }
 
     pub async fn fence_socket_write(
@@ -630,16 +606,6 @@ mod tests {
         }
         async fn finish(&self, _: &ReplaySession) -> Result<bool> {
             unreachable!("unexpected replay finish")
-        }
-        async fn pending_presence_page(
-            &self,
-            _: Uuid,
-            _: &str,
-            _: Option<&str>,
-            _: Option<&PendingPresenceCursor>,
-            _: &str,
-        ) -> Result<PendingPresencePage> {
-            unreachable!("unexpected presence read")
         }
         async fn fence_socket_write(
             &self,

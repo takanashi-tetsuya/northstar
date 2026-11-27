@@ -5,8 +5,8 @@ use northstar_delivery_core::bosh_ownership::{
 };
 use northstar_delivery_core::{DurableDelivery, TransportOwnershipSource as Source};
 use northstar_session_application::replay::{
-    OfflineReplayLeaseAcquire, PendingPresenceCursor, PendingPresencePage, ReplayLeaseRepository,
-    ReplayPageOutcome, ReplayRepository, ReplaySession,
+    OfflineReplayLeaseAcquire, ReplayLeaseRepository, ReplayPageOutcome, ReplayRepository,
+    ReplaySession,
 };
 use northstar_time::{DateTime, Utc};
 use std::collections::{BTreeMap, BTreeSet};
@@ -158,17 +158,6 @@ impl ReplayRepository for ReplayStore {
 
     async fn finish(&self, _: &ReplaySession) -> Result<bool> {
         panic!("unexpected replay session finish")
-    }
-
-    async fn pending_presence_page(
-        &self,
-        _: Uuid,
-        _: &str,
-        _: Option<&str>,
-        _: Option<&PendingPresenceCursor>,
-        _: &str,
-    ) -> Result<PendingPresencePage> {
-        panic!("unexpected pending presence page")
     }
 
     async fn fence_socket_write(&self, _: DurableDelivery) -> Result<DurableDelivery> {

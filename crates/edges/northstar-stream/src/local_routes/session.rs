@@ -107,6 +107,8 @@ pub struct OnlineSession {
     pub connected_at: Instant,
     pub last_activity: Arc<std::sync::RwLock<Instant>>,
     pub disconnect: CancellationToken,
+    pub pending_subscription_delivery:
+        Arc<super::pending_subscription::PendingSubscriptionDelivery>,
 }
 
 /// A detached local session for tests of crates that cannot name the route-incarnation type.
@@ -162,6 +164,7 @@ pub fn test_online_session(
             connected_at: now,
             last_activity: Arc::new(std::sync::RwLock::new(now)),
             disconnect: CancellationToken::new(),
+            pending_subscription_delivery: Arc::default(),
         },
         receiver,
     )

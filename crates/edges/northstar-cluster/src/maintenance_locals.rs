@@ -127,6 +127,7 @@ mod tests {
             post_actions: northstar_session_application::post_actions::PostActionHandle::default(),
             recovery_replay_inflight_epoch: Arc::default(),
             recovery_replay_completed_epoch: Arc::default(),
+            pending_subscription_delivery: Arc::default(),
             bind2_mam_catchup: false,
             mix_presence_gate: Arc::default(),
             mix_presence_fallback_suppressed: Arc::default(),

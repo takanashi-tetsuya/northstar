@@ -179,6 +179,7 @@ struct ReplayCalls {
     releases: usize,
     authority_cut: Option<authority::AuthorityCut>,
     released_suffix: Vec<Uuid>,
+    pending_rechecks: usize,
 }
 
 #[derive(Clone)]
@@ -268,16 +269,6 @@ impl ReplayRepository for ReplayRepositoryFake {
         assert_eq!(token, authority::CLAIM_TOKEN);
         calls.released_suffix.extend_from_slice(ids);
         Ok(ids.len() as u64)
-    }
-    async fn pending_presence_page(
-        &self,
-        _: Uuid,
-        _: &str,
-        _: Option<&str>,
-        _: Option<&northstar_session_application::replay::PendingPresenceCursor>,
-        _: &str,
-    ) -> Result<northstar_session_application::replay::PendingPresencePage> {
-        panic!("Bind 2 offline replay must not replay pending presence")
     }
     async fn fence_socket_write(
         &self,
@@ -448,3 +439,6 @@ async fn bind2_busy_recovery_retries_then_claims_and_releases_the_same_resource(
 #[cfg(test)]
 #[path = "replay/authority_tests.rs"]
 mod authority;
+#[cfg(test)]
+#[path = "replay/pending_subscription_tests.rs"]
+mod pending_subscription;

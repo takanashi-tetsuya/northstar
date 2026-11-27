@@ -188,6 +188,11 @@ pub(super) async fn update_presence_subscription<S: PresenceSession>(
                     &actor_jid,
                     &target_jid,
                     &stamped_stanza,
+                    transition
+                        .pending_created_at_micros
+                        .map(|created_at_micros| {
+                            PendingSubscriptionKey::local(actor.id, created_at_micros)
+                        }),
                 )
                 .await?;
         }

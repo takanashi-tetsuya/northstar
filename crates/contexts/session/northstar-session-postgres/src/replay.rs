@@ -29,9 +29,11 @@ pub use self::offline_delivery::{
     renew_offline_replay_before_send,
 };
 pub(crate) use self::offline_delivery::{claim_current_page, prepare_current_message};
-pub use self::presence_policy::pending_presence_replay_page_filtered;
 #[cfg(test)]
 use self::presence_policy::pending_presence_replay_page_in_transaction;
+pub(crate) use self::presence_policy::{
+    pending_presence_is_current, pending_presence_replay_page_filtered,
+};
 use self::presence_policy::{replay_policy_denies, replay_policy_snapshot};
 
 const REPLAY_PAGE_SIZE: i64 = 64;

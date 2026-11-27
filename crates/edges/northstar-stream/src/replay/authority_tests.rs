@@ -121,7 +121,6 @@ async fn all_replay_entries_release_only_the_suffix_after_authority_changes() {
                         service,
                         outbound,
                         target,
-                        "alice@example.test".to_owned(),
                         false,
                         true,
                         available,

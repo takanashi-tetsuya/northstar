@@ -147,6 +147,7 @@ impl RouteMap {
             connected_at: now,
             last_activity: Arc::new(std::sync::RwLock::new(now)),
             disconnect: CancellationToken::new(),
+            pending_subscription_delivery: Arc::default(),
         };
         if input.disconnected {
             session.disconnect.cancel();

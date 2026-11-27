@@ -5,6 +5,8 @@ use northstar_time::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+mod pending_presence;
+
 #[derive(Clone)]
 pub struct PostgresReplayRepository {
     pool: PgPool,
@@ -224,25 +226,6 @@ impl ReplayRepository for PostgresReplayRepository {
 
     async fn finish(&self, session: &ReplaySession) -> Result<bool> {
         crate::replay::release_offline_replay_lease(&self.pool, session.lease()).await
-    }
-
-    async fn pending_presence_page(
-        &self,
-        recipient_id: Uuid,
-        owner_bare_jid: &str,
-        active_privacy_list: Option<&str>,
-        after: Option<&PendingPresenceCursor>,
-        domain: &str,
-    ) -> Result<PendingPresencePage> {
-        crate::replay::pending_presence_replay_page_filtered(
-            &self.pool,
-            recipient_id,
-            owner_bare_jid,
-            domain,
-            active_privacy_list,
-            after,
-        )
-        .await
     }
 
     async fn fence_socket_write(

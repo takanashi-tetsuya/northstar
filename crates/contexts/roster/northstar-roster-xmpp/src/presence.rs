@@ -7,7 +7,9 @@ use northstar_roster_application::presence::{
     PresenceRepository, PresenceService, RemoteSubscriptionTransition,
 };
 use northstar_roster_application::privacy::PrivacyStanzaKind;
+use northstar_roster_application::subscription_retry::SubscriptionRetryRepository;
 use northstar_roster_core::PresenceAccount;
+use northstar_stream::local_routes::pending_subscription::PendingSubscriptionKey;
 use northstar_xml_builder::rewrite::{set_from, set_to};
 use northstar_xml_builder::stanza::{blocked_stanza_error, child_text, stanza_error};
 use northstar_xml_builder::XmlElement;
@@ -42,9 +44,13 @@ use self::subscription_route::{RemoteSubscriptionRequest, SubscriptionMutationDi
 /// What a client session provides to the presence handlers, beyond its blocking, privacy and
 /// roster capabilities. The fan-out over online sessions lives behind this trait until the
 /// session context moves.
-pub trait PresenceSession: BlockingSession + PrivacySession + RosterSession {
+pub trait PresenceSession:
+    BlockingSession + PrivacySession + RosterSession + crate::SubscriptionRetryWake
+{
     /// The presence service, over the repository the composition root binds.
-    fn presence_service(&self) -> &PresenceService<impl PresenceRepository>;
+    fn presence_service(
+        &self,
+    ) -> &PresenceService<impl PresenceRepository + SubscriptionRetryRepository>;
     /// The node's gate for projecting the current avatar into cached presence.
     fn avatar_presence_gate(&self) -> &AvatarPresenceGate;
     /// Whether the session's resource is available.
@@ -101,6 +107,7 @@ pub trait PresenceSession: BlockingSession + PrivacySession + RosterSession {
         owner_bare: &str,
         recipient_bare: &str,
         stanza: &str,
+        pending: Option<PendingSubscriptionKey>,
     ) -> impl Future<Output = Result<()>> + Send;
     /// Delivers the `approved` subscription of `owner` to the other available resources of
     /// `recipient`, the account of this session, on this node and on the others.

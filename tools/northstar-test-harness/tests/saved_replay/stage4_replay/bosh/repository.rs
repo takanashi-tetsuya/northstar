@@ -63,16 +63,6 @@ impl ReplayRepository for Repository {
     async fn finish(&self, _: &ReplaySession) -> Result<bool> {
         Err(self.unsupported())
     }
-    async fn pending_presence_page(
-        &self,
-        _: Uuid,
-        _: &str,
-        _: Option<&str>,
-        _: Option<&PendingPresenceCursor>,
-        _: &str,
-    ) -> Result<PendingPresencePage> {
-        Err(self.unsupported())
-    }
     async fn fence_socket_write(&self, _: DurableDelivery) -> Result<DurableDelivery> {
         Err(self.unsupported())
     }

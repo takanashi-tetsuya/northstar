@@ -174,20 +174,12 @@ pub async fn roster_read_snapshot(
 
 pub async fn transition_inbound_remote_presence_subscription(
     pool: &PgPool,
-    recipient_id: Uuid,
-    recipient_domain: &str,
-    from_jid: &str,
-    kind: &str,
-    stamped_stanza: &str,
+    request: northstar_roster_application::presence::InboundSubscriptionRequest<'_>,
 ) -> Result<AuthorizedInboundRemotePresenceTransition> {
     northstar_roster_postgres::roster::transition_inbound_remote_presence_subscription(
         &WorkflowRosterEffects,
         pool,
-        recipient_id,
-        recipient_domain,
-        from_jid,
-        kind,
-        stamped_stanza,
+        request,
     )
     .await
 }
@@ -216,27 +208,21 @@ pub async fn transition_local_presence_subscription(
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn transition_local_presence_subscription_authorized(
     pool: &PgPool,
-    actor_id: Uuid,
-    expected_auth_generation: i64,
-    connection_id: Uuid,
-    actor_domain: &str,
-    target_username: &str,
-    kind: &str,
-    stamped_stanza: &str,
+    request: northstar_roster_application::presence::LocalSubscriptionRequest<'_>,
 ) -> Result<AuthorizedLocalPresenceTransition> {
     northstar_roster_postgres::roster::transition_local_presence_subscription_authorized(
         &WorkflowRosterEffects,
         pool,
-        actor_id,
-        expected_auth_generation,
-        connection_id,
-        actor_domain,
-        target_username,
-        kind,
-        stamped_stanza,
+        request.actor_id,
+        request.expected_auth_generation,
+        request.connection_id,
+        request.local_domain,
+        request.target_username,
+        request.kind,
+        request.stanza,
+        request.expected_target,
     )
     .await
 }

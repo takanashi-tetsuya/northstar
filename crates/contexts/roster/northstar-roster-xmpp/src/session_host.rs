@@ -68,7 +68,7 @@ pub trait RosterSessionHost:
     /// The federation outbox admission policy of roster subscription traffic.
     fn roster_outbox_policy(&self) -> S2sOutboxPolicy;
     /// Wakes the federation outbox after a roster transition queued remote traffic.
-    fn roster_wake_outbox(&self);
+    fn roster_wake_outbox(&self, route: Option<&str>);
     /// Delivers a committed roster change to the owner's interested resources on every node.
     fn deliver_committed_roster_change(
         &self,
@@ -196,7 +196,11 @@ pub trait RosterSessionHost:
         recipient_bare: &str,
     ) -> impl Future<Output = ()> + Send;
     /// Whether some node holds a route for the full JID `full_jid`.
-    fn full_presence_target_routed(&self, full_jid: &str) -> impl Future<Output = bool> + Send;
+    fn full_presence_target_routed(
+        &self,
+        full_jid: &str,
+        account: &PresenceAccount,
+    ) -> impl Future<Output = bool> + Send;
     /// Dispatches the push notification of an offline account.
     fn notify_offline_account(&self, user_id: Uuid) -> impl Future<Output = Result<()>> + Send;
     /// The account-fenced command repository for privacy and blocklist IQs.

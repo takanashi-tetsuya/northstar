@@ -1,22 +1,28 @@
+use super::SubscriptionRevocationRoute;
 use crate::FederatedPresenceHost;
 use northstar_federation_core::FederationRoute;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
+use northstar_roster_core::PresenceAccount;
 use northstar_xml_builder::rewrite::set_to;
 use northstar_xml_builder::XmlElement;
 use northstar_xmpp_types::jid::CanonicalJid;
 use std::sync::atomic::Ordering;
 
-pub(super) async fn send_unavailable_presence_to_remote<H: FederatedPresenceHost>(
+pub(super) async fn send_unavailable_presence_to_remote<
+    H: FederatedPresenceHost + SubscriptionRevocationRoute,
+>(
     state: &H,
+    account: &PresenceAccount,
     owner: &str,
     contact: &str,
+    verified_peer: &str,
 ) {
-    let remote_domain = CanonicalJid::parse(contact)
-        .expect("canonical federated contact")
-        .domainpart()
-        .to_owned();
     let mut resources = state.session_entries_for(owner);
-    resources.retain(|(_, session)| session.available.load(Ordering::Acquire));
+    resources.retain(|(_, session)| {
+        session.user_id == account.id
+            && session.auth_generation == account.auth_generation
+            && session.available.load(Ordering::Acquire)
+    });
     for (full_jid, session) in resources {
         match state
             .privacy_allows_session(&session, contact, PrivacyStanzaKind::PresenceOut)
@@ -29,19 +35,26 @@ pub(super) async fn send_unavailable_presence_to_remote<H: FederatedPresenceHost
                 continue;
             }
         }
+        if !state.sessions_for(&full_jid).iter().any(|current| {
+            current.connection_id == session.connection_id
+                && current.user_id == account.id
+                && current.auth_generation == account.auth_generation
+                && current.available.load(Ordering::Acquire)
+        }) {
+            continue;
+        }
         let stanza = XmlElement::new("presence")
-            .attr("xmlns", "jabber:client")
+            .attr("xmlns", "jabber:server")
             .attr("from", &full_jid)
             .attr("to", contact)
             .attr("type", "unavailable")
             .finish();
         if !state
-            .federation_outbox()
-            .send(&remote_domain, stanza, None)
+            .send_volatile_subscription_revocation(verified_peer, stanza)
             .await
         {
             state.post_accept_failure_telemetry().record_failure();
-            tracing::warn!(owner = %owner, contact = %contact, "failed to admit required federated unavailable presence after subscription removal");
+            tracing::warn!(%owner, %contact, "failed to send volatile unavailable presence after subscription removal");
         }
     }
 }

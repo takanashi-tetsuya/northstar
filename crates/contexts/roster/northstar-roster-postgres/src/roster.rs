@@ -179,7 +179,7 @@ pub struct InboundRemotePresenceTransition {
     /// A server acknowledgement required by this transition. It is separate
     /// from `effect` because an inbound unsubscribe can both be delivered to
     /// interested resources and acknowledged automatically.
-    pub auto_reply: Option<&'static str>,
+    pub auto_reply: Option<northstar_roster_core::SubscriptionReply>,
     /// Removing a real `from` subscription requires the contact's stale
     /// availability to be withdrawn from interested local resources.
     pub send_unavailable: bool,
@@ -482,6 +482,7 @@ where
         target_username,
         kind,
         stamped_stanza,
+        None,
         after_target_resolution,
     )
     .await

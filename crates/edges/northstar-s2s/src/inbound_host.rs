@@ -97,6 +97,7 @@ pub trait InboundHost:
         from: &str,
         to: &str,
         connection_id: Uuid,
+        verified_peer: &str,
     ) -> impl Future<Output = Result<Option<String>>> + Send;
 
     fn find_enabled_presence_user(

@@ -10,6 +10,8 @@ use northstar_time::{DateTime, Utc};
 use uuid::Uuid;
 
 mod service_messages;
+mod subscription_route;
+pub use subscription_route::SubscriptionRoute;
 
 pub use northstar_roster_core::{
     InboundRemotePresenceEffect, LocalPresenceEffect, PresenceAccount, PresencePolicyDenial,
@@ -84,7 +86,7 @@ pub struct InboundSubscriptionTransition {
     pub effect: InboundRemotePresenceEffect,
     pub subscription: String,
     pub change: Option<RosterChange>,
-    pub auto_reply: Option<&'static str>,
+    pub auto_reply: Option<northstar_roster_core::SubscriptionReply>,
     pub send_unavailable: bool,
 }
 
@@ -99,9 +101,33 @@ pub struct LocalSubscriptionRequest<'a> {
     pub target_username: &'a str,
     pub kind: &'a str,
     pub stanza: &'a str,
+    pub expected_target: &'a PresenceAccount,
 }
 
-pub trait PresenceRepository: ServiceMessageRepository + Send + Sync {
+pub struct InboundSubscriptionRequest<'a> {
+    pub recipient: &'a PresenceAccount,
+    pub local_domain: &'a str,
+    pub contact: &'a str,
+    pub action: northstar_roster_core::SubscriptionAction,
+    pub stanza: &'a str,
+    pub verified_peer: &'a str,
+    pub subscribed_reply: &'a str,
+    pub unsubscribed_reply: &'a str,
+    pub outbox_policy: crate::S2sOutboxPolicy,
+}
+
+#[derive(Debug)]
+pub struct SubscriptionOutboxAdmissionError;
+
+impl std::fmt::Display for SubscriptionOutboxAdmissionError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("could not admit subscription presence to the federation outbox")
+    }
+}
+
+pub trait PresenceRepository:
+    ServiceMessageRepository + crate::CommunicationPolicyReader + Send + Sync
+{
     fn roster_subscriptions(
         &self,
         owner_id: Uuid,
@@ -163,11 +189,7 @@ pub trait PresenceRepository: ServiceMessageRepository + Send + Sync {
     ) -> impl std::future::Future<Output = Result<PresenceMutation<LocalSubscriptionTransition>>> + Send;
     fn transition_inbound(
         &self,
-        recipient_id: Uuid,
-        local_domain: &str,
-        contact: &str,
-        kind: &str,
-        stanza: &str,
+        request: InboundSubscriptionRequest<'_>,
     ) -> impl std::future::Future<Output = Result<PresenceMutation<InboundSubscriptionTransition>>> + Send;
     #[allow(clippy::too_many_arguments)]
     fn cluster_authority_is_current(
@@ -203,6 +225,10 @@ impl<R: PresenceRepository> PresenceService<R> {
 
     pub fn new(repository: R) -> Self {
         Self { repository }
+    }
+
+    pub fn communication_policy(&self) -> &impl crate::CommunicationPolicyReader {
+        &self.repository
     }
     pub async fn is_blocked_for_account(
         &self,
@@ -349,15 +375,9 @@ impl<R: PresenceRepository> PresenceService<R> {
 
     pub async fn transition_inbound(
         &self,
-        recipient_id: Uuid,
-        local_domain: &str,
-        contact: &str,
-        kind: &str,
-        stanza: &str,
+        request: InboundSubscriptionRequest<'_>,
     ) -> Result<PresenceMutation<InboundSubscriptionTransition>> {
-        self.repository
-            .transition_inbound(recipient_id, local_domain, contact, kind, stanza)
-            .await
+        self.repository.transition_inbound(request).await
     }
 
     #[allow(clippy::too_many_arguments)]

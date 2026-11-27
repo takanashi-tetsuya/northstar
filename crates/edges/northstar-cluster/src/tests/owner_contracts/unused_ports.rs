@@ -812,11 +812,7 @@ mod presence {
 
         async fn transition_inbound(
             &self,
-            _recipient_id: Uuid,
-            _local_domain: &str,
-            _contact: &str,
-            _kind: &str,
-            _stanza: &str,
+            _request: northstar_roster_application::presence::InboundSubscriptionRequest<'_>,
         ) -> Result<PresenceMutation<InboundSubscriptionTransition>> {
             panic!("unused PresenceRepository::transition_inbound port");
         }
@@ -1081,6 +1077,7 @@ mod sm {
     }
 }
 
+mod communication_policy;
 mod notification;
 mod pam_projection_repository;
 mod prepared_message_history;

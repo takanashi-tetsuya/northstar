@@ -7,11 +7,13 @@ mod authority;
 mod events;
 pub mod roster_sync;
 mod subscription_action;
+mod subscription_transitions;
 
 pub use authority::{ExactPresenceRoute, RosterActor, RosterVersion};
 pub use events::RosterEventSource;
 pub use roster_sync::*;
 pub use subscription_action::{SubscriptionAction, SubscriptionOrigin};
+pub use subscription_transitions::*;
 
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -195,15 +197,14 @@ pub enum AuthorizedLocalPresenceTransition {
 /// Returns `(new_subscription, new_ask, should_send_outbound)`.
 pub fn evaluate_outbound_subscribe(
     current: SubscriptionType,
-    _ask: AskType,
+    ask: AskType,
 ) -> (SubscriptionType, AskType, bool) {
-    match current {
-        SubscriptionType::None => (SubscriptionType::None, AskType::Subscribe, true),
-        SubscriptionType::To => (SubscriptionType::To, AskType::None, false),
-        SubscriptionType::From => (SubscriptionType::From, AskType::Subscribe, true),
-        SubscriptionType::Both => (SubscriptionType::Both, AskType::None, false),
-        SubscriptionType::Remove => (SubscriptionType::None, AskType::Subscribe, true),
-    }
+    let next_ask = if matches!(current, SubscriptionType::None | SubscriptionType::From) {
+        AskType::Subscribe
+    } else {
+        ask
+    };
+    (current, next_ask, true)
 }
 
 /// Pure evaluation of RFC 6121 outbound subscription cancellation (unsubscribe).
@@ -212,13 +213,11 @@ pub fn evaluate_outbound_unsubscribe(
     current: SubscriptionType,
     _ask: AskType,
 ) -> (SubscriptionType, AskType, bool) {
-    match current {
-        SubscriptionType::None => (SubscriptionType::None, AskType::None, false),
-        SubscriptionType::To => (SubscriptionType::None, AskType::None, true),
-        SubscriptionType::From => (SubscriptionType::From, AskType::None, false),
-        SubscriptionType::Both => (SubscriptionType::From, AskType::None, true),
-        SubscriptionType::Remove => (SubscriptionType::None, AskType::None, false),
-    }
+    let next = match current {
+        SubscriptionType::Both | SubscriptionType::From => SubscriptionType::From,
+        _ => SubscriptionType::None,
+    };
+    (next, AskType::None, true)
 }
 
 #[cfg(test)]
@@ -258,7 +257,7 @@ mod tests {
         let (sub, ask, send) = evaluate_outbound_subscribe(SubscriptionType::To, AskType::None);
         assert_eq!(sub, SubscriptionType::To);
         assert_eq!(ask, AskType::None);
-        assert!(!send);
+        assert!(send);
 
         let (sub, ask, send) = evaluate_outbound_subscribe(SubscriptionType::From, AskType::None);
         assert_eq!(sub, SubscriptionType::From);
@@ -268,7 +267,7 @@ mod tests {
         let (sub, ask, send) = evaluate_outbound_subscribe(SubscriptionType::Both, AskType::None);
         assert_eq!(sub, SubscriptionType::Both);
         assert_eq!(ask, AskType::None);
-        assert!(!send);
+        assert!(send);
     }
 
     #[test]
@@ -286,7 +285,7 @@ mod tests {
         let (sub, ask, send) = evaluate_outbound_unsubscribe(SubscriptionType::None, AskType::None);
         assert_eq!(sub, SubscriptionType::None);
         assert_eq!(ask, AskType::None);
-        assert!(!send);
+        assert!(send);
     }
 }
 

@@ -2,8 +2,7 @@ use super::*;
 
 /// Client-authorized local transition. Account lookup, credential-generation
 /// validation, deterministic two-account locking and both roster mutations
-/// share one transaction. A username resolved by the protocol layer never
-/// crosses this authority boundary as a reusable UUID.
+/// share one transaction. Captured target evidence is checked, not trusted.
 #[allow(clippy::too_many_arguments)]
 pub async fn transition_local_presence_subscription_authorized<E: RosterTransactionEffects>(
     effects: &E,
@@ -15,6 +14,7 @@ pub async fn transition_local_presence_subscription_authorized<E: RosterTransact
     target_username: &str,
     kind: &str,
     stamped_stanza: &str,
+    expected_target: &PresenceAccount,
 ) -> Result<AuthorizedLocalPresenceTransition> {
     transition_local_presence_subscription_authorized_with_hook(
         effects,
@@ -26,6 +26,7 @@ pub async fn transition_local_presence_subscription_authorized<E: RosterTransact
         target_username,
         kind,
         stamped_stanza,
+        Some(expected_target),
         || async {},
     )
     .await
@@ -46,35 +47,35 @@ pub async fn transition_local_presence_subscription_authorized_with_hook<
     target_username: &str,
     kind: &str,
     stamped_stanza: &str,
+    expected_target: Option<&PresenceAccount>,
     after_target_resolution: F,
 ) -> Result<AuthorizedLocalPresenceTransition>
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
-    if !matches!(
-        kind,
-        "subscribe" | "subscribed" | "unsubscribe" | "unsubscribed"
-    ) {
+    if SubscriptionAction::parse(kind).is_none() {
         return Ok(AuthorizedLocalPresenceTransition::Missing);
     }
     let actor_domain = northstar_xmpp_types::jid::prepare_domainpart(actor_domain)?;
     let target_username = northstar_roster_application::normalize_username(target_username)?;
     let mut transaction = pool.begin().await?;
 
-    // Resolve the target incarnation inside this transaction, then lock the
-    // two UUIDs in one deterministic statement. A concurrent delete/recreate
-    // can therefore only yield Missing or the fully locked new incarnation;
-    // it can never redirect a mutation accepted for the old UUID.
-    let target_candidate = sqlx::query("SELECT id,username FROM users WHERE username=$1")
-        .bind(&target_username)
-        .fetch_optional(&mut *transaction)
-        .await?;
-    let Some(target_candidate) = target_candidate else {
+    // Lock both UUIDs in one deterministic statement. When the caller
+    // captured target evidence, do not resolve the name a second time.
+    let target_id = match expected_target {
+        Some(target) => Some(target.id),
+        None => {
+            sqlx::query_scalar("SELECT id FROM users WHERE username=$1")
+                .bind(&target_username)
+                .fetch_optional(&mut *transaction)
+                .await?
+        }
+    };
+    let Some(target_id) = target_id else {
         transaction.rollback().await?;
         return Ok(AuthorizedLocalPresenceTransition::Missing);
     };
-    let target_id: Uuid = target_candidate.try_get("id")?;
     // Production uses a no-op. The deterministic test hook proves that an
     // account deleted and recreated after resolution cannot inherit the
     // in-flight mutation intended for the previous UUID.
@@ -113,6 +114,9 @@ where
     let target = locked.iter().find_map(|row| {
         (row.get::<Uuid, _>("id") == target_id
             && row.get::<String, _>("username") == target_username
+            && expected_target.is_none_or(|expected| {
+                row.get::<i64, _>("auth_generation") == expected.auth_generation
+            })
             && !row.get::<bool, _>("is_disabled"))
         .then(|| PresenceAccount {
             id: target_id,
@@ -238,26 +242,8 @@ pub async fn transition_local_presence_subscription_in_transaction<E: RosterTran
     .bind(actor_jid)
     .fetch_optional(&mut **transaction)
     .await?;
-    let actor_subscription = actor_row
-        .as_ref()
-        .map(|row| row.get::<String, _>("subscription"))
-        .unwrap_or_else(|| "none".to_owned());
-    let target_subscription = target_row
-        .as_ref()
-        .map(|row| row.get::<String, _>("subscription"))
-        .unwrap_or_else(|| "none".to_owned());
-    let actor_ask = actor_row
-        .as_ref()
-        .and_then(|row| row.get::<Option<String>, _>("ask"));
-    let target_ask = target_row
-        .as_ref()
-        .and_then(|row| row.get::<Option<String>, _>("ask"));
-    let actor_approved = actor_row
-        .as_ref()
-        .is_some_and(|row| row.get::<bool, _>("approved"));
-    let target_approved = target_row
-        .as_ref()
-        .is_some_and(|row| row.get::<bool, _>("approved"));
+    let actor_facts = subscription_facts(actor_row.as_ref());
+    let target_facts = subscription_facts(target_row.as_ref());
     let pending_inbound = sqlx::query_scalar::<_, i32>(
         "SELECT 1 FROM pending_presence_subscriptions WHERE requester_id=$1 AND recipient_id=$2 FOR UPDATE",
     )
@@ -275,89 +261,19 @@ pub async fn transition_local_presence_subscription_in_transaction<E: RosterTran
     .await?
     .is_some();
 
-    let mut next_actor_subscription = actor_subscription.clone();
-    let mut next_actor_ask = actor_ask.clone();
-    let mut next_actor_approved = actor_approved;
-    let mut next_target_subscription = target_subscription.clone();
-    let mut next_target_ask = target_ask.clone();
-    let mut next_target_approved = target_approved;
-    let effect;
-    let mut insert_outbound_pending = false;
-    let mut delete_outbound_pending = false;
-    let mut delete_inbound_pending = false;
-
-    match kind {
-        "subscribe" if target_approved => {
-            next_actor_subscription =
-                add_subscription_direction(&actor_subscription, "to").to_owned();
-            next_actor_ask = None;
-            next_target_subscription =
-                add_subscription_direction(&target_subscription, "from").to_owned();
-            next_target_approved = false;
-            delete_outbound_pending = true;
-            effect = LocalPresenceEffect::AutoApproved;
+    let decision = local_subscription_transition(
+        actor_facts,
+        target_facts,
+        pending_outbound,
+        pending_inbound,
+        SubscriptionAction::parse(kind).expect("presence kind validated before transaction"),
+    );
+    let pending_created_at_micros = if decision.pending_outbound
+        == PendingSubscriptionChange::Insert
+    {
+        if stamped_stanza.is_empty() || stamped_stanza.len() > 65_536 {
+            anyhow::bail!("presence subscription stanza exceeds the persistence limit");
         }
-        "subscribe" if matches!(actor_subscription.as_str(), "to" | "both") => {
-            effect = LocalPresenceEffect::Suppressed;
-        }
-        "subscribe" if pending_outbound => {
-            effect = LocalPresenceEffect::Suppressed;
-        }
-        "subscribe" => {
-            if stamped_stanza.is_empty() || stamped_stanza.len() > 65_536 {
-                anyhow::bail!("presence subscription stanza exceeds the persistence limit");
-            }
-            next_actor_ask = Some("subscribe".to_owned());
-            insert_outbound_pending = true;
-            effect = LocalPresenceEffect::Forward;
-        }
-        "subscribed" if pending_inbound => {
-            next_actor_subscription =
-                add_subscription_direction(&actor_subscription, "from").to_owned();
-            next_actor_approved = false;
-            next_target_subscription =
-                add_subscription_direction(&target_subscription, "to").to_owned();
-            next_target_ask = None;
-            delete_inbound_pending = true;
-            effect = LocalPresenceEffect::Forward;
-        }
-        "subscribed" if matches!(actor_subscription.as_str(), "from" | "both") => {
-            effect = LocalPresenceEffect::Suppressed;
-        }
-        "subscribed" => {
-            next_actor_approved = true;
-            effect = LocalPresenceEffect::Suppressed;
-        }
-        "unsubscribe" => {
-            next_actor_subscription =
-                remove_subscription_direction(&actor_subscription, "to").to_owned();
-            next_actor_ask = None;
-            next_target_subscription =
-                remove_subscription_direction(&target_subscription, "from").to_owned();
-            delete_outbound_pending = true;
-            effect = LocalPresenceEffect::Forward;
-        }
-        "unsubscribed" => {
-            let routed = pending_inbound || matches!(actor_subscription.as_str(), "from" | "both");
-            next_actor_subscription =
-                remove_subscription_direction(&actor_subscription, "from").to_owned();
-            next_actor_approved = false;
-            if routed {
-                next_target_subscription =
-                    remove_subscription_direction(&target_subscription, "to").to_owned();
-                next_target_ask = None;
-            }
-            delete_inbound_pending = true;
-            effect = if routed {
-                LocalPresenceEffect::Forward
-            } else {
-                LocalPresenceEffect::Suppressed
-            };
-        }
-        _ => unreachable!("presence kind validated before transaction"),
-    }
-
-    let pending_created_at_micros = if insert_outbound_pending {
         sqlx::query_scalar("INSERT INTO pending_presence_subscriptions(requester_id,recipient_id,stanza) VALUES($1,$2,$3) ON CONFLICT(requester_id,recipient_id) DO NOTHING RETURNING (EXTRACT(EPOCH FROM created_at) * 1000000)::bigint")
             .bind(actor_id)
             .bind(target_id)
@@ -367,7 +283,7 @@ pub async fn transition_local_presence_subscription_in_transaction<E: RosterTran
     } else {
         None
     };
-    if delete_outbound_pending {
+    if decision.pending_outbound == PendingSubscriptionChange::Delete {
         sqlx::query(
             "DELETE FROM pending_presence_subscriptions WHERE requester_id=$1 AND recipient_id=$2",
         )
@@ -376,7 +292,7 @@ pub async fn transition_local_presence_subscription_in_transaction<E: RosterTran
         .execute(&mut **transaction)
         .await?;
     }
-    if delete_inbound_pending {
+    if decision.pending_inbound == PendingSubscriptionChange::Delete {
         sqlx::query(
             "DELETE FROM pending_presence_subscriptions WHERE requester_id=$1 AND recipient_id=$2",
         )
@@ -386,46 +302,32 @@ pub async fn transition_local_presence_subscription_in_transaction<E: RosterTran
         .await?;
     }
 
-    let actor_changed = actor_row.as_ref().is_some_and(|_| {
-        next_actor_subscription != actor_subscription
-            || next_actor_ask != actor_ask
-            || next_actor_approved != actor_approved
-    }) || (actor_row.is_none()
-        && (next_actor_subscription != "none" || next_actor_ask.is_some() || next_actor_approved));
-    let target_changed = target_row.as_ref().is_some_and(|_| {
-        next_target_subscription != target_subscription
-            || next_target_ask != target_ask
-            || next_target_approved != target_approved
-    }) || (target_row.is_none()
-        && (next_target_subscription != "none"
-            || next_target_ask.is_some()
-            || next_target_approved));
-    let actor_change = if actor_changed {
+    let actor_change = if decision.journal_actor {
         Some(
             update_subscription_in_transaction(
                 effects,
                 transaction,
                 actor_id,
                 target_jid,
-                &next_actor_subscription,
-                next_actor_ask.as_deref(),
-                Some(next_actor_approved),
+                decision.actor.subscription(),
+                decision.actor.ask(),
+                Some(decision.actor.approved()),
             )
             .await?,
         )
     } else {
         None
     };
-    let target_change = if target_changed {
+    let target_change = if decision.journal_target {
         Some(
             update_subscription_in_transaction(
                 effects,
                 transaction,
                 target_id,
                 actor_jid,
-                &next_target_subscription,
-                next_target_ask.as_deref(),
-                Some(next_target_approved),
+                decision.target.subscription(),
+                decision.target.ask(),
+                Some(decision.target.approved()),
             )
             .await?,
         )
@@ -433,10 +335,10 @@ pub async fn transition_local_presence_subscription_in_transaction<E: RosterTran
         None
     };
     Ok(LocalPresenceTransition {
-        effect,
-        actor_subscription: next_actor_subscription,
-        actor_changed,
-        target_changed,
+        effect: decision.effect,
+        actor_subscription: decision.actor.subscription().to_owned(),
+        actor_changed: decision.journal_actor,
+        target_changed: decision.journal_target,
         actor_change,
         target_change,
         pending_created_at_micros,

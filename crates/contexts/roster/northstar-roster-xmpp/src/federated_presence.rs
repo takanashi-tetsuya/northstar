@@ -15,19 +15,23 @@ mod probe;
 mod render;
 mod replay;
 mod transition;
+mod volatile;
+
+pub use self::volatile::SubscriptionRevocationRoute;
 
 use self::ordinary::dispatch_ordinary_presence;
 use self::probe::route_inbound_presence_probe;
 use self::render::canonical_subscription_stanza;
 use self::transition::transition_inbound_subscription;
 
-pub async fn route_inbound_presence<H: FederatedPresenceHost>(
+pub async fn route_inbound_presence<H: FederatedPresenceHost + SubscriptionRevocationRoute>(
     state: &H,
     root: Node<'_, '_>,
     raw: &str,
     from: &str,
     to: &str,
     connection_id: Uuid,
+    verified_peer: &str,
 ) -> Result<Option<String>> {
     let Ok(to_jid) = CanonicalJid::parse(to) else {
         return Ok(Some(s2s_stanza_error(root, "modify", "jid-malformed")));
@@ -75,8 +79,9 @@ pub async fn route_inbound_presence<H: FederatedPresenceHost>(
     if subscription_kind
         && to_jid.resourcepart().is_some()
         && kind != "subscribe"
-        && state.sessions_for(&to_jid.to_string()).is_empty()
-        && !state.full_presence_target_routed(&to_jid.to_string()).await
+        && !state
+            .full_presence_target_routed(&to_jid.to_string(), &recipient)
+            .await
     {
         return Ok(None);
     }
@@ -109,6 +114,7 @@ pub async fn route_inbound_presence<H: FederatedPresenceHost>(
             &recipient,
             subscription_from.as_deref(),
             canonical_subscription.as_deref(),
+            verified_peer,
         )
         .await?
         {

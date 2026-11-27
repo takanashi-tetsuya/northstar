@@ -1236,13 +1236,29 @@ async fn remote_transition_and_pending_consumption_are_atomic() {
 
     // The remote request consumes pre-approval and grants `from` in the
     // same transaction; no durable pending request is exposed.
+    let recipient = northstar_roster_application::presence::PresenceService::new(
+        crate::presence_repository::PostgresPresenceRepository::new(pool.clone()),
+    )
+    .find_enabled_user(&username)
+    .await
+    .unwrap()
+    .unwrap();
+    let subscribed_reply = format!(
+        "<presence xmlns='jabber:server' from='{username}@example.test' to='{remote}' type='subscribed'/>"
+    );
     let inbound = transition_inbound_remote_presence_subscription(
         &pool,
-        owner_id,
-        "example.test",
-        remote,
-        "subscribe",
-        "<presence xmlns='jabber:client' from='sender@remote.example' to='local@example.test' type='subscribe'/>",
+        northstar_roster_application::presence::InboundSubscriptionRequest {
+            recipient: &recipient,
+            local_domain: "example.test",
+            contact: remote,
+            action: northstar_roster_core::SubscriptionAction::Subscribe,
+            stanza: "<presence xmlns='jabber:client' from='sender@remote.example' to='local@example.test' type='subscribe'/>",
+            verified_peer: "remote.example",
+            subscribed_reply: &subscribed_reply,
+            unsubscribed_reply: "",
+            outbox_policy: policy,
+        },
     )
     .await
     .unwrap();
@@ -1251,7 +1267,12 @@ async fn remote_transition_and_pending_consumption_are_atomic() {
     };
     let inbound = authorized.transition;
     assert_eq!(inbound.subscription, "from");
-    assert_eq!(inbound.auto_reply, Some("subscribed"));
+    assert_eq!(
+        inbound
+            .auto_reply
+            .map(northstar_roster_core::SubscriptionReply::as_str),
+        Some("subscribed")
+    );
     assert_eq!(inbound.effect, InboundRemotePresenceEffect::Suppressed);
     assert!(federated_presence_pending(&pool, owner_id)
         .await

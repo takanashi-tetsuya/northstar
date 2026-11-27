@@ -86,25 +86,31 @@ pub async fn remove_roster_item_in_transaction<E: RosterTransactionEffects>(
             return Ok(AuthorizedRosterRemoval::Unauthorized);
         }
     }
-    let local_contact = if let Some(candidate) =
+    let locked_contact = if let Some(candidate) =
         local_contact_candidate.filter(|contact| locked.contains(&contact.id))
     {
         sqlx::query(
-            "SELECT id,username,auth_generation FROM users
-              WHERE id=$1 AND username=$2 AND NOT is_disabled",
+            "SELECT id,username,auth_generation,is_disabled FROM users
+              WHERE id=$1 AND username=$2",
         )
         .bind(candidate.id)
         .bind(&candidate.username)
         .fetch_optional(&mut *transaction)
         .await?
-        .map(|row| LocalRosterContact {
-            id: row.get("id"),
-            username: row.get("username"),
-            auth_generation: row.get("auth_generation"),
+        .map(|row| {
+            (
+                LocalRosterContact {
+                    id: row.get("id"),
+                    username: row.get("username"),
+                    auth_generation: row.get("auth_generation"),
+                },
+                row.get::<bool, _>("is_disabled"),
+            )
         })
     } else {
         None
     };
+    let durable_contact = locked_contact.as_ref().map(|(contact, _)| contact);
 
     let owner_row = sqlx::query(
         "SELECT subscription,ask FROM roster_items WHERE owner_id=$1 AND contact_jid=$2 FOR UPDATE",
@@ -120,7 +126,7 @@ pub async fn remove_roster_item_in_transaction<E: RosterTransactionEffects>(
     let owner_subscription: String = owner_row.try_get("subscription")?;
     let owner_ask: Option<String> = owner_row.try_get("ask")?;
 
-    let (pending_outbound, pending_inbound) = match (&route, local_contact.as_ref()) {
+    let (pending_outbound, pending_inbound) = match (&route, durable_contact) {
         (RosterRemovalRoute::Local { .. }, Some(contact)) if contact.id != owner_id => {
             let pending_outbound = sqlx::query_scalar::<_, i32>(
                 "SELECT 1 FROM pending_presence_subscriptions WHERE requester_id=$1 AND recipient_id=$2 FOR UPDATE",
@@ -160,9 +166,7 @@ pub async fn remove_roster_item_in_transaction<E: RosterTransactionEffects>(
         matches!(owner_subscription.as_str(), "from" | "both") || pending_inbound;
 
     let mut contact_change = None;
-    if let (RosterRemovalRoute::Local { owner_jid, .. }, Some(contact)) =
-        (route, local_contact.as_ref())
-    {
+    if let (RosterRemovalRoute::Local { owner_jid, .. }, Some(contact)) = (route, durable_contact) {
         let contact_id = contact.id;
         if contact_id != owner_id && locked.contains(&contact_id) {
             let owner_jid = northstar_xmpp_types::jid::canonicalize_bare(owner_jid)?;
@@ -298,7 +302,8 @@ pub async fn remove_roster_item_in_transaction<E: RosterTransactionEffects>(
         RosterRemovalTransition {
             owner_change,
             contact_change,
-            local_contact,
+            local_contact: locked_contact
+                .and_then(|(contact, disabled)| (!disabled).then_some(contact)),
             send_unsubscribe,
             send_unsubscribed,
         },

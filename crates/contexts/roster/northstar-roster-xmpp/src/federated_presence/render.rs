@@ -1,3 +1,4 @@
+use northstar_roster_core::SubscriptionReply;
 use northstar_xml_builder::rewrite::{set_client_namespace, set_from, set_to};
 use northstar_xml_builder::XmlElement;
 
@@ -24,3 +25,21 @@ pub(super) fn presence_probe_status_response(
 pub(super) fn canonical_subscription_stanza(raw: &str, from: &str, to: &str) -> String {
     set_client_namespace(&set_to(&set_from(raw, from), to))
 }
+
+pub(super) fn subscription_reply(
+    from: &str,
+    to: &str,
+    kind: SubscriptionReply,
+    id: Option<&str>,
+) -> String {
+    XmlElement::new("presence")
+        .attr("xmlns", "jabber:server")
+        .attr("from", from)
+        .attr("to", to)
+        .attr("type", kind.as_str())
+        .optional_attr("id", id)
+        .finish()
+}
+
+#[cfg(test)]
+mod tests;

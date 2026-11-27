@@ -5,6 +5,7 @@ use northstar_time::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+mod communication_policy;
 mod service_messages;
 mod subscription_retry;
 
@@ -150,26 +151,9 @@ impl PresenceRepository for PostgresPresenceRepository {
         &self,
         request: LocalSubscriptionRequest<'_>,
     ) -> Result<PresenceMutation<LocalSubscriptionTransition>> {
-        let LocalSubscriptionRequest {
-            actor_id,
-            expected_auth_generation,
-            connection_id,
-            local_domain,
-            target_username,
-            kind,
-            stanza,
-        } = request;
-        let outcome = crate::roster::transition_local_presence_subscription_authorized(
-            &self.pool,
-            actor_id,
-            expected_auth_generation,
-            connection_id,
-            local_domain,
-            target_username,
-            kind,
-            stanza,
-        )
-        .await?;
+        let outcome =
+            crate::roster::transition_local_presence_subscription_authorized(&self.pool, request)
+                .await?;
         Ok(match outcome {
             northstar_roster_core::AuthorizedLocalPresenceTransition::Unauthorized => {
                 PresenceMutation::Unauthorized
@@ -201,20 +185,12 @@ impl PresenceRepository for PostgresPresenceRepository {
 
     async fn transition_inbound(
         &self,
-        recipient_id: Uuid,
-        local_domain: &str,
-        contact: &str,
-        kind: &str,
-        stanza: &str,
+        request: InboundSubscriptionRequest<'_>,
     ) -> Result<PresenceMutation<InboundSubscriptionTransition>> {
         Ok(
             match crate::roster::transition_inbound_remote_presence_subscription(
                 &self.pool,
-                recipient_id,
-                local_domain,
-                contact,
-                kind,
-                stanza,
+                request,
             )
             .await?
             {

@@ -5,7 +5,7 @@ use northstar_roster_application::subscription_retry::{
     SubscriptionRetryAdmission, SubscriptionRetryRepository, SubscriptionRetryRequest,
     SubscriptionRetryTarget,
 };
-use northstar_roster_core::RosterActor;
+use northstar_roster_core::{PresenceAccount, RosterActor};
 use northstar_roster_postgres::{privacy, roster};
 use northstar_session_application::replay::{
     pending_presence::PendingPresenceAuthority, PendingPresenceReplay, ReplayRoute, ReplayService,
@@ -97,6 +97,16 @@ impl Fixture {
     }
 
     async fn local_transition(&self, actor: &RosterActor, kind: &str, stanza: &str) {
+        let (target_id, target_generation): (Uuid, i64) =
+            sqlx::query_as("SELECT id,auth_generation FROM users WHERE username='bob'")
+                .fetch_one(&self.pool)
+                .await
+                .unwrap();
+        let target = PresenceAccount {
+            id: target_id,
+            username: "bob".into(),
+            auth_generation: target_generation,
+        };
         let outcome = self
             .presence
             .transition_local(LocalSubscriptionRequest {
@@ -107,6 +117,7 @@ impl Fixture {
                 target_username: "bob",
                 kind,
                 stanza,
+                expected_target: &target,
             })
             .await
             .unwrap();

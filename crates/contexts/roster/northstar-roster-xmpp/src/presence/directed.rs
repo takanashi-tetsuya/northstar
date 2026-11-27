@@ -2,12 +2,11 @@ use super::availability::{
     commit_directed_presence, plan_directed_presence, route_local_directed, send_address_withdrawal,
 };
 use super::probe_route::route_probe;
-use super::subscription_route::{
-    route_component_subscription, route_local_subscription, route_remote_subscription,
-};
+use super::subscription_route::{route_local_subscription, route_remote_subscription};
 use super::subscriptions::stamped_subscription_presence;
 use super::{inject_vcard_avatar_hash, PresenceSession};
 use anyhow::Result;
+use northstar_roster_application::presence::SubscriptionRoute;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_xml_builder::rewrite::set_from;
 use northstar_xml_builder::stanza::{blocked_stanza_error, stanza_error};
@@ -105,9 +104,21 @@ pub async fn route_directed_presence<S: PresenceSession>(
     };
     let user = session.session_account().expect("authenticated session");
     let target_domain = target_jid.domainpart();
-    let remote_domain = (target_domain != session.session_local_domain()
-        && !session.roster_is_hosted_domain(target_domain))
-    .then_some(target_domain);
+    let hosted_service = session.roster_is_hosted_domain(target_domain);
+    let subscription_route = subscription_kind.then(|| {
+        SubscriptionRoute::resolve(
+            session.session_local_domain(),
+            target_domain,
+            hosted_service,
+            session.presence_is_component_domain(target_domain),
+        )
+    });
+    let remote_domain = match subscription_route {
+        Some(SubscriptionRoute::Hosted) => None,
+        Some(SubscriptionRoute::Component | SubscriptionRoute::Federated) => Some(target_domain),
+        None => (target_domain != session.session_local_domain() && !hosted_service)
+            .then_some(target_domain),
+    };
     if let Some(domain) = remote_domain {
         if !session.presence_route_allowed(domain) {
             return Ok(Some(stanza_error(
@@ -144,7 +155,7 @@ pub async fn route_directed_presence<S: PresenceSession>(
         if matches!(&directed_presence_plan, DirectedPresencePlan::AtCapacity) {
             return Ok(Some(stanza_error(root, "wait", "resource-constraint")));
         }
-        if subscription_kind && !session.presence_is_component_domain(domain) {
+        if let Some(route) = subscription_route {
             if let ControlFlow::Break(reply) = route_remote_subscription(
                 session,
                 root,
@@ -152,6 +163,7 @@ pub async fn route_directed_presence<S: PresenceSession>(
                 subscription_to.as_str(),
                 kind,
                 domain,
+                route,
                 &outbound,
                 &bounce_to,
             )
@@ -160,36 +172,17 @@ pub async fn route_directed_presence<S: PresenceSession>(
                 return Ok(reply);
             }
         } else {
-            // External components are process-local routes rather than
-            // S2S peers. Pre-approvals and other suppressed transitions
-            // must not leak a stanza to the component.
-            let should_route = if subscription_kind {
-                match route_component_subscription(
-                    session,
-                    root,
-                    &user,
-                    subscription_to.as_str(),
-                    kind,
-                )
-                .await?
-                {
-                    ControlFlow::Continue(routed) => routed,
-                    ControlFlow::Break(reply) => return Ok(reply),
-                }
+            // Subscription kinds took the typed route above, so this branch
+            // carries ordinary presence to a federated or component peer.
+            let accepted = if kind == "unavailable" {
+                send_address_withdrawal(session, domain, outbound, &bounce_to).await
             } else {
-                true
+                session
+                    .presence_send_federated(domain, outbound, Some(bounce_to))
+                    .await
             };
-            if should_route {
-                let accepted = if kind == "unavailable" {
-                    send_address_withdrawal(session, domain, outbound, &bounce_to).await
-                } else {
-                    session
-                        .presence_send_federated(domain, outbound, Some(bounce_to))
-                        .await
-                };
-                if !accepted {
-                    return Ok(Some(stanza_error(root, "wait", "remote-server-timeout")));
-                }
+            if !accepted {
+                return Ok(Some(stanza_error(root, "wait", "remote-server-timeout")));
             }
         }
         commit_directed_presence(session, directed_presence_plan);
@@ -241,6 +234,7 @@ pub async fn route_directed_presence<S: PresenceSession>(
             to,
             &canonical_to,
             &user,
+            target_user.as_ref(),
         )
         .await?
         {

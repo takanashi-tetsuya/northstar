@@ -1,6 +1,11 @@
 //! Implement local and remote presence-subscription transitions, pending-state queries, and transactional outbox admission.
 
 use super::*;
+use northstar_roster_core::{
+    inbound_subscription_transition, local_subscription_transition,
+    outbound_subscription_transition, PendingSubscriptionChange, SubscriptionAction,
+    SubscriptionFacts, SubscriptionReply,
+};
 
 mod inbound;
 mod local;
@@ -21,15 +26,17 @@ pub use self::outbound::{
 };
 pub use self::retry::{pending_retry_identity, retry_outbound_subscription};
 
-pub fn add_subscription_direction(current: &str, direction: &str) -> &'static str {
-    match (current, direction) {
-        ("none", "to") => "to",
-        ("none", "from") => "from",
-        ("to", "from") | ("from", "to") | ("both", _) => "both",
-        ("to", "to") => "to",
-        ("from", "from") => "from",
-        _ => "none",
-    }
+fn subscription_facts(row: Option<&sqlx::postgres::PgRow>) -> SubscriptionFacts<'_> {
+    row.map_or_else(
+        || SubscriptionFacts::from_row("none", None, false),
+        |row| {
+            SubscriptionFacts::from_row(
+                row.get("subscription"),
+                row.get("ask"),
+                row.get("approved"),
+            )
+        },
+    )
 }
 
 pub fn remove_subscription_direction(current: &str, direction: &str) -> &'static str {

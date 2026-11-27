@@ -1,5 +1,6 @@
 //! Handles local, federated and component presence subscription transitions and subscription stanza helpers.
 
+use super::subscription_route::subscription_reply_allowed;
 use super::*;
 
 pub(super) async fn update_remote_presence_subscription<S: PresenceSession>(
@@ -42,44 +43,10 @@ pub(super) async fn update_remote_presence_subscription<S: PresenceSession>(
         PresenceMutation::Transition(transition) => transition,
     };
     if transition.routed {
-        session.roster_wake_outbox();
+        session.roster_wake_outbox(Some(target_domain));
     }
     finish_remote_presence_transition(session, &contact, transition).await;
     Ok(SubscriptionMutationDisposition::Accepted(false))
-}
-
-pub(super) async fn update_component_presence_subscription<S: PresenceSession>(
-    session: &S,
-    actor_id: uuid::Uuid,
-    expected_auth_generation: i64,
-    contact: &str,
-    kind: &str,
-) -> Result<SubscriptionMutationDisposition> {
-    let contact = northstar_xmpp_types::jid::canonicalize_bare(contact)?;
-    let outcome = session
-        .presence_service()
-        .transition_remote(
-            actor_id,
-            expected_auth_generation,
-            session.privacy_connection_id(),
-            session.session_local_domain(),
-            &contact,
-            kind,
-        )
-        .await?;
-    let transition = match outcome {
-        PresenceMutation::Unauthorized => {
-            return Ok(SubscriptionMutationDisposition::Unauthorized);
-        }
-        PresenceMutation::PolicyDenied(reason) => {
-            return Ok(SubscriptionMutationDisposition::PolicyDenied(reason));
-        }
-        PresenceMutation::Missing => return Ok(SubscriptionMutationDisposition::Missing),
-        PresenceMutation::Transition(transition) => transition,
-    };
-    let routed = transition.routed;
-    finish_remote_presence_transition(session, &contact, transition).await;
-    Ok(SubscriptionMutationDisposition::Accepted(routed))
 }
 
 pub(super) async fn finish_remote_presence_transition<S: PresenceSession>(
@@ -105,12 +72,11 @@ pub(super) async fn finish_remote_presence_transition<S: PresenceSession>(
 
 pub(super) async fn update_presence_subscription<S: PresenceSession>(
     session: &S,
-    actor_id: uuid::Uuid,
-    actor_username: &str,
-    expected_auth_generation: i64,
+    actor: &PresenceAccount,
     target_jid: &str,
     kind: &str,
     raw: &str,
+    expected_target: &PresenceAccount,
 ) -> Result<SubscriptionMutationDisposition> {
     let target_jid = northstar_xmpp_types::jid::CanonicalJid::parse_bare(target_jid)?;
     if target_jid.domainpart() != session.session_local_domain() {
@@ -119,19 +85,20 @@ pub(super) async fn update_presence_subscription<S: PresenceSession>(
     let Some(target_name) = target_jid.localpart() else {
         return Ok(SubscriptionMutationDisposition::Missing);
     };
-    let actor_jid = format!("{}@{}", actor_username, session.session_local_domain());
+    let actor_jid = format!("{}@{}", actor.username, session.session_local_domain());
     let target_jid = format!("{}@{}", target_name, session.session_local_domain());
     let stamped_stanza = set_to(&set_from(raw, &actor_jid), &target_jid);
     let outcome = session
         .presence_service()
         .transition_local(LocalSubscriptionRequest {
-            actor_id,
-            expected_auth_generation,
+            actor_id: actor.id,
+            expected_auth_generation: actor.auth_generation,
             connection_id: session.privacy_connection_id(),
             local_domain: session.session_local_domain(),
             target_username: target_name,
             kind,
             stanza: &stamped_stanza,
+            expected_target,
         })
         .await?;
     let transition = match outcome {
@@ -161,17 +128,7 @@ pub(super) async fn update_presence_subscription<S: PresenceSession>(
                 .attr("to", &actor_jid)
                 .attr("type", "subscribed")
                 .finish();
-            let active_privacy = session.privacy_active_list();
-            if !session
-                .privacy_service()
-                .denies(
-                    actor.id,
-                    active_privacy.as_deref(),
-                    &target_jid,
-                    PrivacyStanzaKind::PresenceIn,
-                )
-                .await?
-            {
+            if subscription_reply_allowed(session, &actor, &target_jid).await? {
                 session.presence_try_send(approved.clone());
             }
             session
@@ -236,7 +193,7 @@ pub(super) async fn update_presence_subscription<S: PresenceSession>(
             .await;
     }
     // Subscription stanzas were routed above to preserve notification ->
-    // roster-push ordering and exact interested-resource semantics.
+    // roster-push ordering and exact available-resource semantics.
     Ok(SubscriptionMutationDisposition::Accepted(false))
 }
 
@@ -260,3 +217,6 @@ pub(super) fn subscription_policy_error(
 pub(super) fn stamped_subscription_presence(raw: &str, from_bare: &str, to_bare: &str) -> String {
     set_to(&set_from(raw, from_bare), to_bare)
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,4 +1,8 @@
 use super::*;
+use anyhow::Context;
+use northstar_roster_application::presence::{
+    InboundSubscriptionRequest, SubscriptionOutboxAdmissionError,
+};
 
 /// Applies the local side of an inbound RFC 6121 federated subscription
 /// transition.  The roster row, version journal and durable pending request
@@ -8,34 +12,42 @@ use super::*;
 pub async fn transition_inbound_remote_presence_subscription<E: RosterTransactionEffects>(
     effects: &E,
     pool: &PgPool,
-    recipient_id: Uuid,
-    recipient_domain: &str,
-    from_jid: &str,
-    kind: &str,
-    stamped_stanza: &str,
+    request: InboundSubscriptionRequest<'_>,
 ) -> Result<AuthorizedInboundRemotePresenceTransition> {
-    if !matches!(
-        kind,
-        "subscribe" | "subscribed" | "unsubscribe" | "unsubscribed"
-    ) {
+    let InboundSubscriptionRequest {
+        recipient: expected_recipient,
+        local_domain,
+        contact,
+        action,
+        stanza: stamped_stanza,
+        verified_peer,
+        subscribed_reply,
+        unsubscribed_reply,
+        outbox_policy,
+    } = request;
+    let recipient_id = expected_recipient.id;
+    let recipient_domain = northstar_xmpp_types::jid::prepare_domainpart(local_domain)?;
+    let verified_peer = northstar_xmpp_types::jid::prepare_domainpart(verified_peer)?;
+    let from = northstar_xmpp_types::jid::CanonicalJid::parse_bare(contact)?;
+    if from.domainpart() != verified_peer.as_str() {
         return Ok(AuthorizedInboundRemotePresenceTransition::Missing);
     }
-    let recipient_domain = northstar_xmpp_types::jid::prepare_domainpart(recipient_domain)?;
-    let from_jid = northstar_xmpp_types::jid::canonicalize_bare(from_jid)?;
-    if kind == "subscribe" && (stamped_stanza.is_empty() || stamped_stanza.len() > 65_536) {
+    let from_jid = from.to_string();
+    if action == SubscriptionAction::Subscribe
+        && (stamped_stanza.is_empty() || stamped_stanza.len() > 65_536)
+    {
         anyhow::bail!("federated presence subscription stanza exceeds the persistence limit");
     }
 
     let mut transaction = pool.begin().await?;
-    // The recipient is a locally hosted authority, not an authenticated C2S
-    // actor.  Lock its exact UUID and disabled state, but deliberately do not
-    // apply a client auth-generation check to an inbound federated stanza.
     let recipient = sqlx::query(
         "SELECT locked.id,locked.username,locked.auth_generation
            FROM northstar_lock_user_rows_update(ARRAY[$1::uuid]) locked
-          WHERE NOT locked.is_disabled",
+          WHERE NOT locked.is_disabled AND locked.auth_generation=$2 AND locked.username=$3",
     )
     .bind(recipient_id)
+    .bind(expected_recipient.auth_generation)
+    .bind(&expected_recipient.username)
     .fetch_optional(&mut *transaction)
     .await?;
     let Some(recipient) = recipient else {
@@ -55,9 +67,6 @@ pub async fn transition_inbound_remote_presence_subscription<E: RosterTransactio
     .bind(&from_jid)
     .fetch_optional(&mut *transaction)
     .await?;
-    // Inbound federation has no local C2S credential generation. Its
-    // authority is the exact enabled local recipient incarnation plus that
-    // account's XEP-0191 and durable default XEP-0016 inbound policy.
     lock_block_policy_in_transaction(&mut transaction, recipient.id).await?;
     if is_blocked_for_account_in_transaction(
         &mut transaction,
@@ -86,16 +95,6 @@ pub async fn transition_inbound_remote_presence_subscription<E: RosterTransactio
             PresencePolicyDenial::Privacy,
         ));
     }
-    let subscription = existing
-        .as_ref()
-        .map(|row| row.get::<String, _>("subscription"))
-        .unwrap_or_else(|| "none".to_owned());
-    let ask = existing
-        .as_ref()
-        .and_then(|row| row.get::<Option<String>, _>("ask"));
-    let approved = existing
-        .as_ref()
-        .is_some_and(|row| row.get::<bool, _>("approved"));
     let pending = sqlx::query_scalar::<_, i32>(
         "SELECT 1 FROM federated_presence_pending WHERE recipient_id=$1 AND from_jid=$2 FOR UPDATE",
     )
@@ -105,67 +104,9 @@ pub async fn transition_inbound_remote_presence_subscription<E: RosterTransactio
     .await?
     .is_some();
 
-    let mut next_subscription = subscription.clone();
-    let mut next_ask = ask.clone();
-    let mut next_approved = approved;
-    let mut effect = InboundRemotePresenceEffect::Suppressed;
-    let mut auto_reply = None;
-    let mut send_unavailable = false;
-    let mut delete_pending = false;
-    let mut insert_pending = false;
-
-    match kind {
-        "subscribe" if approved => {
-            next_subscription = add_subscription_direction(&subscription, "from").to_owned();
-            next_approved = false;
-            delete_pending = true;
-            // Replaying the acknowledgement is safe and lets a duplicate
-            // request recover a response lost after the prior COMMIT.
-            auto_reply = Some("subscribed");
-        }
-        "subscribe" if matches!(subscription.as_str(), "from" | "both") => {
-            auto_reply = Some("subscribed");
-        }
-        "subscribe" if pending => {}
-        "subscribe" => {
-            insert_pending = true;
-            effect = InboundRemotePresenceEffect::Forward;
-        }
-        "subscribed"
-            if ask.as_deref() == Some("subscribe")
-                && matches!(subscription.as_str(), "none" | "from") =>
-        {
-            next_subscription = add_subscription_direction(&subscription, "to").to_owned();
-            next_ask = None;
-            effect = InboundRemotePresenceEffect::Forward;
-        }
-        "subscribed" => {}
-        "unsubscribe" if pending || matches!(subscription.as_str(), "from" | "both") => {
-            send_unavailable = matches!(subscription.as_str(), "from" | "both");
-            next_subscription = remove_subscription_direction(&subscription, "from").to_owned();
-            next_approved = false;
-            delete_pending = true;
-            effect = InboundRemotePresenceEffect::Forward;
-            auto_reply = Some("unsubscribed");
-        }
-        "unsubscribe" => {
-            // RFC 6121 recommends acknowledging even a harmless duplicate;
-            // this also closes the crash window after the first transition.
-            auto_reply = Some("unsubscribed");
-        }
-        "unsubscribed"
-            if ask.as_deref() == Some("subscribe")
-                || matches!(subscription.as_str(), "to" | "both") =>
-        {
-            next_subscription = remove_subscription_direction(&subscription, "to").to_owned();
-            next_ask = None;
-            effect = InboundRemotePresenceEffect::Forward;
-        }
-        "unsubscribed" => {}
-        _ => unreachable!("presence kind validated above"),
-    }
-
-    if insert_pending {
+    let decision =
+        inbound_subscription_transition(subscription_facts(existing.as_ref()), pending, action);
+    if decision.pending == PendingSubscriptionChange::Insert {
         sqlx::query(
             "INSERT INTO federated_presence_pending (recipient_id, from_jid, stanza) VALUES ($1, $2, $3) ON CONFLICT (recipient_id, from_jid) DO NOTHING",
         )
@@ -175,7 +116,7 @@ pub async fn transition_inbound_remote_presence_subscription<E: RosterTransactio
         .execute(&mut *transaction)
         .await?;
     }
-    if delete_pending {
+    if decision.pending == PendingSubscriptionChange::Delete {
         sqlx::query("DELETE FROM federated_presence_pending WHERE recipient_id=$1 AND from_jid=$2")
             .bind(recipient_id)
             .bind(&from_jid)
@@ -183,36 +124,52 @@ pub async fn transition_inbound_remote_presence_subscription<E: RosterTransactio
             .await?;
     }
 
-    let changed = existing.as_ref().is_some_and(|_| {
-        next_subscription != subscription || next_ask != ask || next_approved != approved
-    }) || (existing.is_none()
-        && (next_subscription != "none" || next_ask.is_some() || next_approved));
-    let change = if changed {
+    let change = if decision.journal {
         Some(
             update_subscription_in_transaction(
                 effects,
                 &mut transaction,
                 recipient_id,
                 &from_jid,
-                &next_subscription,
-                next_ask.as_deref(),
-                Some(next_approved),
+                decision.facts.subscription(),
+                decision.facts.ask(),
+                Some(decision.facts.approved()),
             )
             .await?,
         )
     } else {
         None
     };
+    if let Some(reply) = decision.auto_reply {
+        let stanza = match reply {
+            SubscriptionReply::Subscribed => subscribed_reply,
+            SubscriptionReply::Unsubscribed => unsubscribed_reply,
+        };
+        effects
+            .enqueue_federated_stanza(
+                &mut transaction,
+                &verified_peer,
+                stanza,
+                None,
+                outbox_policy,
+            )
+            .await
+            .context(SubscriptionOutboxAdmissionError)?;
+    }
     transaction.commit().await?;
     Ok(AuthorizedInboundRemotePresenceTransition::Transition(
         Box::new(AuthorizedInboundRemotePresence {
             recipient,
             transition: InboundRemotePresenceTransition {
-                effect,
-                subscription: next_subscription,
+                effect: if decision.forward {
+                    InboundRemotePresenceEffect::Forward
+                } else {
+                    InboundRemotePresenceEffect::Suppressed
+                },
+                subscription: decision.facts.subscription().to_owned(),
                 change,
-                auto_reply,
-                send_unavailable,
+                auto_reply: decision.auto_reply,
+                send_unavailable: decision.send_unavailable,
             },
         }),
     ))

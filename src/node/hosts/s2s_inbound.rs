@@ -180,6 +180,7 @@ impl InboundHost for ServerNode {
         from: &str,
         to: &str,
         connection_id: Uuid,
+        verified_peer: &str,
     ) -> Result<Option<String>> {
         northstar_roster_xmpp::federated_presence::route_inbound_presence(
             self,
@@ -188,6 +189,7 @@ impl InboundHost for ServerNode {
             from,
             to,
             connection_id,
+            verified_peer,
         )
         .await
     }

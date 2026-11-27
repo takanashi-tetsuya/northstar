@@ -40,7 +40,7 @@ pub trait RosterSession: crate::SessionIdentity {
     /// The durable federation outbox policy.
     fn roster_outbox_policy(&self) -> S2sOutboxPolicy;
     /// Wakes the durable federation outbox.
-    fn roster_wake_outbox(&self);
+    fn roster_wake_outbox(&self, route: Option<&str>);
     /// Delivers a subscription presence `stanza` of a roster removal to the available
     /// resources of `recipient`, on this node and on the others.
     fn roster_deliver_removal_presence(
@@ -290,7 +290,7 @@ pub async fn roster_set<S: RosterSession>(
             // Both cancellation rows committed with the roster removal;
             // this wake is only an edge trigger and restart recovery is
             // provided by the periodic durable-outbox poll.
-            session.roster_wake_outbox();
+            session.roster_wake_outbox(None);
         }
         if let Some(contact) = removal.local_contact.as_ref() {
             let target_jid = format!("{}@{}", contact.username, session.session_local_domain());

@@ -390,7 +390,14 @@ pub(super) async fn route_inbound_scoped<H: InboundHost>(
         "iq" => route_inbound_iq(state, root, &client_raw, &from, &to).await,
         "presence" => {
             state
-                .route_inbound_presence(root, &client_raw, &from, &to, connection_id)
+                .route_inbound_presence(
+                    root,
+                    &client_raw,
+                    &from,
+                    &to,
+                    connection_id,
+                    authenticated_domain,
+                )
                 .await
         }
         _ => Ok(Some(s2s_stanza_error(

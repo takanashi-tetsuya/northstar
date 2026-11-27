@@ -6,7 +6,6 @@ use northstar_roster_application::presence::{
     LocalPresenceEffect, LocalSubscriptionRequest, PresenceMutation, PresencePolicyDenial,
     PresenceRepository, PresenceService, RemoteSubscriptionTransition,
 };
-use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_roster_application::subscription_retry::SubscriptionRetryRepository;
 use northstar_roster_core::PresenceAccount;
 use northstar_stream::local_routes::pending_subscription::PendingSubscriptionKey;
@@ -166,8 +165,12 @@ pub trait PresenceSession:
         owner_bare: &str,
         recipient_bare: &str,
     ) -> impl Future<Output = ()> + Send;
-    /// Whether another node routes the full JID.
-    fn presence_full_target_routed(&self, full_jid: &str) -> impl Future<Output = bool> + Send;
+    /// Whether the full JID has a published route for this target precondition.
+    fn presence_full_target_routed(
+        &self,
+        full_jid: &str,
+        account: &PresenceAccount,
+    ) -> impl Future<Output = bool> + Send;
     /// Tells the devices of an account without a session that something arrived.
     fn presence_notify_offline(
         &self,

@@ -1,6 +1,8 @@
 use super::*;
+use anyhow::Context;
+use northstar_roster_application::presence::SubscriptionOutboxAdmissionError;
 
-/// Client-authorized federated/component transition without an S2S outbox.
+/// Client-authorized transition without an S2S outbox.
 /// This is intentionally distinct from the inbound-federation path: the
 /// latter authenticates a remote domain and has no C2S credential generation.
 #[allow(clippy::too_many_arguments)]
@@ -74,10 +76,7 @@ pub async fn transition_remote_presence_subscription_authorized_inner<
     outbox: Option<(&str, &str, Option<&str>, S2sOutboxPolicy)>,
 ) -> Result<AuthorizedRemotePresenceTransition> {
     anyhow::ensure!(
-        matches!(
-            kind,
-            "subscribe" | "subscribed" | "unsubscribe" | "unsubscribed"
-        ),
+        SubscriptionAction::parse(kind).is_some(),
         "invalid presence subscription transition"
     );
     let mut transaction = pool.begin().await?;
@@ -168,16 +167,6 @@ pub async fn transition_remote_presence_subscription_in_transaction<E: RosterTra
     .bind(&from_jid)
     .fetch_optional(&mut **transaction)
     .await?;
-    let subscription = existing
-        .as_ref()
-        .map(|row| row.get::<String, _>("subscription"))
-        .unwrap_or_else(|| "none".to_owned());
-    let ask = existing
-        .as_ref()
-        .and_then(|row| row.get::<Option<String>, _>("ask"));
-    let approved = existing
-        .as_ref()
-        .is_some_and(|row| row.get::<bool, _>("approved"));
     let pending = sqlx::query_scalar::<_, i32>(
         "SELECT 1 FROM federated_presence_pending WHERE recipient_id=$1 AND from_jid=$2 FOR UPDATE",
     )
@@ -186,81 +175,45 @@ pub async fn transition_remote_presence_subscription_in_transaction<E: RosterTra
     .fetch_optional(&mut **transaction)
     .await?
     .is_some();
-    let (next_subscription, next_ask, next_approved, routed) = match kind {
-        "subscribe" => (
-            subscription.clone(),
-            if matches!(subscription.as_str(), "none" | "from") {
-                Some("subscribe".to_owned())
-            } else {
-                ask.clone()
-            },
-            approved,
-            true,
-        ),
-        "subscribed" if pending => (
-            add_subscription_direction(&subscription, "from").to_owned(),
-            ask.clone(),
-            false,
-            true,
-        ),
-        "subscribed" if !matches!(subscription.as_str(), "from" | "both") => {
-            (subscription.clone(), ask.clone(), true, false)
-        }
-        "subscribed" => (subscription.clone(), ask.clone(), approved, false),
-        "unsubscribe" => (
-            remove_subscription_direction(&subscription, "to").to_owned(),
-            None,
-            approved,
-            true,
-        ),
-        "unsubscribed" => (
-            remove_subscription_direction(&subscription, "from").to_owned(),
-            ask.clone(),
-            false,
-            pending || matches!(subscription.as_str(), "from" | "both"),
-        ),
-        _ => return Ok(None),
+    let Some(action) = SubscriptionAction::parse(kind) else {
+        return Ok(None);
     };
-    // A no-op cancellation must not materialize an empty roster item merely
-    // because no row existed.  Initial subscribe/pre-approval transitions do
-    // need a row because `ask`/`approved` carries protocol state.
-    let changed = existing.as_ref().is_some_and(|_| {
-        next_subscription != subscription || next_ask != ask || next_approved != approved
-    }) || (existing.is_none()
-        && (next_subscription != "none" || next_ask.is_some() || next_approved));
-    let change = if changed {
+    let decision =
+        outbound_subscription_transition(subscription_facts(existing.as_ref()), pending, action);
+    let change = if decision.journal {
         Some(
             update_subscription_in_transaction(
                 effects,
                 transaction,
                 recipient_id,
                 &from_jid,
-                &next_subscription,
-                next_ask.as_deref(),
-                Some(next_approved),
+                decision.facts.subscription(),
+                decision.facts.ask(),
+                Some(decision.facts.approved()),
             )
             .await?,
         )
     } else {
         None
     };
-    if (kind == "subscribed" && pending) || kind == "unsubscribed" {
+    if decision.pending == PendingSubscriptionChange::Delete {
         sqlx::query("DELETE FROM federated_presence_pending WHERE recipient_id=$1 AND from_jid=$2")
             .bind(recipient_id)
             .bind(&from_jid)
             .execute(&mut **transaction)
             .await?;
     }
-    if routed {
+    if decision.forward {
         if let Some((target_domain, stanza, bounce_to, policy)) = outbox {
             effects
                 .enqueue_federated_stanza(transaction, target_domain, stanza, bounce_to, policy)
-                .await?;
+                .await
+                .context(SubscriptionOutboxAdmissionError)?;
         }
     }
     Ok(Some(RemotePresenceTransition {
-        subscription: next_subscription,
+        subscription: decision.facts.subscription().to_owned(),
         change,
-        routed,
+        routed: decision.forward,
     }))
 }

@@ -423,8 +423,10 @@ impl<H: SessionHost + RosterSessionHost> crate::presence::PresenceSession for Pr
             .await;
     }
 
-    async fn presence_full_target_routed(&self, full_jid: &str) -> bool {
-        self.host().full_presence_target_routed(full_jid).await
+    async fn presence_full_target_routed(&self, full_jid: &str, account: &PresenceAccount) -> bool {
+        self.host()
+            .full_presence_target_routed(full_jid, account)
+            .await
     }
 
     async fn presence_notify_offline(&self, user_id: uuid::Uuid) -> Result<()> {
@@ -489,8 +491,8 @@ impl<H: SessionHost + RosterSessionHost> crate::roster::RosterSession for Protoc
         self.host().roster_outbox_policy()
     }
 
-    fn roster_wake_outbox(&self) {
-        self.host().roster_wake_outbox();
+    fn roster_wake_outbox(&self, route: Option<&str>) {
+        self.host().roster_wake_outbox(route);
     }
 
     async fn roster_deliver_removal_presence(

@@ -148,6 +148,7 @@ async fn password_change_and_disable_win_the_client_subscription_fence() {
                 stanza: &format!(
                     "<presence xmlns='jabber:client' from='{actor_name}@example.test' to='{target_name}@example.test' type='subscribe'/>"
                 ),
+                expected_target: &service.find_enabled_user(&target_name).await.unwrap().unwrap(),
             })
             .await
             .unwrap(),
@@ -296,6 +297,8 @@ async fn inverse_local_requests_share_uuid_lock_order_and_commit_both() {
     let bob_request = format!(
         "<presence xmlns='jabber:client' from='{bob}@example.test' to='{alice}@example.test' type='subscribe'/>"
     );
+    let alice_target = service.find_enabled_user(&alice).await.unwrap().unwrap();
+    let bob_target = service.find_enabled_user(&bob).await.unwrap().unwrap();
     let (alice_result, bob_result) = tokio::join!(
         service.transition_local(LocalSubscriptionRequest {
             actor_id: alice_id,
@@ -305,6 +308,7 @@ async fn inverse_local_requests_share_uuid_lock_order_and_commit_both() {
             target_username: &bob,
             kind: "subscribe",
             stanza: &alice_request,
+            expected_target: &bob_target,
         }),
         service.transition_local(LocalSubscriptionRequest {
             actor_id: bob_id,
@@ -314,6 +318,7 @@ async fn inverse_local_requests_share_uuid_lock_order_and_commit_both() {
             target_username: &alice,
             kind: "subscribe",
             stanza: &bob_request,
+            expected_target: &alice_target,
         })
     );
     assert!(matches!(
@@ -422,6 +427,7 @@ async fn duplicate_local_subscribe_is_a_true_state_noop() {
             target_username: &target,
             kind: "subscribe",
             stanza: &stanza,
+            expected_target: &service.find_enabled_user(&target).await.unwrap().unwrap(),
         })
         .await
         .unwrap();
@@ -447,6 +453,7 @@ async fn duplicate_local_subscribe_is_a_true_state_noop() {
             target_username: &target,
             kind: "subscribe",
             stanza: &stanza,
+            expected_target: &service.find_enabled_user(&target).await.unwrap().unwrap(),
         })
         .await
         .unwrap();
@@ -561,6 +568,7 @@ async fn exact_connection_privacy_and_default_change_fence_subscription_mutation
                 target_username: &target,
                 kind: "subscribe",
                 stanza: &stanza,
+                expected_target: &service.find_enabled_user(&target).await.unwrap().unwrap(),
             })
             .await
             .unwrap(),
@@ -659,6 +667,11 @@ async fn block_commit_and_inbound_default_policy_win_subscription_races() {
                 target_username: &target_for_task,
                 kind: "subscribe",
                 stanza: &stanza,
+                expected_target: &waiting_service
+                    .find_enabled_user(&target_for_task)
+                    .await
+                    .unwrap()
+                    .unwrap(),
             })
             .await
     });
@@ -700,16 +713,19 @@ async fn block_commit_and_inbound_default_policy_win_subscription_races() {
         .unwrap()
     );
     assert!(matches!(
-        service
-            .transition_inbound(
-                target_id,
-                "example.test",
-                "sender@remote.test",
-                "subscribe",
-                &format!(
+        service.transition_inbound(InboundSubscriptionRequest {
+                recipient: &service.find_enabled_user(&target).await.unwrap().unwrap(),
+                local_domain: "example.test",
+                contact: "sender@remote.test",
+                action: northstar_roster_core::SubscriptionAction::Subscribe,
+                stanza: &format!(
                     "<presence xmlns='jabber:client' from='sender@remote.test' to='{target}@example.test' type='subscribe'/>"
                 ),
-            )
+                verified_peer: "remote.test",
+                subscribed_reply: "",
+                unsubscribed_reply: "",
+                outbox_policy: policy(),
+            })
             .await
             .unwrap(),
         PresenceMutation::PolicyDenied(PresencePolicyDenial::Privacy)

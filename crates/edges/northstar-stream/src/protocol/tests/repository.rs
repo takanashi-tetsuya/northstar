@@ -824,11 +824,7 @@ mod presence_ports {
         #[allow(clippy::too_many_arguments)]
         async fn transition_inbound(
             &self,
-            _recipient_id: Uuid,
-            _local_domain: &str,
-            _contact: &str,
-            _kind: &str,
-            _stanza: &str,
+            _request: northstar_roster_application::presence::InboundSubscriptionRequest<'_>,
         ) -> Result<PresenceMutation<InboundSubscriptionTransition>> {
             panic!("unexpected port call: transition_inbound")
         }
@@ -1815,6 +1811,7 @@ fn registration_requirement() -> northstar_abuse_policy::WorkRequirement {
     }
 }
 
+mod communication_policy;
 mod pam_projection_repository;
 #[cfg(test)]
 mod pending_presence;

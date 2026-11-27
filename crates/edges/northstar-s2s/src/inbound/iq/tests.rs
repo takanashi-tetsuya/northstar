@@ -155,6 +155,7 @@ impl InboundHost for Host {
         _: &str,
         _: &str,
         _: Uuid,
+        _: &str,
     ) -> Result<Option<String>> {
         unreachable!()
     }

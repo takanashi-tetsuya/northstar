@@ -1,10 +1,15 @@
 use super::subscriptions::{
-    subscription_policy_error, update_component_presence_subscription,
-    update_presence_subscription, update_remote_presence_subscription,
+    subscription_policy_error, update_presence_subscription, update_remote_presence_subscription,
 };
 use super::PresenceSession;
 use anyhow::Result;
-use northstar_roster_application::presence::PresencePolicyDenial;
+use northstar_roster_application::presence::{
+    PresencePolicyDenial, SubscriptionOutboxAdmissionError, SubscriptionRoute,
+};
+use northstar_roster_application::privacy::PrivacyStanzaKind;
+use northstar_roster_application::{
+    CommunicationPolicyQuery, CommunicationPolicyReader, PolicyDirection, PolicySubject,
+};
 use northstar_roster_core::PresenceAccount;
 use northstar_xml_builder::stanza::stanza_error;
 use northstar_xmpp_types::jid::CanonicalJid;
@@ -28,6 +33,32 @@ pub(super) struct RemoteSubscriptionRequest<'a> {
     pub(super) bounce_to: &'a str,
 }
 
+pub(super) async fn subscription_reply_allowed<S: PresenceSession>(
+    session: &S,
+    recipient: &PresenceAccount,
+    peer: &str,
+) -> Result<bool> {
+    let query = CommunicationPolicyQuery {
+        account_id: recipient.id,
+        expected_auth_generation: Some(recipient.auth_generation),
+        subject: PolicySubject::Connection {
+            connection_id: session.privacy_connection_id(),
+            expects_active: session.privacy_active_list().is_some(),
+        },
+        peer: peer.to_owned(),
+        kind: PrivacyStanzaKind::PresenceIn,
+        direction: PolicyDirection::Inbound,
+        check_owner_block: true,
+        check_peer_block: true,
+    };
+    Ok(session
+        .presence_service()
+        .communication_policy()
+        .read_communication_policy(&query)
+        .await?
+        .allows())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn route_remote_subscription<S: PresenceSession>(
     session: &S,
@@ -36,6 +67,7 @@ pub(super) async fn route_remote_subscription<S: PresenceSession>(
     subscription_to: &str,
     kind: &str,
     domain: &str,
+    route: SubscriptionRoute,
     outbound: &str,
     bounce_to: &str,
 ) -> Result<ControlFlow<Option<String>>> {
@@ -68,6 +100,12 @@ pub(super) async fn route_remote_subscription<S: PresenceSession>(
             ))));
         }
         Ok(SubscriptionMutationDisposition::Missing) => return Ok(ControlFlow::Break(None)),
+        Err(error)
+            if route == SubscriptionRoute::Component
+                && !error.is::<SubscriptionOutboxAdmissionError>() =>
+        {
+            return Err(error);
+        }
         Err(_) => {
             return Ok(ControlFlow::Break(Some(stanza_error(
                 root,
@@ -77,36 +115,6 @@ pub(super) async fn route_remote_subscription<S: PresenceSession>(
         }
     }
     Ok(ControlFlow::Continue(()))
-}
-
-pub(super) async fn route_component_subscription<S: PresenceSession>(
-    session: &S,
-    root: Node<'_, '_>,
-    user: &PresenceAccount,
-    subscription_to: &str,
-    kind: &str,
-) -> Result<ControlFlow<Option<String>, bool>> {
-    Ok(
-        match update_component_presence_subscription(
-            session,
-            user.id,
-            user.auth_generation,
-            subscription_to,
-            kind,
-        )
-        .await?
-        {
-            SubscriptionMutationDisposition::Accepted(routed) => ControlFlow::Continue(routed),
-            SubscriptionMutationDisposition::Unauthorized => {
-                session.roster_disconnect();
-                ControlFlow::Break(Some(stanza_error(root, "auth", "not-authorized")))
-            }
-            SubscriptionMutationDisposition::PolicyDenied(reason) => {
-                ControlFlow::Break(Some(subscription_policy_error(root, reason)))
-            }
-            SubscriptionMutationDisposition::Missing => ControlFlow::Break(None),
-        },
-    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -119,26 +127,21 @@ pub(super) async fn route_local_subscription<S: PresenceSession>(
     to: &str,
     canonical_to: &str,
     user: &PresenceAccount,
+    target: Option<&PresenceAccount>,
 ) -> Result<ControlFlow<Option<String>, bool>> {
+    let Some(target) = target else {
+        return Ok(ControlFlow::Break(None));
+    };
     if target_jid.resourcepart().is_some()
         && kind != "subscribe"
-        && session.privacy_local_resources(canonical_to) == 0
-        && !session.presence_full_target_routed(canonical_to).await
+        && !session
+            .presence_full_target_routed(canonical_to, target)
+            .await
     {
         return Ok(ControlFlow::Break(None));
     }
     Ok(
-        match update_presence_subscription(
-            session,
-            user.id,
-            &user.username,
-            user.auth_generation,
-            to,
-            kind,
-            raw,
-        )
-        .await
-        {
+        match update_presence_subscription(session, user, to, kind, raw, target).await {
             Ok(SubscriptionMutationDisposition::Accepted(route)) => ControlFlow::Continue(route),
             Ok(SubscriptionMutationDisposition::Unauthorized) => {
                 session.roster_disconnect();

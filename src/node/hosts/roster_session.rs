@@ -13,6 +13,7 @@ use northstar_roster_core::{
     ClusterPresenceAuthority, ExactPresenceRoute, LocalRosterContact, PresenceAccount, RosterActor,
     RosterChange,
 };
+use northstar_roster_xmpp::federated_presence::SubscriptionRevocationRoute;
 use northstar_roster_xmpp::presence_delivery::{
     DirectedDelivery, DirectedDeliveryResult, DirectedEnqueue, DirectedPresenceHost,
     DirectedPresenceTransport,
@@ -100,8 +101,12 @@ impl RosterSessionHost for ServerNode {
         self.federation.federation_outbox.outbox_policy()
     }
 
-    fn roster_wake_outbox(&self) {
-        self.federation.federation_outbox.wake_outbox();
+    fn roster_wake_outbox(&self, route: Option<&str>) {
+        let outbox = &self.federation.federation_outbox;
+        match route {
+            Some(domain) => outbox.wake_admitted_route(domain),
+            None => outbox.wake_outbox(),
+        }
     }
 
     async fn deliver_committed_roster_change(
@@ -313,10 +318,24 @@ impl RosterSessionHost for ServerNode {
         .await
     }
 
-    async fn full_presence_target_routed(&self, full_jid: &str) -> bool {
+    async fn full_presence_target_routed(&self, full_jid: &str, account: &PresenceAccount) -> bool {
+        if self
+            .session
+            .live()
+            .sessions()
+            .sessions_for(full_jid)
+            .iter()
+            .any(|target| {
+                target.user_id == account.id && target.auth_generation == account.auth_generation
+            })
+        {
+            return true;
+        }
         self.cluster
-            .subscription_full_target_has_route(full_jid)
+            .listener_presence_routes()
+            .remote_nodes(full_jid)
             .await
+            .is_ok_and(|nodes| !nodes.is_empty())
     }
 
     async fn notify_offline_account(&self, user_id: Uuid) -> Result<()> {
@@ -359,6 +378,22 @@ impl PresenceRouting for ServerNode {
         session
             .forward_presence_if_route_current(root, kind, from, raw)
             .await
+    }
+}
+
+impl SubscriptionRevocationRoute for ServerNode {
+    async fn send_volatile_subscription_revocation(
+        &self,
+        verified_peer: &str,
+        stanza: String,
+    ) -> bool {
+        northstar_s2s::outbound::send_volatile_on_authenticated_route(
+            self,
+            &self.config.domain,
+            verified_peer,
+            stanza,
+        )
+        .await
     }
 }
 

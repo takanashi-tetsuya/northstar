@@ -10,7 +10,12 @@ use northstar_roster_application::blocking_mutation::CommittedBlockingChange;
 use northstar_roster_application::privacy::commands::PolicyCommandRepository;
 use northstar_roster_application::{RosterRepository, RosterService, S2sOutboxPolicy};
 use northstar_roster_core::{
-    ClusterPresenceAuthority, LocalRosterContact, PresenceAccount, RosterChange,
+    ClusterPresenceAuthority, ExactPresenceRoute, LocalRosterContact, PresenceAccount, RosterActor,
+    RosterChange,
+};
+use northstar_roster_xmpp::presence_delivery::{
+    DirectedDelivery, DirectedDeliveryResult, DirectedEnqueue, DirectedPresenceHost,
+    DirectedPresenceTransport,
 };
 use northstar_roster_xmpp::roster_push::{
     deliver_committed_roster_change, deliver_roster_removal_presence,
@@ -28,6 +33,15 @@ use uuid::Uuid;
 mod privacy_selection;
 mod roster_journal;
 mod subscription_retry;
+
+impl DirectedPresenceHost for ServerNode {
+    async fn deliver_exact_directed(
+        &self,
+        delivery: DirectedDelivery<'_>,
+    ) -> DirectedDeliveryResult {
+        presence_delivery::deliver_exact_directed(self, delivery).await
+    }
+}
 
 impl RosterSessionHost for ServerNode {
     fn avatar_presence_gate(&self) -> &northstar_roster_xmpp::AvatarPresenceGate {
@@ -251,17 +265,6 @@ impl RosterSessionHost for ServerNode {
         presence_delivery::echo_account_presence(self, account, from, stanza).await
     }
 
-    async fn deliver_directed_unavailable(
-        &self,
-        target: &str,
-        bare_target: bool,
-        from: &str,
-        stanza: &str,
-    ) {
-        presence_delivery::deliver_directed_unavailable(self, target, bare_target, from, stanza)
-            .await
-    }
-
     fn account_has_available_resource(&self, bare: &str) -> bool {
         presence_delivery::account_has_available_resource(self, bare)
     }
@@ -366,6 +369,99 @@ impl FederatedPresenceHost for ServerNode {
 
     async fn dispatch_push_notification(&self, user_id: Uuid) -> Result<()> {
         ServerNode::dispatch_push_notification(self, user_id).await
+    }
+}
+
+impl DirectedPresenceTransport for ServerNode {
+    fn directed_source_is_current(&self, source: &RosterActor) -> bool {
+        self.session
+            .live()
+            .sessions()
+            .get(&source.full_jid)
+            .is_some_and(|current| {
+                current.user_id == source.account_id
+                    && current.auth_generation == source.auth_generation
+                    && current.connection_id == source.connection_id
+                    && current.routable.load(std::sync::atomic::Ordering::Acquire)
+                    && !current.disconnect.is_cancelled()
+            })
+    }
+
+    async fn capture_remote_directed_routes(
+        &self,
+        scope: &str,
+        recipient: &PresenceAccount,
+    ) -> Result<Vec<ExactPresenceRoute>> {
+        Ok(self
+            .cluster
+            .capture_remote_message_routes(scope, recipient.id, recipient.auth_generation)
+            .await?
+            .into_iter()
+            .filter(|route| scope.contains('/') || route.available == Some(true))
+            .map(|route| ExactPresenceRoute {
+                account_id: route.account_id,
+                auth_generation: route.auth_generation,
+                connection_id: route.connection_id,
+                full_jid: route.full_jid,
+                node_id: route.node_id,
+            })
+            .collect())
+    }
+
+    async fn send_remote_directed_route(
+        &self,
+        route: &ExactPresenceRoute,
+        source: &RosterActor,
+        stanza: &str,
+        unavailable: bool,
+    ) -> Result<DirectedEnqueue> {
+        use northstar_session_application::sm_teardown_presence::ExactPresenceAcceptance;
+        match self
+            .cluster
+            .send_exact_directed_presence(route, source, stanza, unavailable)
+            .await?
+        {
+            ExactPresenceAcceptance::Accepted => Ok(DirectedEnqueue::Accepted),
+            ExactPresenceAcceptance::Gone => Ok(DirectedEnqueue::Gone),
+            ExactPresenceAcceptance::Retry => Ok(DirectedEnqueue::Retry),
+            ExactPresenceAcceptance::Unknown => {
+                anyhow::bail!("cluster directed presence acceptance is unknown")
+            }
+        }
+    }
+
+    fn enqueue_local_directed_route(
+        &self,
+        route: &ExactPresenceRoute,
+        stanza: &str,
+        available_only: bool,
+    ) -> DirectedEnqueue {
+        use northstar_message_application::messaging::ExactMessageRoute;
+        use std::sync::atomic::Ordering;
+        use tokio::sync::mpsc::error::TrySendError;
+        let exact = ExactMessageRoute {
+            full_jid: route.full_jid.clone(),
+            account_id: route.account_id,
+            auth_generation: route.auth_generation,
+            connection_id: route.connection_id,
+            node_id: None,
+            priority: None,
+            available: None,
+        };
+        self.session
+            .live()
+            .sessions()
+            .with_exact_message_route(&exact, |current| {
+                if available_only && !current.available.load(Ordering::Acquire) {
+                    return DirectedEnqueue::Gone;
+                }
+                match current.sender.try_send(stanza.to_owned()) {
+                    Ok(()) => DirectedEnqueue::Accepted,
+                    Err(TrySendError::Full(_)) => DirectedEnqueue::Retry,
+                    Err(TrySendError::Closed(_)) => DirectedEnqueue::Gone,
+                }
+            })
+            .unwrap_or(DirectedEnqueue::Gone)
     }
 }
 

@@ -1,36 +1,28 @@
 //! Handles directed presence tracking, authorized probes, current availability delivery and their supporting helpers.
 
 use super::*;
+use crate::presence_delivery::DirectedDelivery;
+use northstar_roster_core::ExactPresenceRoute;
+use northstar_stream::session_cleanup::unavailable::{DirectedGrant, TerminalRoute};
 
-pub(super) async fn plan_directed_presence<S: PresenceSession>(
+pub(super) fn plan_directed_presence<S: PresenceSession>(
     session: &S,
-    user: &PresenceAccount,
     target: &str,
     kind: &str,
-) -> Result<DirectedPresencePlan> {
+) -> DirectedPresencePlan {
     if kind == "unavailable" {
-        return Ok(DirectedPresencePlan::Remove(target.to_owned()));
+        return DirectedPresencePlan::Remove(target.to_owned());
     }
     if kind != "available" {
-        return Ok(DirectedPresencePlan::None);
+        return DirectedPresencePlan::None;
     }
-    let target_bare = northstar_xmpp_types::jid::canonical_bare_key(target)?;
-    let receives_broadcast = session.presence_is_available()
-        && session
-            .presence_service()
-            .roster_subscription(user.id, &target_bare)
-            .await?
-            .is_some_and(|subscription| matches!(subscription.as_str(), "from" | "both"));
-    if receives_broadcast {
-        return Ok(DirectedPresencePlan::RemoveBroadcastScope(target_bare));
+    if directed_presence_capacity_reached(
+        session.presence_directed_count(),
+        session.presence_directed_contains(target),
+    ) {
+        return DirectedPresencePlan::AtCapacity;
     }
-    if session.presence_directed_contains(target) {
-        return Ok(DirectedPresencePlan::None);
-    }
-    if directed_presence_capacity_reached(session.presence_directed_count(), false) {
-        return Ok(DirectedPresencePlan::AtCapacity);
-    }
-    Ok(DirectedPresencePlan::Insert(target.to_owned()))
+    DirectedPresencePlan::Insert(target.to_owned())
 }
 
 pub(super) fn commit_directed_presence<S: PresenceSession>(
@@ -44,9 +36,6 @@ pub(super) fn commit_directed_presence<S: PresenceSession>(
         DirectedPresencePlan::Remove(target) => {
             session.presence_directed_remove(&target);
         }
-        DirectedPresencePlan::RemoveBroadcastScope(target_bare) => {
-            remove_directed_presence_for_bare(session, &target_bare);
-        }
         DirectedPresencePlan::None | DirectedPresencePlan::AtCapacity => {}
     }
 }
@@ -56,8 +45,103 @@ pub(super) fn remove_directed_presence_for_bare<S: PresenceSession>(
     target_bare: &str,
 ) {
     session.presence_directed_retain(|target| {
-        directed_presence_target_is_outside_bare_scope(target, target_bare)
+        // The broadcast's address handoff covers an external grant. A local
+        // grant identifies a transport, which a bare broadcast may not reach.
+        DirectedGrant::decode(target).is_ok_and(|grant| grant.is_some())
+            || directed_presence_target_is_outside_bare_scope(target, target_bare)
     });
+}
+
+fn grant(scope: &str, route: ExactPresenceRoute) -> DirectedGrant {
+    DirectedGrant {
+        scope: scope.to_owned(),
+        route: TerminalRoute {
+            account_id: route.account_id,
+            auth_generation: route.auth_generation,
+            connection_id: route.connection_id,
+            full_jid: route.full_jid,
+            node_id: route.node_id,
+        },
+    }
+}
+
+pub(super) async fn route_local_directed<S: PresenceSession>(
+    session: &S,
+    recipient: &PresenceAccount,
+    scope: &str,
+    stanza: &str,
+    kind: &str,
+) -> Result<bool> {
+    let source = session
+        .roster_actor()
+        .ok_or_else(|| anyhow::anyhow!("directed presence has no bound actor"))?;
+    let existing = grants_for_scope(session.presence_directed_entries(), scope);
+    let withdraw = kind == "unavailable";
+    let track = kind == "available";
+    let free_slots = northstar_presence_core::MAX_DIRECTED_PRESENCE_RECIPIENTS
+        .saturating_sub(session.presence_directed_count());
+    if track && free_slots == 0 && existing.is_empty() {
+        return Ok(true);
+    }
+    let receipt = session
+        .presence_deliver_exact_directed(DirectedDelivery {
+            source: &source,
+            recipient,
+            scope,
+            stanza,
+            existing: &existing,
+            free_slots,
+            track,
+            withdraw,
+        })
+        .await;
+    if track {
+        for accepted in newly_accepted_grants(receipt.accepted, &existing, scope) {
+            session.presence_directed_insert(accepted.encode());
+        }
+    } else if withdraw {
+        session.presence_directed_remove(scope);
+        for accepted in existing {
+            if !receipt.remaining.iter().any(|route| {
+                route.connection_id == accepted.route.connection_id
+                    && route.full_jid == accepted.route.full_jid
+            }) {
+                session.presence_directed_remove(&accepted.encode());
+            }
+        }
+    }
+    if let Some(error) = receipt.error {
+        return Err(error);
+    }
+    anyhow::ensure!(
+        !withdraw || receipt.remaining.is_empty(),
+        "directed withdrawal queue remained full"
+    );
+    Ok(receipt.at_capacity)
+}
+
+fn grants_for_scope(entries: Vec<String>, scope: &str) -> Vec<DirectedGrant> {
+    entries
+        .into_iter()
+        .filter_map(|entry| DirectedGrant::decode(&entry).ok().flatten())
+        .filter(|grant| grant.scope == scope)
+        .collect()
+}
+
+fn newly_accepted_grants(
+    accepted: Vec<ExactPresenceRoute>,
+    existing: &[DirectedGrant],
+    scope: &str,
+) -> Vec<DirectedGrant> {
+    accepted
+        .into_iter()
+        .map(|route| grant(scope, route))
+        .filter(|accepted| {
+            !existing
+                .iter()
+                .any(|grant| grant.route.same_transport(&accepted.route))
+        })
+        .collect()
 }
 
 pub(super) async fn answer_directed_presence_probe<S: PresenceSession>(
@@ -81,27 +165,76 @@ pub(super) async fn broadcast_directed_unavailable<S: PresenceSession>(
     unavailable: &str,
     from: &str,
 ) {
-    let targets = session.presence_directed_take();
+    let mut targets = session.presence_directed_entries();
+    targets.sort_unstable();
+    let mut scopes = std::collections::HashSet::new();
     for target in targets {
-        let delivery = set_to(unavailable, &target);
+        if let Ok(Some(grant)) = DirectedGrant::decode(&target) {
+            if !scopes.insert(grant.scope.clone()) {
+                continue;
+            }
+            let Ok(jid) = northstar_xmpp_types::jid::CanonicalJid::parse(&grant.scope) else {
+                continue;
+            };
+            let Some(username) = jid.localpart() else {
+                continue;
+            };
+            match session.presence_service().find_enabled_user(username).await {
+                Ok(Some(recipient)) => {
+                    let delivery = set_to(unavailable, &grant.scope);
+                    if let Err(error) = route_local_directed(
+                        session,
+                        &recipient,
+                        &grant.scope,
+                        &delivery,
+                        "unavailable",
+                    )
+                    .await
+                    {
+                        tracing::warn!(?error, scope = %grant.scope, "directed presence withdrawal requires refresh");
+                    }
+                }
+                Ok(None) => session.presence_directed_retain(|entry| {
+                    DirectedGrant::decode(entry)
+                        .ok()
+                        .flatten()
+                        .is_none_or(|entry| entry.scope != grant.scope)
+                }),
+                Err(error) => {
+                    tracing::warn!(?error, scope = %grant.scope, "could not read directed presence recipient")
+                }
+            }
+            continue;
+        }
         let Ok(jid) = northstar_xmpp_types::jid::CanonicalJid::parse(&target) else {
             continue;
         };
-        if jid.domainpart() == session.session_local_domain() {
-            session
-                .presence_deliver_directed_unavailable(
-                    &target,
-                    jid.resourcepart().is_none(),
-                    from,
-                    &delivery,
-                )
-                .await;
-        } else {
-            let _ = session
-                .presence_send_federated(jid.domainpart(), delivery, Some(from.to_owned()))
-                .await;
+        if jid.domainpart() == session.session_local_domain()
+            || send_address_withdrawal(
+                session,
+                jid.domainpart(),
+                set_to(unavailable, &target),
+                from,
+            )
+            .await
+        {
+            session.presence_directed_remove(&target);
         }
     }
+}
+
+pub(super) async fn send_address_withdrawal<S: PresenceSession>(
+    session: &S,
+    domain: &str,
+    stanza: String,
+    from: &str,
+) -> bool {
+    session
+        .presence_send_federated(domain, stanza.clone(), Some(from.to_owned()))
+        .await
+        || session
+            .presence_send_federated(domain, stanza, Some(from.to_owned()))
+            .await
 }
 
 pub(super) async fn probe_contact_presence<S: PresenceSession>(
@@ -177,3 +310,6 @@ pub(super) fn directed_presence_target_is_outside_bare_scope(
 ) -> bool {
     northstar_presence_core::directed_presence_target_is_outside_bare_scope(target, target_bare)
 }
+
+#[cfg(test)]
+mod tests;

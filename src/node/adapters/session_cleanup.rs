@@ -22,10 +22,15 @@ use northstar_room_core::occupancy::MucOccupantRoute;
 use northstar_runtime::workers::WorkerRegistry;
 use northstar_session_application::sm::SmSessionSnapshot;
 use northstar_session_application::sm_capacity::SmCapacityLease;
+use northstar_session_application::sm_teardown_presence::{
+    TerminalPresenceAudience, TerminalPresenceRequest,
+};
 use northstar_session_application::SessionCleanupAccount;
 use northstar_stream::local_routes::muc::{MucOccupant, SuspendedMucEndpoint};
 use northstar_stream::session_cleanup::local::SessionCleanupLocal;
-use northstar_stream::session_cleanup::service::{SessionCleanupPorts, SessionCleanupService};
+use northstar_stream::session_cleanup::service::{
+    SessionCleanupPorts, SessionCleanupService, TerminalPresenceCleanup,
+};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -179,30 +184,8 @@ impl SessionCleanupPorts for SessionCleanupAdapters {
             .await
     }
 
-    async fn unavailable_recipients(&self, owner_id: Uuid) -> Result<Vec<String>> {
-        self.presence.unavailable_recipients(owner_id).await
-    }
-
     fn actor_bare_jid(&self, username: &str) -> String {
         self.presence.actor_bare_jid(username)
-    }
-
-    fn send_available_sibling_presence(&self, actor_bare: &str, presence: &str) {
-        self.presence
-            .send_available_sibling_presence(actor_bare, presence);
-    }
-
-    async fn route_unavailable_with_policy(
-        &self,
-        owner_id: Uuid,
-        active_privacy_list: Option<&str>,
-        from: &str,
-        unavailable: &str,
-        target: &str,
-    ) -> Result<()> {
-        self.unavailable
-            .route_with_policy(owner_id, active_privacy_list, from, unavailable, target)
-            .await
     }
 
     async fn disconnect_mix_presence(
@@ -279,5 +262,18 @@ impl SessionCleanupPorts for SessionCleanupAdapters {
 
     fn worker_registry(&self) -> &WorkerRegistry {
         self.bookkeeping.worker_registry()
+    }
+}
+
+impl TerminalPresenceCleanup for SessionCleanupAdapters {
+    async fn capture_terminal_presence(
+        &self,
+        request: TerminalPresenceRequest<'_>,
+    ) -> Result<Option<TerminalPresenceAudience>> {
+        self.unavailable.capture(request).await
+    }
+
+    async fn publish_terminal_presence(&self, audience: TerminalPresenceAudience) -> Result<()> {
+        self.unavailable.publish(audience).await
     }
 }

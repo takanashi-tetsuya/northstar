@@ -658,8 +658,9 @@ pub(super) fn validate_snapshot(
         anyhow::bail!("SM MUC membership snapshot is invalid");
     }
     if snapshot.directed_presence.len() > 1_024
-        || snapshot.directed_presence.iter().any(|jid| {
-            jid.len() > 3_071 || northstar_xmpp_types::jid::CanonicalJid::parse(jid).is_err()
+        || snapshot.directed_presence.iter().any(|entry| {
+            entry.len() > 16_384
+                || northstar_session_application::sm_teardown_presence::DirectedGrant::canonicalize_entry(entry).is_err()
         })
     {
         anyhow::bail!("SM directed-presence snapshot is invalid or too large");
@@ -699,7 +700,10 @@ pub(super) fn canonical_snapshot_identities(
     let mut directed_keys = std::collections::BTreeSet::new();
     let mut directed_presence = Vec::with_capacity(snapshot.directed_presence.len());
     for target in &snapshot.directed_presence {
-        let target = northstar_xmpp_types::jid::canonicalize(target)?;
+        let target =
+            northstar_session_application::sm_teardown_presence::DirectedGrant::canonicalize_entry(
+                target,
+            )?;
         anyhow::ensure!(
             directed_keys.insert(target.clone()),
             "duplicate canonical SM directed-presence target"

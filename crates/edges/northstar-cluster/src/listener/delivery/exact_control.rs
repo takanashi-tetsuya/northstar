@@ -20,6 +20,20 @@ pub(super) fn validate_control_and_roster_push<'a>(
     (expected_user_id, expected_auth_generation): (Option<Uuid>, Option<i64>),
 ) -> ListenerStep<(RosterPushOptions<'a>, Option<ExactControl>)> {
     if !is_exact_control_version(json) {
+        // Directed and broadcast C2S presence shared the old generic
+        // delivery envelope. There is no safe way to route that envelope
+        // while requiring exact recipients for directed/terminal effects.
+        if document.is_some_and(|document| {
+            let root = document.root_element();
+            root.tag_name().name() == "presence"
+                && root
+                    .attribute("from")
+                    .is_some_and(|from| from.contains('/'))
+                && json["presence_subscription"].as_bool() != Some(true)
+                && json["current_presence_replay"].as_bool() != Some(true)
+        }) {
+            return ListenerStep::Continue;
+        }
         return match validate_roster_push(json, document, roster_requested_only) {
             ListenerStep::Next(roster) => ListenerStep::Next((roster, None)),
             ListenerStep::Continue => ListenerStep::Continue,
@@ -67,6 +81,13 @@ pub(super) fn validate_control_and_roster_push<'a>(
         },
         Some(control),
     ))
+}
+
+pub(in super::super) fn retryable_presence_kind(kind: ExactControlKind) -> bool {
+    matches!(
+        kind,
+        ExactControlKind::UnavailablePresence | ExactControlKind::TeardownUnavailable
+    )
 }
 
 fn selectors_match(json: &Value, kind: ExactControlKind) -> bool {

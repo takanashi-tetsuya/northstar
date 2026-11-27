@@ -4,6 +4,9 @@ use anyhow::{bail, Result};
 use std::future::Future;
 use uuid::Uuid;
 
+mod terminal;
+pub use terminal::*;
+
 pub struct RosterPresenceContact {
     pub jid: String,
     pub subscription: String,

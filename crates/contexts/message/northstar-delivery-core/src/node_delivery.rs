@@ -7,6 +7,7 @@ pub struct NodeDeliveryReceipt {
     pub delivered: bool,
     pub accepted_full_jid: Option<String>,
     pub acknowledged: bool,
+    pub retryable_presence: bool,
     pub mix_supported: usize,
     pub mix_unsupported: usize,
     pub mix_unknown: usize,

@@ -18,6 +18,9 @@ use northstar_room_application::muc_service::{
     MucRoomIncarnation,
 };
 use northstar_room_core::occupancy::MucOccupantRoute;
+use northstar_session_application::sm_teardown_presence::{
+    TerminalOwner, TerminalPresenceAudience, TerminalPresenceRequest,
+};
 use northstar_session_application::SessionCleanupAccount;
 use std::{
     future::Future,
@@ -30,9 +33,12 @@ use std::{
 use tokio::time::Instant;
 use uuid::Uuid;
 
+mod terminal;
+pub use terminal::TerminalPresenceCleanup;
+
 /// The node services one session finalization drives besides the
 /// process-local routes it fences itself.
-pub trait SessionCleanupPorts: Send + Sync {
+pub trait SessionCleanupPorts: TerminalPresenceCleanup {
     fn snapshot_suspended_muc_for_disconnect(
         &self,
         endpoints: &[Arc<SuspendedMucEndpoint>],
@@ -87,20 +93,7 @@ pub trait SessionCleanupPorts: Send + Sync {
         full_jid: &str,
         connection_id: Uuid,
     ) -> impl Future<Output = Result<()>> + Send;
-    fn unavailable_recipients(
-        &self,
-        owner_id: Uuid,
-    ) -> impl Future<Output = Result<Vec<String>>> + Send;
     fn actor_bare_jid(&self, username: &str) -> String;
-    fn send_available_sibling_presence(&self, actor_bare: &str, presence: &str);
-    fn route_unavailable_with_policy(
-        &self,
-        owner_id: Uuid,
-        active_privacy_list: Option<&str>,
-        from: &str,
-        unavailable: &str,
-        target: &str,
-    ) -> impl Future<Output = Result<()>> + Send;
     fn disconnect_mix_presence(
         &self,
         user_id: Uuid,
@@ -346,6 +339,13 @@ impl<P: SessionCleanupPorts> SessionCleanupService<P> {
     /// budget. Failure never short-circuits later security/capacity cleanup.
     /// The report names the durable recovery mechanism for each missed step.
     pub async fn finish(&self, work: QuiescedSessionCleanup) -> CleanupReport {
+        let deadline = Instant::now() + CLEANUP_TOTAL_BUDGET;
+        let mut report = CleanupReport::default();
+        self.ports.finalization_started();
+        // The route is already fenced. Sample policy before any asynchronous
+        // cleanup can retire the source's active-list lease.
+        let audience = self.capture_unavailable(deadline, &work, &mut report).await;
+
         // Cross the exact resource epoch after `quiesce` removes the route.
         // A caps worker that already entered finishes before this barrier;
         // one that wakes afterwards must re-read the route and observe that
@@ -354,9 +354,6 @@ impl<P: SessionCleanupPorts> SessionCleanupService<P> {
         // route-to-MIX ordering boundary.
         let mix_presence_epoch = Arc::clone(&work.mix_presence_gate).lock_owned().await;
         drop(mix_presence_epoch);
-        let deadline = Instant::now() + CLEANUP_TOTAL_BUDGET;
-        let mut report = CleanupReport::default();
-        self.ports.finalization_started();
 
         let mut suspended = false;
         if let Some(suspension) = work.durable_suspension {
@@ -574,12 +571,7 @@ impl<P: SessionCleanupPorts> SessionCleanupService<P> {
                 available.store(false, Ordering::Release);
             }
             if let (Some(account), Some(full_jid)) = (&work.account, &work.full_jid) {
-                let future = self.publish_unavailable(
-                    account,
-                    full_jid,
-                    work.active_privacy_list.as_deref(),
-                    &work.directed_presence,
-                );
+                let future = self.publish_unavailable(account, full_jid, audience);
                 let _ = self
                     .step(
                         deadline,
@@ -777,45 +769,58 @@ impl<P: SessionCleanupPorts> SessionCleanupService<P> {
         }
     }
 
+    async fn capture_unavailable(
+        &self,
+        deadline: Instant,
+        work: &QuiescedSessionCleanup,
+        report: &mut CleanupReport,
+    ) -> Option<TerminalPresenceAudience> {
+        let account = work.account.as_ref()?;
+        let full_jid = work.full_jid.as_deref()?;
+        if !work.route_removed {
+            return None;
+        }
+        self.step(
+            deadline,
+            "capture-unavailable",
+            CleanupRecovery::PresenceRefresh,
+            self.ports
+                .capture_terminal_presence(TerminalPresenceRequest {
+                    owner_id: account.user_id,
+                    owner: TerminalOwner::Live {
+                        auth_generation: account.auth_generation,
+                        connection_id: work.connection_id,
+                    },
+                    full_jid,
+                    active_privacy_list: work.active_privacy_list.as_deref(),
+                    available: true,
+                    directed: &work.directed_presence,
+                    local_domain: "",
+                }),
+            report,
+        )
+        .await
+        .flatten()
+    }
+
     async fn publish_unavailable(
         &self,
         account: &SessionCleanupAccount,
         full_jid: &str,
-        active_privacy_list: Option<&str>,
-        directed_presence: &[String],
+        audience: Option<TerminalPresenceAudience>,
     ) -> Result<()> {
-        let presence = northstar_xml_builder::XmlElement::namespaced("presence", "jabber:client")
-            .attr("from", full_jid)
-            .attr("type", "unavailable")
-            .finish();
-        for jid in self.ports.unavailable_recipients(account.user_id).await? {
-            self.ports
-                .route_unavailable_with_policy(
-                    account.user_id,
-                    active_privacy_list,
-                    full_jid,
-                    &presence,
-                    &jid,
-                )
-                .await?;
-        }
         let actor_bare = self.ports.actor_bare_jid(&account.username);
-        self.ports
-            .send_available_sibling_presence(&actor_bare, &presence);
-        for target_jid in directed_presence {
+        let (presence, mix) = tokio::join!(
+            async {
+                match audience {
+                    Some(audience) => self.ports.publish_terminal_presence(audience).await,
+                    None => Ok(()),
+                }
+            },
             self.ports
-                .route_unavailable_with_policy(
-                    account.user_id,
-                    active_privacy_list,
-                    full_jid,
-                    &presence,
-                    target_jid,
-                )
-                .await?;
-        }
-        self.ports
-            .disconnect_mix_presence(account.user_id, &actor_bare, full_jid)
-            .await
+                .disconnect_mix_presence(account.user_id, &actor_bare, full_jid),
+        );
+        presence.and(mix)
     }
 }
 

@@ -73,21 +73,22 @@ pub(super) async fn broadcast_audience<S: PresenceSession>(
             continue;
         }
         if matches!(subscription.as_str(), "from" | "both") {
-            remove_directed_presence_for_bare(session, &jid);
             let delivery = set_to(rewritten, &jid);
             if let Ok(contact) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(&jid) {
                 if contact.domainpart() == session.session_local_domain() {
                     session
                         .presence_deliver_to_contact(&jid, from, &delivery)
                         .await?;
-                } else if session.presence_route_allowed(contact.domainpart()) {
-                    let _ = session
+                } else if session.presence_route_allowed(contact.domainpart())
+                    && session
                         .presence_send_federated(
                             contact.domainpart(),
                             delivery,
                             Some(from.to_owned()),
                         )
-                        .await;
+                        .await
+                {
+                    remove_directed_presence_for_bare(session, &jid);
                 }
             }
         }

@@ -89,6 +89,8 @@ impl<R: SmTeardownRepository> SmTeardownService<R> {
         RenderFuture: Future<Output = Result<()>> + Send,
     {
         let lease = snapshot.teardown_lease();
+        // Volatile presence is settled within this claim by the renderer.
+        // An error here leaves the row for required durable effects to retry.
         render(snapshot).await?;
         ensure!(
             self.repository.finalize(lease).await?,

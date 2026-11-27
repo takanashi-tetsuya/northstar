@@ -94,14 +94,12 @@ pub(super) async fn finish_remote_presence_transition<S: PresenceSession>(
         {
             tracing::warn!(
                 owner = %transition.actor.username,
+                %contact,
                 version = change.version,
                 ?error,
                 "failed to deliver committed federated roster transition"
             );
         }
-    }
-    if matches!(transition.subscription.as_str(), "from" | "both") {
-        remove_directed_presence_for_bare(session, contact);
     }
 }
 
@@ -231,9 +229,6 @@ pub(super) async fn update_presence_subscription<S: PresenceSession>(
         if let Err(error) = session.presence_notify_offline(target.id).await {
             tracing::warn!(target = %target.username, ?error, "failed to send post-commit subscription notification");
         }
-    }
-    if matches!(transition.actor_subscription.as_str(), "from" | "both") {
-        remove_directed_presence_for_bare(session, &target_jid);
     }
     if kind == "subscribed" {
         session

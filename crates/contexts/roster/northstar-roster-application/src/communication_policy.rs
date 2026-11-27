@@ -65,6 +65,27 @@ impl CommunicationDecision {
     pub fn allows(&self) -> bool {
         matches!(self, Self::Allow)
     }
+
+    /// Interpret policy facts sampled by a reader at one snapshot.
+    /// Privacy rules need evaluation only when the account and blocks allow it.
+    pub fn from_facts(
+        current_account: bool,
+        owner_blocks: bool,
+        peer_blocks: bool,
+        privacy_denies: impl FnOnce() -> Result<bool>,
+    ) -> Result<Self> {
+        Ok(if !current_account {
+            Self::StaleAccount
+        } else if owner_blocks {
+            Self::OwnerBlocks
+        } else if peer_blocks {
+            Self::PeerBlocks
+        } else if privacy_denies()? {
+            Self::PrivacyDenies
+        } else {
+            Self::Allow
+        })
+    }
 }
 
 pub trait CommunicationPolicyReader: Send + Sync {

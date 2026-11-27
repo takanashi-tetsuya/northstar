@@ -639,6 +639,7 @@ pub(super) fn validated_delivery_ack(
         delivered: ack.delivered > 0,
         accepted_full_jid,
         acknowledged: true,
+        retryable_presence: false,
         mix_supported: ack.mix_supported,
         mix_unsupported: ack.mix_unsupported,
         mix_unknown: ack.mix_unknown,

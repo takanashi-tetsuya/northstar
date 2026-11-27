@@ -269,9 +269,13 @@ fn canonicalize_directed(id: Uuid, value: &Value) -> Result<Value> {
     let mut unique = BTreeMap::new();
     let mut canonical = Vec::with_capacity(values.len());
     for original in values {
-        let jid = northstar_xmpp_types::jid::canonicalize(&original).with_context(|| {
-            format!("invalid directed presence JID {original:?} in SM row {id}")
-        })?;
+        let jid =
+            northstar_session_application::sm_teardown_presence::DirectedGrant::canonicalize_entry(
+                &original,
+            )
+            .with_context(|| {
+                format!("invalid directed presence JID {original:?} in SM row {id}")
+            })?;
         if let Some(previous) = unique.insert(jid.clone(), original.clone()) {
             anyhow::bail!(
                 "session JID migration found directed-presence collision in SM row {id}: {previous:?} and {original:?} both map to {jid:?}"

@@ -12,14 +12,12 @@ use northstar_room_application::muc_service::SerializableMucOccupant;
 use northstar_stream::session_cleanup::sm_teardown::{
     SmTeardownPorts, SmTeardownRuntime, SmTeardownSnapshot,
 };
-use northstar_workflows::message_repository::PostgresMessageRepository;
 use northstar_workflows::sm_teardown_muc_repository::PostgresSmTeardownMucRepository;
 use northstar_workflows::sm_teardown_presence_repository::PostgresSmTeardownPresenceRepository;
 use uuid::Uuid;
 
 pub(crate) type AppSmTeardownRuntime = SmTeardownRuntime<
     PostgresSmTeardownPresenceRepository,
-    PostgresMessageRepository,
     SessionCleanupUnavailableAdapters,
     SmTeardownAdapters,
 >;
@@ -55,6 +53,7 @@ pub(in crate::node) fn sm_teardown_snapshot(
 ) -> SmTeardownSnapshot<'_> {
     SmTeardownSnapshot {
         session_id: snapshot.session_id,
+        presence_deadline: snapshot.presence_deadline,
         user_id: snapshot.user_id,
         full_jid: &snapshot.full_jid,
         available: snapshot.available,

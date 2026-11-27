@@ -3,17 +3,19 @@
 
 use super::unavailable::{SessionCleanupUnavailable, SessionCleanupUnavailablePorts};
 use crate::local_routes::sm_teardown::SmTeardownLocalEffects;
-use northstar_message_application::messaging::MessageRepository;
 use northstar_room_application::muc_service::SerializableMucOccupant;
-use northstar_session_application::sm_teardown_presence::SmTeardownPresenceRepository;
+use northstar_session_application::sm_teardown_presence::{
+    SmTeardownPresenceRepository, TerminalOwner, TerminalPresenceRepository,
+    TerminalPresenceRequest,
+};
 use northstar_session_core::SmMucMembership;
-use northstar_xml_builder::escape::attr_escape;
 use std::{collections::HashSet, future::Future};
 use uuid::Uuid;
 
 /// The committed state needed to render teardown, borrowed from its lease owner.
 pub struct SmTeardownSnapshot<'a> {
     pub session_id: Uuid,
+    pub presence_deadline: std::time::Instant,
     pub user_id: Uuid,
     pub full_jid: &'a str,
     pub available: bool,
@@ -53,21 +55,20 @@ pub trait SmTeardownPorts: Send + Sync {
     ) -> impl Future<Output = anyhow::Result<usize>> + Send;
 }
 
-pub struct SmTeardownRuntime<R, M, U, P> {
-    unavailable: SessionCleanupUnavailable<R, M, U>,
+pub struct SmTeardownRuntime<R, U, P> {
+    unavailable: SessionCleanupUnavailable<R, U>,
     local: SmTeardownLocalEffects,
     ports: P,
 }
 
-impl<R, M, U, P> SmTeardownRuntime<R, M, U, P>
+impl<R, U, P> SmTeardownRuntime<R, U, P>
 where
-    R: SmTeardownPresenceRepository,
-    M: MessageRepository,
+    R: SmTeardownPresenceRepository + TerminalPresenceRepository,
     U: SessionCleanupUnavailablePorts,
     P: SmTeardownPorts,
 {
     pub fn new(
-        unavailable: SessionCleanupUnavailable<R, M, U>,
+        unavailable: SessionCleanupUnavailable<R, U>,
         local: SmTeardownLocalEffects,
         ports: P,
     ) -> Self {
@@ -84,68 +85,26 @@ where
             tracing::warn!(sm_session_id = %snapshot.session_id, "discarded invalid durable SM teardown JID");
             anyhow::bail!("invalid durable SM teardown JID");
         };
+        let audience = self
+            .unavailable
+            .capture(TerminalPresenceRequest {
+                owner_id: snapshot.user_id,
+                owner: TerminalOwner::Suspended {
+                    session_id: snapshot.session_id,
+                    deadline: snapshot.presence_deadline,
+                },
+                full_jid: &full_jid,
+                active_privacy_list: snapshot.active_privacy_list,
+                available: snapshot.available,
+                directed: snapshot.directed_presence,
+                local_domain: "",
+            })
+            .await;
         self.ports
             .fence_and_notify(&full_jid, snapshot.session_id)
             .await?;
 
         let mut first_error = None;
-
-        if snapshot.available {
-            let unavailable = format!(
-                "<presence xmlns='jabber:client' from='{}' type='unavailable'/>",
-                attr_escape(&full_jid)
-            );
-            let mut routed = HashSet::new();
-            let roster = self
-                .unavailable
-                .roster_subscribers(snapshot.user_id)
-                .await?;
-            for jid in roster {
-                if routed.insert(jid.clone()) {
-                    if let Err(error) = self
-                        .unavailable
-                        .route_with_policy(
-                            snapshot.user_id,
-                            snapshot.active_privacy_list,
-                            &full_jid,
-                            &unavailable,
-                            &jid,
-                        )
-                        .await
-                    {
-                        first_error.get_or_insert(error);
-                    }
-                }
-            }
-
-            // Other resources of the same account are part of the same
-            // presence session audience, independent of roster privacy.
-            if let Err(error) = self
-                .unavailable
-                .route_siblings_unchecked(&full_jid, &unavailable)
-                .await
-            {
-                first_error.get_or_insert(error);
-            }
-
-            for target in snapshot.directed_presence {
-                if routed.insert(target.clone()) {
-                    if let Err(error) = self
-                        .unavailable
-                        .route_with_policy(
-                            snapshot.user_id,
-                            snapshot.active_privacy_list,
-                            &full_jid,
-                            &unavailable,
-                            target,
-                        )
-                        .await
-                    {
-                        first_error.get_or_insert(error);
-                    }
-                }
-            }
-        }
 
         let mut memberships = HashSet::new();
         for membership in snapshot.joined_rooms {
@@ -187,6 +146,16 @@ where
         }
         if let Some(error) = first_error {
             return Err(error);
+        }
+        // Complete required durable effects first so their retry cannot
+        // resend presence that already reached a transport.
+        let presence = match audience {
+            Ok(Some(audience)) => self.unavailable.publish(audience).await,
+            Ok(None) => Ok(()),
+            Err(error) => Err(error),
+        };
+        if let Err(error) = presence {
+            tracing::warn!(?error, sm_session_id = %snapshot.session_id, "SM teardown presence requires refresh");
         }
         self.local.finish_suspended_session(snapshot.session_id);
         Ok(())

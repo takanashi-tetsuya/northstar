@@ -246,12 +246,6 @@ impl<H: SessionHost + RosterSessionHost> crate::presence::PresenceSession for Pr
         self.host().avatar_presence_gate()
     }
 
-    fn presence_is_available(&self) -> bool {
-        self.available
-            .as_ref()
-            .is_some_and(|available| available.load(Ordering::Relaxed))
-    }
-
     fn presence_set_last(&self, presence: Option<String>) {
         *self
             .last_presence
@@ -288,16 +282,6 @@ impl<H: SessionHost + RosterSessionHost> crate::presence::PresenceSession for Pr
 
     fn presence_directed_retain(&self, keep: impl Fn(&str) -> bool) {
         self.directed_presence.retain(|target| keep(target));
-    }
-
-    fn presence_directed_take(&self) -> Vec<String> {
-        let targets = self
-            .directed_presence
-            .iter()
-            .map(|target| target.key().clone())
-            .collect::<Vec<_>>();
-        self.directed_presence.clear();
-        targets
     }
 
     fn presence_route_allowed(&self, domain: &str) -> bool {
@@ -393,18 +377,6 @@ impl<H: SessionHost + RosterSessionHost> crate::presence::PresenceSession for Pr
             .await;
     }
 
-    async fn presence_deliver_directed_unavailable(
-        &self,
-        target: &str,
-        bare_target: bool,
-        from: &str,
-        stanza: &str,
-    ) {
-        self.host()
-            .deliver_directed_unavailable(target, bare_target, from, stanza)
-            .await;
-    }
-
     fn presence_has_available_resource(&self, bare: &str) -> bool {
         self.host().account_has_available_resource(bare)
     }
@@ -457,6 +429,24 @@ impl<H: SessionHost + RosterSessionHost> crate::presence::PresenceSession for Pr
 
     async fn presence_notify_offline(&self, user_id: uuid::Uuid) -> Result<()> {
         self.host().notify_offline_account(user_id).await
+    }
+}
+
+impl<H: SessionHost + RosterSessionHost> crate::presence_delivery::DirectedPresenceSession
+    for ProtocolSession<H>
+{
+    fn presence_directed_entries(&self) -> Vec<String> {
+        self.directed_presence
+            .iter()
+            .map(|entry| entry.key().clone())
+            .collect()
+    }
+
+    async fn presence_deliver_exact_directed(
+        &self,
+        delivery: crate::presence_delivery::DirectedDelivery<'_>,
+    ) -> crate::presence_delivery::DirectedDeliveryResult {
+        self.host().deliver_exact_directed(delivery).await
     }
 }
 

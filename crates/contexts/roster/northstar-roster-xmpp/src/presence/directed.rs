@@ -1,4 +1,6 @@
-use super::availability::{commit_directed_presence, plan_directed_presence};
+use super::availability::{
+    commit_directed_presence, plan_directed_presence, route_local_directed, send_address_withdrawal,
+};
 use super::probe_route::route_probe;
 use super::subscription_route::{
     route_component_subscription, route_local_subscription, route_remote_subscription,
@@ -22,7 +24,6 @@ pub(super) enum DirectedPresencePlan {
     None,
     Insert(String),
     Remove(String),
-    RemoveBroadcastScope(String),
     AtCapacity,
 }
 
@@ -137,7 +138,9 @@ pub async fn route_directed_presence<S: PresenceSession>(
         } else {
             from.to_owned()
         };
-        let directed_presence_plan = plan_directed_presence(session, &user, to, kind).await?;
+        // External peers own their resource identities. Federation and
+        // component grants therefore keep the address scope on the wire.
+        let directed_presence_plan = plan_directed_presence(session, to, kind);
         if matches!(&directed_presence_plan, DirectedPresencePlan::AtCapacity) {
             return Ok(Some(stanza_error(root, "wait", "resource-constraint")));
         }
@@ -176,12 +179,17 @@ pub async fn route_directed_presence<S: PresenceSession>(
             } else {
                 true
             };
-            if should_route
-                && !session
-                    .presence_send_federated(domain, outbound, Some(bounce_to))
-                    .await
-            {
-                return Ok(Some(stanza_error(root, "wait", "remote-server-timeout")));
+            if should_route {
+                let accepted = if kind == "unavailable" {
+                    send_address_withdrawal(session, domain, outbound, &bounce_to).await
+                } else {
+                    session
+                        .presence_send_federated(domain, outbound, Some(bounce_to))
+                        .await
+                };
+                if !accepted {
+                    return Ok(Some(stanza_error(root, "wait", "remote-server-timeout")));
+                }
             }
         }
         commit_directed_presence(session, directed_presence_plan);
@@ -220,11 +228,6 @@ pub async fn route_directed_presence<S: PresenceSession>(
         }
         return Ok(None);
     }
-    let directed_presence_plan =
-        plan_directed_presence(session, &user, &canonical_to, kind).await?;
-    if matches!(&directed_presence_plan, DirectedPresencePlan::AtCapacity) {
-        return Ok(Some(stanza_error(root, "wait", "resource-constraint")));
-    }
     let should_route = if matches!(
         kind,
         "subscribe" | "subscribed" | "unsubscribe" | "unsubscribed"
@@ -261,17 +264,20 @@ pub async fn route_directed_presence<S: PresenceSession>(
         } else {
             set_from(&injected, from)
         };
-        let delivered = session
-            .presence_deliver_directed(
-                to,
-                &canonical_to,
-                from,
-                &rewritten,
-                target_jid.resourcepart().is_none(),
-            )
-            .await?;
-        if delivered || kind == "unavailable" {
-            commit_directed_presence(session, directed_presence_plan);
+        if subscription_kind {
+            session
+                .presence_deliver_directed(
+                    to,
+                    &canonical_to,
+                    from,
+                    &rewritten,
+                    target_jid.resourcepart().is_none(),
+                )
+                .await?;
+        } else if let Some(target) = target_user {
+            if route_local_directed(session, &target, &canonical_to, &rewritten, kind).await? {
+                return Ok(Some(stanza_error(root, "wait", "resource-constraint")));
+            }
         }
     }
     Ok(None)

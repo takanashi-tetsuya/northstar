@@ -5,6 +5,8 @@ use northstar_session_application::sm_teardown_presence::*;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+mod terminal;
+
 #[derive(Clone)]
 pub struct PostgresSmTeardownPresenceRepository {
     pool: PgPool,

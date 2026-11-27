@@ -9,6 +9,7 @@ use super::*;
 pub struct SmTeardownSnapshot {
     pub session_id: Uuid,
     pub teardown_token: Uuid,
+    pub presence_deadline: std::time::Instant,
     pub user_id: Uuid,
     pub username: String,
     pub full_jid: String,
@@ -311,6 +312,8 @@ pub(super) async fn take_sm_teardown_scope(
     let lease = seconds_i64(lease_seconds, "SM teardown lease")?;
     let token = Uuid::new_v4();
     let mut transaction = pool.begin().await?;
+    let presence_deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(lease_seconds);
     let rows = sqlx::query("SELECT * FROM northstar_sm_take_teardown($1,$2,$3,$4,$5,$6,$7)")
         .bind(scope)
         .bind(session_id)
@@ -335,16 +338,20 @@ pub(super) async fn take_sm_teardown_scope(
     Ok(SmTeardownBatch {
         snapshots: rows
             .iter()
-            .map(sm_teardown_snapshot)
+            .map(|row| sm_teardown_snapshot(row, presence_deadline))
             .collect::<Result<_>>()?,
         pending: usize::try_from(pending).context("SM pending count overflow")?,
     })
 }
 
-pub fn sm_teardown_snapshot(row: &sqlx::postgres::PgRow) -> Result<SmTeardownSnapshot> {
+fn sm_teardown_snapshot(
+    row: &sqlx::postgres::PgRow,
+    presence_deadline: std::time::Instant,
+) -> Result<SmTeardownSnapshot> {
     Ok(SmTeardownSnapshot {
         session_id: row.try_get("id")?,
         teardown_token: row.try_get("teardown_token")?,
+        presence_deadline,
         user_id: row.try_get("user_id")?,
         username: row.try_get("username")?,
         full_jid: row.try_get("full_jid")?,

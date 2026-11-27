@@ -176,35 +176,18 @@ fn read_decision(
     peer: &CanonicalJid,
     require_subscription: bool,
 ) -> Result<CommunicationDecision> {
-    use CommunicationDecision::*;
-
     let first = &rows[0];
-    let denial = [
-        (!first.try_get::<bool, _>("current_account")?).then_some(StaleAccount),
-        first
-            .try_get::<bool, _>("owner_blocks")?
-            .then_some(OwnerBlocks),
-        first
-            .try_get::<bool, _>("peer_blocks")?
-            .then_some(PeerBlocks),
-    ]
-    .into_iter()
-    .flatten()
-    .max();
-    if let Some(denial) = denial {
-        return Ok(denial);
-    }
-    Ok(
-        if (require_subscription
-            && !matches!(
-                first.try_get::<Option<&str>, _>("subscription")?,
-                Some("from" | "both")
-            ))
-            || privacy_denies_from_facts(rows, &peer.to_string(), query.kind)?
-        {
-            PrivacyDenies
-        } else {
-            Allow
+    CommunicationDecision::from_facts(
+        first.try_get("current_account")?,
+        first.try_get("owner_blocks")?,
+        first.try_get("peer_blocks")?,
+        || {
+            Ok((require_subscription
+                && !matches!(
+                    first.try_get::<Option<&str>, _>("subscription")?,
+                    Some("from" | "both")
+                ))
+                || privacy_denies_from_facts(rows, &peer.to_string(), query.kind)?)
         },
     )
 }

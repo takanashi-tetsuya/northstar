@@ -443,7 +443,6 @@ impl ClusterManager {
 
     pub fn unavailable_delivery(&self) -> ClusterUnavailableDelivery {
         ClusterUnavailableDelivery {
-            routes: self.listener_presence_routes(),
             sender: self.node_delivery(),
         }
     }

@@ -4,10 +4,12 @@ use crate::local_routes::session_table::LocalSessionTable;
 use anyhow::Result;
 pub use northstar_message_application::messaging::ExactMessageRoute;
 use northstar_message_application::messaging::ResourceStanzaPolicy;
+use northstar_session_application::sm_teardown_presence::DirectedGrant;
 use northstar_xep_0016::PrivacyStanzaKind;
 use northstar_xmpp_types::jid::CanonicalJid;
 use northstar_xmpp_types::jid_text::bare_jid;
 use std::future::Future;
+use uuid::Uuid;
 
 pub trait IqVisibilityHost: Send + Sync {
     fn authorize_iq_resource(
@@ -40,19 +42,54 @@ pub struct LocalIqAdmission<'a> {
     route: ExactMessageRoute,
     active_list: Option<String>,
     requester: &'a str,
+    requester_fence: Option<RequesterFence>,
     directed: bool,
     require_subscription: bool,
 }
 
+/// The exact incarnation of a local client resource that sends an IQ.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct RequesterFence {
+    pub account_id: Uuid,
+    pub auth_generation: i64,
+    pub connection_id: Uuid,
+}
+
 impl<'a> LocalIqAdmission<'a> {
+    /// Captures an IQ from a federated, component or other-node sender. Only
+    /// address-scoped directed grants apply; an exact local grant needs the
+    /// requester's incarnation, which this caller does not have.
     pub fn capture(
         jid: String,
         session: &OnlineSession,
         requester: &'a str,
         request: bool,
     ) -> Result<Self> {
+        Self::capture_with(jid, session, requester, None, request)
+    }
+
+    /// Captures an IQ from a local client resource. Only an exact directed
+    /// grant for this incarnation applies, never an address-scoped one.
+    pub fn capture_local(
+        jid: String,
+        session: &OnlineSession,
+        requester: &'a str,
+        fence: RequesterFence,
+        request: bool,
+    ) -> Result<Self> {
+        Self::capture_with(jid, session, requester, Some(fence), request)
+    }
+
+    fn capture_with(
+        jid: String,
+        session: &OnlineSession,
+        requester: &'a str,
+        requester_fence: Option<RequesterFence>,
+        request: bool,
+    ) -> Result<Self> {
         let same_account = CanonicalJid::parse(requester)?.bare() == bare_jid(&jid);
-        let directed = request && !same_account && has_directed_grant(session, requester);
+        let directed =
+            request && !same_account && has_directed_grant(session, requester, requester_fence);
         Ok(Self {
             route: ExactMessageRoute {
                 full_jid: jid,
@@ -65,6 +102,7 @@ impl<'a> LocalIqAdmission<'a> {
             },
             active_list: session.privacy_active_snapshot(),
             requester,
+            requester_fence,
             directed,
             require_subscription: request && !full_jid_iq_visible(same_account, false, directed),
         })
@@ -89,14 +127,42 @@ impl<'a> LocalIqAdmission<'a> {
     pub fn handoff(&self, sessions: &LocalSessionTable, stanza: Option<&str>) -> bool {
         sessions.with_exact_message_route(&self.route, |current| {
             current.privacy_active_snapshot() == self.active_list
-                && (!self.directed || has_directed_grant(current, self.requester))
+                && (!self.directed
+                    || has_directed_grant(current, self.requester, self.requester_fence))
                 && stanza.is_none_or(|xml| current.sender.try_send(xml.to_owned()).is_ok())
         }) == Some(true)
     }
 }
 
-fn has_directed_grant(session: &OnlineSession, requester: &str) -> bool {
+/// An exact grant (WP-756) names the accepting resource's incarnation, so a
+/// replacement connection never inherits it; an address-scoped grant is kept
+/// only for federated and component recipients.
+fn has_directed_grant(
+    session: &OnlineSession,
+    requester: &str,
+    fence: Option<RequesterFence>,
+) -> bool {
     session.directed_presence.iter().any(|authorized| {
-        northstar_presence_core::directed_recipient_matches(authorized.key(), requester)
+        match DirectedGrant::decode(authorized.key()) {
+            Ok(Some(grant)) => {
+                grant.route.full_jid == requester
+                    && fence.is_some_and(|fence| {
+                        fence
+                            == RequesterFence {
+                                account_id: grant.route.account_id,
+                                auth_generation: grant.route.auth_generation,
+                                connection_id: grant.route.connection_id,
+                            }
+                    })
+            }
+            Ok(None) => {
+                fence.is_none()
+                    && northstar_presence_core::directed_recipient_matches(
+                        authorized.key(),
+                        requester,
+                    )
+            }
+            Err(_) => false,
+        }
     })
 }

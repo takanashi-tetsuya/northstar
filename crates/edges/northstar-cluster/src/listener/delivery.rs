@@ -8,7 +8,7 @@ use crate::{
 use northstar_message_application::messaging::ExactMessageRoute;
 use northstar_stream::local_routes::session_table::LocalSessionTable;
 
-mod exact_control;
+pub(super) mod exact_control;
 mod notification;
 mod policy;
 mod roster;
@@ -594,8 +594,13 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
             }
             break;
         }
+        let captured_terminal_policy = options
+            .exact_control
+            .as_ref()
+            .is_some_and(|control| control.kind == ExactControlKind::TeardownUnavailable);
         // The validated transport receipt identifies server return-control.
         if !options.transport_receipt_required
+            && !captured_terminal_policy
             && !permits_direct_delivery(
                 message_policy,
                 &session,
@@ -654,7 +659,7 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
         } else {
             None
         };
-        let DirectDeliverySend::Accepted(accepted) = send_direct_delivery(
+        let accepted = match send_direct_delivery(
             message_policy,
             dispatch,
             DirectDeliveryRecipient {
@@ -669,8 +674,13 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
             mix_handoff,
         )
         .await
-        else {
-            break;
+        {
+            DirectDeliverySend::Accepted(accepted) => accepted,
+            DirectDeliverySend::RetryExactPresence => {
+                *control_processed = Some(false);
+                continue;
+            }
+            DirectDeliverySend::StopFanout => break,
         };
         if accepted {
             if is_message_stanza {

@@ -3,6 +3,7 @@
 
 mod current;
 mod directed;
+mod directed_ports;
 mod subscription;
 
 pub use self::current::{
@@ -10,7 +11,11 @@ pub use self::current::{
     send_current_availability_exact,
 };
 pub use self::directed::{
-    deliver_directed_presence, deliver_directed_unavailable, directed_presence_recipient,
+    deliver_directed_presence, deliver_exact_directed, directed_presence_recipient,
+    DirectedDelivery, DirectedDeliveryResult, DirectedEnqueue,
+};
+pub use self::directed_ports::{
+    DirectedPresenceHost, DirectedPresenceSession, DirectedPresenceTransport,
 };
 pub use self::subscription::{
     deliver_contact_presence, deliver_subscription_approval, deliver_subscription_presence,

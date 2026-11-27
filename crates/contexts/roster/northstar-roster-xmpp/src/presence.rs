@@ -17,6 +17,7 @@ use roxmltree::Node;
 use std::future::Future;
 
 use crate::blocking::BlockingSession;
+use crate::presence_delivery::DirectedPresenceSession;
 use crate::privacy::PrivacySession;
 use crate::roster::RosterSession;
 use crate::AvatarPresenceGate;
@@ -37,7 +38,6 @@ pub use self::directed::{directed_presence_gate, route_directed_presence, Presen
 pub use self::notice::deliver_service_messages;
 pub(crate) use northstar_xmpp_avatar::vcard_update::inject_vcard_avatar_hash;
 
-use self::availability::remove_directed_presence_for_bare;
 use self::directed::DirectedPresencePlan;
 use self::subscription_route::{RemoteSubscriptionRequest, SubscriptionMutationDisposition};
 
@@ -45,7 +45,11 @@ use self::subscription_route::{RemoteSubscriptionRequest, SubscriptionMutationDi
 /// roster capabilities. The fan-out over online sessions lives behind this trait until the
 /// session context moves.
 pub trait PresenceSession:
-    BlockingSession + PrivacySession + RosterSession + crate::SubscriptionRetryWake
+    BlockingSession
+    + PrivacySession
+    + RosterSession
+    + crate::SubscriptionRetryWake
+    + DirectedPresenceSession
 {
     /// The presence service, over the repository the composition root binds.
     fn presence_service(
@@ -53,8 +57,6 @@ pub trait PresenceSession:
     ) -> &PresenceService<impl PresenceRepository + SubscriptionRetryRepository>;
     /// The node's gate for projecting the current avatar into cached presence.
     fn avatar_presence_gate(&self) -> &AvatarPresenceGate;
-    /// Whether the session's resource is available.
-    fn presence_is_available(&self) -> bool;
     /// Replaces the presence the session last broadcast.
     fn presence_set_last(&self, presence: Option<String>);
     /// Queues `stanza` to this session, dropping it when the queue is full.
@@ -72,8 +74,6 @@ pub trait PresenceSession:
     fn presence_directed_remove(&self, target: &str);
     /// Forgets directed presence to every target `keep` rejects.
     fn presence_directed_retain(&self, keep: impl Fn(&str) -> bool);
-    /// Forgets every directed presence target and returns them.
-    fn presence_directed_take(&self) -> Vec<String>;
 
     /// Whether stanzas may be routed to the external `domain`.
     fn presence_route_allowed(&self, domain: &str) -> bool;
@@ -135,16 +135,6 @@ pub trait PresenceSession:
         from: &str,
         stanza: &str,
     ) -> impl Future<Output = ()> + Send;
-    /// Delivers the unavailable `stanza` of `from` to the local directed-presence `target`. A
-    /// `bare_target` reaches only available resources.
-    fn presence_deliver_directed_unavailable(
-        &self,
-        target: &str,
-        bare_target: bool,
-        from: &str,
-        stanza: &str,
-    ) -> impl Future<Output = ()> + Send;
-
     /// Whether a resource of the local account `bare` is available on this node.
     fn presence_has_available_resource(&self, bare: &str) -> bool;
     /// Whether another node holds a resource of the local account `bare`.

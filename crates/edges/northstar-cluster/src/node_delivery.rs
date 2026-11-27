@@ -647,7 +647,7 @@ impl ClusterNodeDelivery {
                 } else {
                     validated_delivery_ack(&ack_payload, expected)
                 };
-                if let Some(receipt) = receipt.filter(|receipt| {
+                if let Some(mut receipt) = receipt.filter(|receipt| {
                     !receipt.delivered
                         || options.exact_message_routes.is_none_or(|routes| {
                             receipt
@@ -659,6 +659,15 @@ impl ClusterNodeDelivery {
                     if let Some(suppressed) = suppressed {
                         *suppressed = ack.control_processed == Some(true);
                     }
+                    receipt.retryable_presence = !receipt.delivered
+                        && ack.control_processed == Some(false)
+                        && options.exact_control.is_some_and(|control| {
+                            matches!(
+                                control.kind,
+                                crate::ExactControlKind::UnavailablePresence
+                                    | crate::ExactControlKind::TeardownUnavailable
+                            )
+                        });
                     return Ok(if options.carbons_only && exact_message_version {
                         crate::message_routing::carbons::exact_carbon_receipt(&ack, receipt)
                     } else {

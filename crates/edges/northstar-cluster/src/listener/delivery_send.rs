@@ -16,6 +16,7 @@ pub(super) struct DirectDeliveryRecipient<'a> {
 
 pub(super) enum DirectDeliverySend {
     Accepted(bool),
+    RetryExactPresence,
     StopFanout,
 }
 
@@ -61,18 +62,29 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
         let table = LocalSessionTable::new(Arc::clone(&dispatch.account_routes.sessions));
         let accepted = table.with_exact_message_route(&route, |current| {
             if !options.priority_matches(target, current) {
-                return false;
+                return DirectDeliverySend::Accepted(false);
             }
             if let Some(durable) = durable_delivery {
-                current
-                    .sender
-                    .try_send_durable(delivery.clone(), durable)
-                    .is_ok()
-            } else {
-                current.sender.try_send(delivery.clone()).is_ok()
+                return DirectDeliverySend::Accepted(
+                    current
+                        .sender
+                        .try_send_durable(delivery.clone(), durable)
+                        .is_ok(),
+                );
+            }
+            match current.sender.try_send(delivery.clone()) {
+                Ok(()) => DirectDeliverySend::Accepted(true),
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_))
+                    if options.exact_control.as_ref().is_some_and(|control| {
+                        super::delivery::exact_control::retryable_presence_kind(control.kind)
+                    }) =>
+                {
+                    DirectDeliverySend::RetryExactPresence
+                }
+                Err(_) => DirectDeliverySend::Accepted(false),
             }
         });
-        return DirectDeliverySend::Accepted(accepted == Some(true));
+        return accepted.unwrap_or(DirectDeliverySend::Accepted(false));
     }
     let accepted = if let (Some(source), Some(request_id)) = (mix_delivery, mix_request_id) {
         return handoff_mix_delivery(

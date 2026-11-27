@@ -1,4 +1,4 @@
-use crate::protocol::iq_visibility::LocalIqAdmission;
+use crate::protocol::iq_visibility::{LocalIqAdmission, RequesterFence};
 use crate::protocol::{Action, ProtocolSession, SessionHost};
 use anyhow::Result;
 use northstar_auth_application::authentication::AuthenticatedAccount;
@@ -58,7 +58,17 @@ impl<H: SessionHost> ProtocolSession<H> {
         let from = self.full_jid.as_deref().unwrap_or_default();
         let rewritten = set_from(raw, from);
         if let Some((jid, session)) = self.host.session_entries_for(to).into_iter().next() {
-            let admission = LocalIqAdmission::capture(jid, &session, from, request)?;
+            let fence = self.authenticated.as_ref().map(|account| RequesterFence {
+                account_id: account.id,
+                auth_generation: account.auth_generation,
+                connection_id: self.connection_id,
+            });
+            let admission = match fence {
+                Some(fence) => {
+                    LocalIqAdmission::capture_local(jid, &session, from, fence, request)?
+                }
+                None => LocalIqAdmission::capture(jid, &session, from, request)?,
+            };
             if self.host.authorize_iq_resource(&admission).await? {
                 if let Some(condition) = jingle_error {
                     return Ok(if self.host.local_iq_handoff(&admission, None) {

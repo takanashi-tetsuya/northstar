@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::presence_delivery::{DirectedPresenceHost, DirectedPresenceTransport};
 use crate::AvatarPresenceGate;
 
 /// One post-commit delivery failure counter shared by roster, blocking and
@@ -46,6 +47,7 @@ pub trait RosterSessionHost:
     + Sync
     + crate::blocking::BlockingMutationHost
     + crate::SubscriptionRetryWake
+    + DirectedPresenceHost
 {
     /// The node's gate for projecting the current avatar into cached presence.
     fn avatar_presence_gate(&self) -> &AvatarPresenceGate;
@@ -164,14 +166,6 @@ pub trait RosterSessionHost:
         from: &str,
         stanza: &str,
     ) -> impl Future<Output = ()> + Send;
-    /// Delivers directed unavailable presence to the local sessions of `target`.
-    fn deliver_directed_unavailable(
-        &self,
-        target: &str,
-        bare_target: bool,
-        from: &str,
-        stanza: &str,
-    ) -> impl Future<Output = ()> + Send;
     /// Whether a local resource of `bare` is available.
     fn account_has_available_resource(&self, bare: &str) -> bool;
     /// Whether another cluster node owns an available resource of `bare` that a probe must ask.
@@ -254,7 +248,7 @@ pub trait FederatedPresenceHost: RosterSessionHost + SessionHost {
 
 /// The node as presence fan-out ([`crate::presence_delivery`]) sees it: the local session table's owner routes,
 /// rechecked after every await, and the cluster's presence routes to the other nodes.
-pub trait PresenceDeliveryHost: FederatedPresenceHost {
+pub trait PresenceDeliveryHost: FederatedPresenceHost + DirectedPresenceTransport {
     /// A snapshot of the local session keys. The caller rechecks each route after its awaits.
     fn local_presence_owner_keys(&self) -> Vec<String>;
     /// The routable, available local session `key` when it belongs to the account incarnation `user_id` at

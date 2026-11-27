@@ -415,7 +415,24 @@ impl<H: SessionHost> ProtocolSession<H> {
         for jid in &claim.directed_presence {
             directed_presence.insert(jid.clone());
         }
-        let last_presence = Arc::new(std::sync::RwLock::new(claim.last_presence.clone()));
+        let restored_presence = match claim.last_presence.as_deref() {
+            Some(cached) if claim.available => {
+                let hash = self
+                    .host
+                    .presence_service()
+                    .avatar_hash(current_user.id)
+                    .await;
+                northstar_xml_builder::rewrite::project_presence_avatar(
+                    cached,
+                    hash.as_ref()
+                        .ok()
+                        .and_then(|hash| hash.as_deref())
+                        .map(Some),
+                )
+            }
+            _ => claim.last_presence.clone(),
+        };
+        let last_presence = Arc::new(std::sync::RwLock::new(restored_presence.clone()));
         let sm_session_id_shared = Arc::new(std::sync::RwLock::new(Some(claim.session_id)));
         let effective_user_agent = self.user_agent_id.or(claim.user_agent_id);
         loop {
@@ -860,10 +877,8 @@ impl<H: SessionHost> ProtocolSession<H> {
         self.presence.mix_presence_gate = mix_presence_gate;
         self.presence.mix_presence_fallback_suppressed = mix_presence_fallback_suppressed;
         self.presence.caps_observation_generation = caps_observation_generation;
-        self.presence.resumed_caps_presence = claim
-            .available
-            .then(|| claim.last_presence.clone())
-            .flatten();
+        self.presence.resumed_caps_presence =
+            claim.available.then_some(restored_presence).flatten();
         self.carbons = carbons;
         self.priority = priority;
         self.show = show;

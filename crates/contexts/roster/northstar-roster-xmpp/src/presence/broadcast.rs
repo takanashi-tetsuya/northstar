@@ -1,71 +1,65 @@
 use super::availability::broadcast_directed_unavailable;
-use super::avatar::project_avatar_presence;
-use super::{inject_vcard_avatar_hash, PresenceSession};
-use crate::AvatarPresenceGate;
+use super::PresenceSession;
 use anyhow::Result;
-use northstar_xml_builder::rewrite::set_from;
-use northstar_xmpp_types::jid_text::bare_jid;
-use roxmltree::Node;
-use std::future::Future;
 
 mod audience;
 mod initial;
+mod prepared;
 
 use self::audience::{broadcast_audience, read_broadcast_roster};
+pub(crate) use self::prepared::PreparedBroadcastPresence;
 
+#[cfg(test)]
 pub(super) async fn set_last_broadcast_presence(
-    gate: &AvatarPresenceGate,
-    root: Node<'_, '_>,
+    gate: &crate::AvatarPresenceGate,
+    _root: roxmltree::Node<'_, '_>,
     raw: &str,
     available: bool,
     from: &str,
-    avatar_hash: impl Future<Output = Result<Option<String>>>,
+    avatar_hash: impl std::future::Future<Output = Result<Option<String>>>,
     set_last: impl FnOnce(Option<String>),
 ) -> Result<String> {
-    project_avatar_presence(gate, bare_jid(from), avatar_hash, |hash| {
-        let injected = if available {
-            inject_vcard_avatar_hash(raw, root, hash)
-        } else {
-            raw.to_owned()
-        };
-        let rewritten = set_from(&injected, from);
-        set_last(available.then(|| rewritten.clone()));
-        rewritten
-    })
+    let _guard = gate.lock(from).await;
+    let prepared =
+        prepared::prepare(raw, available, from, async { Ok(Vec::new()) }, avatar_hash).await?;
+    set_last(prepared.cached);
+    Ok(prepared.wire)
+}
+
+pub(crate) async fn prepare_broadcast_presence<S: PresenceSession>(
+    session: &S,
+    raw: &str,
+    kind: &str,
+    from: &str,
+) -> Result<PreparedBroadcastPresence> {
+    let user = session.session_account().expect("authenticated session");
+    prepared::prepare(
+        raw,
+        kind == "available",
+        from,
+        read_broadcast_roster(session, user.id),
+        session.presence_service().avatar_hash(user.id),
+    )
     .await
 }
 
 /// Broadcasts initial, status or unavailable presence to roster contacts, the account's other
 /// resources and directed presence targets.
-pub async fn broadcast_presence<S: PresenceSession>(
+pub(crate) async fn broadcast_presence<S: PresenceSession>(
     session: &S,
-    root: Node<'_, '_>,
-    raw: &str,
+    prepared: PreparedBroadcastPresence,
     kind: &str,
     from: &str,
     first_available: bool,
 ) -> Result<()> {
     let user = session.session_account().expect("authenticated session");
-    let roster = read_broadcast_roster(session, user.id).await?;
-    let available = kind == "available";
-    let rewritten = set_last_broadcast_presence(
-        session.avatar_presence_gate(),
-        root,
-        raw,
-        available,
-        from,
-        async {
-            if available {
-                session.presence_service().avatar_hash(user.id).await
-            } else {
-                Ok(None)
-            }
-        },
-        |presence| session.presence_set_last(presence),
-    )
-    .await?;
+    let PreparedBroadcastPresence {
+        roster,
+        wire: rewritten,
+        ..
+    } = prepared;
     let account = format!("{}@{}", user.username, session.session_local_domain());
-    broadcast_audience(
+    let audience_result = broadcast_audience(
         session,
         &user,
         roster,
@@ -74,7 +68,7 @@ pub async fn broadcast_presence<S: PresenceSession>(
         &rewritten,
         first_available,
     )
-    .await?;
+    .await;
 
     // RFC 6121 requires every available resource of the same account
     // to observe initial/subsequent presence. Unavailable presence is
@@ -87,7 +81,7 @@ pub async fn broadcast_presence<S: PresenceSession>(
         broadcast_directed_unavailable(session, &rewritten, from).await;
     }
 
-    Ok(())
+    audience_result
 }
 
 pub(super) fn should_probe_contact_on_presence(first_available: bool, subscription: &str) -> bool {

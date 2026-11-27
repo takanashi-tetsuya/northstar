@@ -4,7 +4,7 @@
 
 use crate::presence::{
     broadcast_presence, deliver_service_messages, directed_presence_gate, inject_vcard_avatar_hash,
-    route_directed_presence, PresenceGate,
+    prepare_broadcast_presence, route_directed_presence, PresenceGate,
 };
 use crate::roster::RosterGetOutcome;
 use crate::PresenceRouting;
@@ -32,7 +32,7 @@ mod blocking_mutation_host;
 mod presence_staging;
 mod roster_sync;
 
-use self::presence_staging::{stage_availability, stage_show_and_priority, StagedAvailability};
+use self::presence_staging::{commit_availability, StagedAvailability};
 use self::roster_sync::prepare_roster_sync;
 
 // From src/xmpp/protocol/roster_identity.rs.
@@ -241,13 +241,6 @@ impl<H: SessionHost + RosterSessionHost> crate::presence::PresenceSession for Pr
         self.host().avatar_presence_gate()
     }
 
-    fn presence_set_last(&self, presence: Option<String>) {
-        *self
-            .last_presence
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = presence;
-    }
-
     fn presence_try_send(&self, stanza: String) {
         let _ = self.outbound.try_send(stanza);
     }
@@ -293,10 +286,16 @@ impl<H: SessionHost + RosterSessionHost> crate::presence::PresenceSession for Pr
         stanza: String,
         bounce_to: Option<String>,
     ) -> bool {
-        self.host()
+        let accepted = self
+            .host()
             .federation_outbox()
             .send(domain, stanza, bounce_to)
-            .await
+            .await;
+        if !accepted {
+            self.host().post_accept_failure_telemetry().record_failure();
+            tracing::warn!(%domain, "could not admit federated presence");
+        }
+        accepted
     }
 
     async fn presence_deliver_directed(
@@ -362,13 +361,23 @@ impl<H: SessionHost + RosterSessionHost> crate::presence::PresenceSession for Pr
         stanza: &str,
     ) -> Result<()> {
         self.host()
-            .deliver_contact_presence(contact, from, stanza)
+            .deliver_contact_presence(
+                contact,
+                from,
+                stanza,
+                self.presence.broadcast_presence_epoch,
+            )
             .await
     }
 
     async fn presence_echo_to_account(&self, account: &str, from: &str, stanza: &str) {
         self.host()
-            .echo_account_presence(account, from, stanza)
+            .echo_account_presence(
+                account,
+                from,
+                stanza,
+                self.presence.broadcast_presence_epoch,
+            )
             .await;
     }
 
@@ -397,7 +406,10 @@ impl<H: SessionHost + RosterSessionHost> crate::presence::PresenceSession for Pr
             .answer_full_presence_probe(owner_full, owner_bare, requester, probe_id)
             .await?
         {
-            let _ = self.outbound.try_send(reply);
+            let _ = self.outbound.try_send_presence(
+                reply,
+                northstar_stream::outbound::PresenceDelivery::ProbeReply,
+            );
         }
         Ok(())
     }
@@ -619,14 +631,19 @@ impl<H: RosterSessionHost + PresenceRouting> PresenceHandlers for ProtocolSessio
             return Ok(reply.map_or(Action::None, Action::Send));
         }
 
-        // MIX presence is an account/resource epoch, not a best-effort
-        // side effect. Serialize the database projection with the exact
-        // in-memory availability/generation transition, then release the
-        // per-resource gate before roster, federation and replay work.
+        // Serialize the local commit and MIX projection with route replacement.
         let mix_presence_epoch = Arc::clone(&self.presence.mix_presence_gate)
             .lock_owned()
             .await;
-        if !H::forward_presence_to_mix(self, root, kind, &from, raw).await? {
+        let host = Arc::clone(self.host());
+        let avatar_epoch = host.avatar_presence_gate().lock(&from).await;
+        let mut prepared = prepare_broadcast_presence(&*self, raw, kind, &from).await?;
+        if !host.session_entries_for(&from).iter().any(|(_, route)| {
+            route.connection_id == self.connection_id
+                && Arc::ptr_eq(&route.mix_presence_gate, &self.presence.mix_presence_gate)
+                && !route.disconnect.is_cancelled()
+                && route.lifecycle.load(Ordering::Acquire) == 0
+        }) {
             return Ok(Action::None);
         }
         if matches!(kind, "available" | "unavailable") {
@@ -634,16 +651,15 @@ impl<H: RosterSessionHost + PresenceRouting> PresenceHandlers for ProtocolSessio
             // per-channel suppression for this resource.
             self.presence.mix_presence_fallback_suppressed.clear();
         }
-        let user = self.authenticated.as_ref().expect("authenticated session");
         let StagedAvailability {
             now_available,
             was_available,
             first_available,
             previous_priority,
+            priority,
             availability_generation,
-        } = stage_availability(self, root, kind, &from);
-        drop(mix_presence_epoch);
-        let priority = stage_show_and_priority(self, root, kind);
+        } = commit_availability(self, root, kind, &from, &mut prepared);
+        drop(avatar_epoch);
         self.presence.route_presence_seq += 1;
         self.host().publish_route_presence(
             &from,
@@ -652,6 +668,10 @@ impl<H: RosterSessionHost + PresenceRouting> PresenceHandlers for ProtocolSessio
             priority,
             self.presence.route_presence_seq,
         );
+        let record_failure = |effect, error: anyhow::Error| {
+            host.post_accept_failure_telemetry().record_failure();
+            tracing::warn!(%from, effect, ?error, "local presence committed before follow-up failed");
+        };
         // XEP-0160 delivers the offline queue on the first available
         // presence whose priority is nonnegative. A resource is allowed
         // to announce priority -1 first and later raise it without an
@@ -668,15 +688,33 @@ impl<H: RosterSessionHost + PresenceRouting> PresenceHandlers for ProtocolSessio
         // on a degraded cluster control plane; a later replay worker must
         // not absorb messages inserted during those waits.
         let offline_replay_cutoff = if newly_offline_eligible && !self.bind2_mam_catchup {
-            Some(self.host().presence_service().replay_cutoff().await?)
+            match host.presence_service().replay_cutoff().await {
+                Ok(cutoff) => Some(cutoff),
+                Err(error) => {
+                    record_failure("offline-replay-cutoff", error);
+                    None
+                }
+            }
         } else {
             None
         };
 
-        broadcast_presence(&*self, root, raw, kind, &from, first_available).await?;
+        match H::forward_presence_to_mix(self, root, kind, &from, raw).await {
+            Ok(false) => return Ok(Action::None),
+            Ok(true) => {}
+            Err(error) => record_failure("mix-presence", error),
+        }
+        drop(mix_presence_epoch);
+        if let Err(error) = broadcast_presence(&*self, prepared, kind, &from, first_available).await
+        {
+            record_failure("presence-fanout", error);
+        }
 
+        let user = self.authenticated.as_ref().expect("authenticated session");
         if first_available {
-            deliver_service_messages(&*self, &from).await?;
+            if let Err(error) = deliver_service_messages(&*self, &from).await {
+                record_failure("presence-service-messages", error);
+            }
             let replay_service = self.host().replay_service().clone();
             let outbound = self.outbound.clone();
             let replay_target =
@@ -688,8 +726,8 @@ impl<H: RosterSessionHost + PresenceRouting> PresenceHandlers for ProtocolSessio
                 .clone();
             let generation = self.presence.availability_generation.clone();
             let bind2_mam_catchup = self.bind2_mam_catchup;
-            let include_offline = priority >= 0 && !bind2_mam_catchup;
-            self.defer_after_transport("available-offline-replay", async move {
+            let include_offline = offline_replay_cutoff.is_some();
+            if let Err(error) = self.defer_after_transport("available-offline-replay", async move {
                 northstar_stream::replay::replay_newly_available_resource(
                     replay_service,
                     outbound,
@@ -702,14 +740,18 @@ impl<H: RosterSessionHost + PresenceRouting> PresenceHandlers for ProtocolSessio
                     offline_replay_cutoff,
                 )
                 .await;
-            })?;
+            }) {
+                record_failure("available-offline-replay", error);
+            }
             // The generic PubSub service advertises last-published, so a
             // subscriber's first broadcast available presence must
             // trigger the same bounded replay as directed presence to the
             // service. The worker starts only after this presence action
             // reaches the transport and applies awaited backpressure.
-            let _ = H::route_pubsub_presence(self, "available", &from).await?;
-        } else if newly_offline_eligible && !self.bind2_mam_catchup {
+            if let Err(error) = H::route_pubsub_presence(self, "available", &from).await {
+                record_failure("pubsub-presence", error);
+            }
+        } else if let Some(offline_replay_cutoff) = offline_replay_cutoff {
             let replay_service = self.host().replay_service().clone();
             let outbound = self.outbound.clone();
             let replay_target =
@@ -720,20 +762,22 @@ impl<H: RosterSessionHost + PresenceRouting> PresenceHandlers for ProtocolSessio
                 .expect("a bound resource has availability state")
                 .clone();
             let generation = self.presence.availability_generation.clone();
-            let offline_replay_cutoff = offline_replay_cutoff
-                .expect("newly eligible legacy replay captured a database cutoff");
-            self.defer_after_transport("nonnegative-offline-replay", async move {
-                northstar_stream::replay::replay_newly_nonnegative_resource(
-                    replay_service,
-                    outbound,
-                    replay_target,
-                    available,
-                    generation,
-                    availability_generation,
-                    offline_replay_cutoff,
-                )
-                .await;
-            })?;
+            if let Err(error) =
+                self.defer_after_transport("nonnegative-offline-replay", async move {
+                    northstar_stream::replay::replay_newly_nonnegative_resource(
+                        replay_service,
+                        outbound,
+                        replay_target,
+                        available,
+                        generation,
+                        availability_generation,
+                        offline_replay_cutoff,
+                    )
+                    .await;
+                })
+            {
+                record_failure("nonnegative-offline-replay", error);
+            }
         }
         Ok(Action::None)
     }

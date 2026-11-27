@@ -49,19 +49,32 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
             .is_some_and(|current| handoff_roster_push(options, current.value(), jid, delivery));
         return DirectDeliverySend::Accepted(accepted);
     }
+    let send_volatile = |session: &OnlineSession| match options.presence_delivery {
+        Some(scope) => session
+            .sender
+            .try_send_presence(delivery.clone(), scope)
+            .is_ok(),
+        None => session.sender.try_send(delivery.clone()).is_ok(),
+    };
     if options.expected_connections.is_some() || durable_delivery.is_some() {
+        let _presence = session
+            .last_presence
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        let available = session.available.load(Ordering::Acquire);
+        let priority = session.priority.load(Ordering::Relaxed);
         let route = ExactMessageRoute {
             full_jid: jid.to_owned(),
             account_id: session.user_id,
             auth_generation: session.auth_generation,
             connection_id: session.connection_id,
             node_id: None,
-            priority: Some(session.priority.load(Ordering::Relaxed)),
-            available: Some(session.available.load(Ordering::Relaxed)),
+            priority: Some(priority),
+            available: Some(available),
         };
         let table = LocalSessionTable::new(Arc::clone(&dispatch.account_routes.sessions));
         let accepted = table.with_exact_message_route(&route, |current| {
-            if !options.priority_matches(target, current) {
+            if !options.priority_matches_state(target, available, priority) {
                 return DirectDeliverySend::Accepted(false);
             }
             if let Some(control) = &options.exact_control {
@@ -95,7 +108,11 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
                         .is_ok(),
                 );
             }
-            match current.sender.try_send(delivery.clone()) {
+            let sent = match options.presence_delivery {
+                Some(scope) => current.sender.try_send_presence(delivery.clone(), scope),
+                None => current.sender.try_send(delivery.clone()),
+            };
+            match sent {
                 Ok(()) => DirectDeliverySend::Accepted(true),
                 Err(tokio::sync::mpsc::error::TrySendError::Full(_))
                     if options.exact_control.as_ref().is_some_and(|control| {
@@ -145,7 +162,7 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
             }
         }
     } else {
-        session.sender.try_send(delivery.clone()).is_ok()
+        send_volatile(session)
     };
     DirectDeliverySend::Accepted(accepted)
 }

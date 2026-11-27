@@ -32,7 +32,9 @@ mod subscriptions;
 
 pub use self::availability::{full_jid_probe_available_response, presence_probe_status_response};
 pub use self::avatar::refresh_avatar_presence;
-pub use self::broadcast::broadcast_presence;
+pub(crate) use self::broadcast::{
+    broadcast_presence, prepare_broadcast_presence, PreparedBroadcastPresence,
+};
 pub use self::directed::{directed_presence_gate, route_directed_presence, PresenceGate};
 pub use self::notice::deliver_service_messages;
 pub(crate) use northstar_xmpp_avatar::vcard_update::inject_vcard_avatar_hash;
@@ -56,8 +58,6 @@ pub trait PresenceSession:
     ) -> &PresenceService<impl PresenceRepository + SubscriptionRetryRepository>;
     /// The node's gate for projecting the current avatar into cached presence.
     fn avatar_presence_gate(&self) -> &AvatarPresenceGate;
-    /// Replaces the presence the session last broadcast.
-    fn presence_set_last(&self, presence: Option<String>);
     /// Queues `stanza` to this session, dropping it when the queue is full.
     fn presence_try_send(&self, stanza: String);
     /// Queues `stanza` to this session, waiting for room.

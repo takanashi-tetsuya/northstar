@@ -55,9 +55,10 @@ pub fn try_send_to_available_entries_in(
         .into_iter()
         .filter(|(_, target)| target.available.load(Ordering::Relaxed))
     {
-        let _ = target
-            .sender
-            .try_send(northstar_xml_builder::rewrite::set_to(stanza, &jid));
+        let _ = target.sender.try_send_presence(
+            northstar_xml_builder::rewrite::set_to(stanza, &jid),
+            crate::outbound::PresenceDelivery::Status { source_epoch: None },
+        );
     }
 }
 

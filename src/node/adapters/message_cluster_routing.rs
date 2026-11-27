@@ -132,6 +132,7 @@ impl ExactMessageRoutePort for ServerNode {
         if session.user_id != recipient_id {
             return enqueue.send_with(|item| Err(QueueRefusal::Closed(item)));
         }
+        let (available, priority) = session.presence_route_state();
         self.session.live().sessions().try_send_exact_message_route(
             &ExactMessageRoute {
                 full_jid: full_jid.to_owned(),
@@ -139,8 +140,8 @@ impl ExactMessageRoutePort for ServerNode {
                 auth_generation: session.auth_generation,
                 connection_id: session.connection_id,
                 node_id: None,
-                priority: Some(session.priority.load(Ordering::Relaxed)),
-                available: Some(session.available.load(Ordering::Relaxed)),
+                priority: Some(priority),
+                available: Some(available),
             },
             enqueue,
         )

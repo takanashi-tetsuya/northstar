@@ -111,6 +111,8 @@ pub struct PresenceSubstate {
     /// Cancels replay work from an older available/unavailable transition.
     pub availability_generation: Arc<AtomicU64>,
     pub route_presence_seq: u64,
+    /// Process-ordered epoch of the last committed broadcast presence.
+    pub broadcast_presence_epoch: Option<u64>,
 }
 
 /// Fixed SM admission and replay limits for this connection. ServerNode owns

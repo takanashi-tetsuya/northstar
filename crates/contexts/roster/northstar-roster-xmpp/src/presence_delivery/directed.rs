@@ -2,6 +2,7 @@ use crate::PresenceDeliveryHost;
 use anyhow::Result;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_roster_core::{ExactPresenceRoute, PresenceAccount, RosterActor};
+use northstar_stream::outbound::PresenceDelivery;
 use northstar_stream::session_cleanup::unavailable::DirectedGrant;
 use std::sync::atomic::Ordering;
 
@@ -238,7 +239,10 @@ pub async fn deliver_directed_presence<H: PresenceDeliveryHost>(
         if host
             .privacy_allows_session(&target, from, PrivacyStanzaKind::PresenceIn)
             .await?
-            && target.sender.try_send(stanza.to_owned()).is_ok()
+            && target
+                .sender
+                .try_send_presence(stanza.to_owned(), PresenceDelivery::Directed)
+                .is_ok()
         {
             delivered = true;
         }

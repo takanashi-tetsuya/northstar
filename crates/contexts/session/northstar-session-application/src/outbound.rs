@@ -18,6 +18,20 @@ pub trait AuthControl: std::any::Any + std::fmt::Debug + Send + Sync {
     fn validate_control(&self, control: &str) -> anyhow::Result<()>;
 }
 
+/// Process-local provenance; it is not a stanza attribute or part of SM storage.
+#[derive(Clone, Copy, Debug)]
+pub enum PresenceDelivery {
+    Status {
+        source_epoch: Option<u64>,
+    },
+    RemoteStatus {
+        connection: uuid::Uuid,
+        sequence: u64,
+    },
+    ProbeReply,
+    Directed,
+}
+
 /// A database-backed C2S delivery which must not be acknowledged merely
 /// because it entered an in-memory channel. The transport removes the exact
 /// durable row only after the transport's recoverable acknowledgement
@@ -54,6 +68,7 @@ pub struct OutboundItem {
     /// never set this field.
     pub transient_sm_capacity: Option<std::sync::Arc<Vec<crate::sm_capacity::SmCapacityLease>>>,
     snapshot_push_fence: Option<CancellationToken>,
+    pub presence_delivery: Option<PresenceDelivery>,
 }
 
 pub type RouteEnqueue = northstar_message_core::route_item::RouteEnqueue<OutboundItem>;
@@ -89,6 +104,7 @@ impl OutboundItem {
             transport_write_receipt: None,
             transient_sm_capacity: None,
             snapshot_push_fence: None,
+            presence_delivery: None,
         }
     }
 
@@ -103,6 +119,7 @@ impl OutboundItem {
             transport_write_receipt: None,
             transient_sm_capacity: None,
             snapshot_push_fence: None,
+            presence_delivery: None,
         }
     }
 
@@ -122,6 +139,7 @@ impl OutboundItem {
                 transport_write_receipt: None,
                 transient_sm_capacity: None,
                 snapshot_push_fence: None,
+                presence_delivery: None,
             },
             receiver,
         )
@@ -163,6 +181,7 @@ impl OutboundItem {
             transport_write_receipt: None,
             transient_sm_capacity: None,
             snapshot_push_fence: None,
+            presence_delivery: None,
         }
     }
 
@@ -190,6 +209,7 @@ impl OutboundItem {
             transport_write_receipt: None,
             transient_sm_capacity: Some(capacity),
             snapshot_push_fence: None,
+            presence_delivery: None,
         }
     }
 
@@ -333,6 +353,16 @@ impl OutboundSender {
             ..OutboundItem::plain(stanza)
         })
         .map_err(map_try_send_error)
+    }
+
+    pub fn try_send_presence(
+        &self,
+        stanza: String,
+        delivery: PresenceDelivery,
+    ) -> Result<(), mpsc::error::TrySendError<String>> {
+        let mut item = OutboundItem::plain(stanza);
+        item.presence_delivery = Some(delivery);
+        self.try_send_item(item).map_err(map_try_send_error)
     }
 
     pub fn try_send_durable(

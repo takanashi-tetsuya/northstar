@@ -260,12 +260,19 @@ impl RosterSessionHost for ServerNode {
         contact: &str,
         from: &str,
         stanza: &str,
+        source_epoch: Option<u64>,
     ) -> Result<()> {
-        presence_delivery::deliver_contact_presence(self, contact, from, stanza).await
+        presence_delivery::deliver_contact_presence(self, contact, from, stanza, source_epoch).await
     }
 
-    async fn echo_account_presence(&self, account: &str, from: &str, stanza: &str) {
-        presence_delivery::echo_account_presence(self, account, from, stanza).await
+    async fn echo_account_presence(
+        &self,
+        account: &str,
+        from: &str,
+        stanza: &str,
+        source_epoch: Option<u64>,
+    ) {
+        presence_delivery::echo_account_presence(self, account, from, stanza, source_epoch).await
     }
 
     fn account_has_available_resource(&self, bare: &str) -> bool {
@@ -488,7 +495,10 @@ impl DirectedPresenceTransport for ServerNode {
                 if available_only && !current.available.load(Ordering::Acquire) {
                     return DirectedEnqueue::Gone;
                 }
-                match current.sender.try_send(stanza.to_owned()) {
+                match current.sender.try_send_presence(
+                    stanza.to_owned(),
+                    northstar_stream::outbound::PresenceDelivery::Directed,
+                ) {
                     Ok(()) => DirectedEnqueue::Accepted,
                     Err(TrySendError::Full(_)) => DirectedEnqueue::Retry,
                     Err(TrySendError::Closed(_)) => DirectedEnqueue::Gone,
@@ -573,8 +583,9 @@ impl PresenceDeliveryHost for ServerNode {
     }
 
     async fn broadcast_available_presence_remote(&self, target: &str, stanza: &str) {
+        let telemetry = self.post_accept_failure_telemetry();
         self.cluster
-            .broadcast_available_presence_remote(target, stanza)
+            .broadcast_available_presence_remote(target, stanza, move || telemetry.record_failure())
             .await
     }
 

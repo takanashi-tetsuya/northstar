@@ -2,12 +2,46 @@
 
 use super::*;
 use crate::listener_dispatch::ClusterListenerDispatch;
+use northstar_stream::outbound::PresenceDelivery;
+use northstar_xml_builder::rewrite::project_presence_avatar;
 
 mod blocking;
 mod validate;
 
 pub(super) use self::blocking::deliver_blocking_presence;
 pub(super) use self::validate::validate_stanza_presence;
+
+pub(super) fn delivery_scope(
+    control: Option<&crate::delivery_contract::ExactControl>,
+    legacy_replay: bool,
+) -> Option<PresenceDelivery> {
+    use crate::delivery_contract::ExactControlKind;
+
+    match control.map(|control| control.kind) {
+        Some(ExactControlKind::CurrentPresenceReplay | ExactControlKind::ProbeResponse) => {
+            Some(PresenceDelivery::ProbeReply)
+        }
+        Some(ExactControlKind::DirectedPresence | ExactControlKind::FederatedInboundPresence) => {
+            Some(PresenceDelivery::Directed)
+        }
+        Some(
+            ExactControlKind::AvailablePresence
+            | ExactControlKind::UnavailablePresence
+            | ExactControlKind::TeardownUnavailable,
+        ) => Some(
+            control
+                .and_then(|control| {
+                    Some(PresenceDelivery::RemoteStatus {
+                        connection: control.source.as_ref()?.connection_id,
+                        sequence: control.sequence?,
+                    })
+                })
+                .unwrap_or(PresenceDelivery::Status { source_epoch: None }),
+        ),
+        None if legacy_replay => Some(PresenceDelivery::ProbeReply),
+        _ => None,
+    }
+}
 
 pub(super) async fn handle_presence_probe<A: ClusterAdapters>(
     admission: &ClusterListenerAdmission,
@@ -63,10 +97,14 @@ pub(super) async fn handle_presence_probe<A: ClusterAdapters>(
             ));
             return Ok(ListenerStep::Continue);
         }
-        let authoritative_avatar_hash = message_policy
-            .owner_avatar_hash(authority.owner_id)
-            .await
-            .ok();
+        let authoritative_avatar_hash = if availability_only {
+            None
+        } else {
+            message_policy
+                .owner_avatar_hash(authority.owner_id)
+                .await
+                .ok()
+        };
         let mut presences = Vec::new();
         for (owner_full, session) in dispatch.session_entries_for(&owner) {
             if session.user_id != authority.owner_id
@@ -85,51 +123,36 @@ pub(super) async fn handle_presence_probe<A: ClusterAdapters>(
             {
                 continue;
             }
+            let Some(cached) = session.current_presence() else {
+                continue;
+            };
             let presence = if availability_only {
-                let original_id = session
-                    .last_presence
-                    .read()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .clone()
-                    .and_then(|presence| {
-                        let document = roxmltree::Document::parse(&presence).ok()?;
-                        document
-                            .root_element()
-                            .attribute("id")
-                            .filter(|id| {
-                                !id.is_empty()
-                                    && id.len() <= 1_024
-                                    && !id.chars().any(char::is_control)
-                            })
-                            .map(str::to_owned)
-                    });
+                let original_id = cached.and_then(|presence| {
+                    let document = roxmltree::Document::parse(&presence).ok()?;
+                    document
+                        .root_element()
+                        .attribute("id")
+                        .filter(|id| {
+                            !id.is_empty() && id.len() <= 1_024 && !id.chars().any(char::is_control)
+                        })
+                        .map(str::to_owned)
+                });
                 northstar_xml_builder::XmlElement::namespaced("presence", "jabber:client")
                     .attr("from", &owner_full)
                     .attr("to", &recipient)
                     .optional_attr("id", original_id.as_deref())
                     .finish()
             } else {
-                session
-                    .last_presence
-                    .read()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .clone()
-                    .map(|presence| {
-                        let presence = authoritative_avatar_hash
-                            .as_ref()
-                            .and_then(|hash| {
-                                let document = roxmltree::Document::parse(&presence).ok()?;
-                                Some(
-                                    northstar_xmpp_avatar::vcard_update::inject_vcard_avatar_hash(
-                                        &presence,
-                                        document.root_element(),
-                                        hash.as_deref(),
-                                    ),
-                                )
-                            })
-                            .unwrap_or(presence);
-                        set_to(&presence, &recipient)
+                cached
+                    .and_then(|presence| {
+                        project_presence_avatar(
+                            &presence,
+                            authoritative_avatar_hash
+                                .as_ref()
+                                .map(|hash| hash.as_deref()),
+                        )
                     })
+                    .map(|presence| set_to(&presence, &recipient))
                     .unwrap_or_else(|| {
                         northstar_xml_builder::XmlElement::namespaced("presence", "jabber:client")
                             .attr("from", &owner_full)
@@ -162,8 +185,12 @@ pub(super) async fn handle_presence_probe<A: ClusterAdapters>(
                     .await
                     .unwrap_or(false)
                 {
-                    *delivered +=
-                        usize::from(recipient_session.sender.try_send(presence.clone()).is_ok());
+                    *delivered += usize::from(
+                        recipient_session
+                            .sender
+                            .try_send_presence(presence.clone(), PresenceDelivery::ProbeReply)
+                            .is_ok(),
+                    );
                 }
             }
             match dispatch.remote_presence_nodes(&recipient).await {

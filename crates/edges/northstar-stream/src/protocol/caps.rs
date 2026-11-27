@@ -193,9 +193,8 @@ impl<H: SessionHost> ProtocolSession<H> {
 }
 
 impl<H: SessionHost> ProtocolSession<H> {
-    /// Commit the latest caps observation only after the surrounding presence
-    /// handler has durably applied the matching MIX projection and updated
-    /// availability while holding `mix_presence_gate`.
+    /// Commit the latest caps observation as part of the local presence
+    /// transition while the caller holds `mix_presence_gate`.
     pub fn commit_caps_observation(&self, presence: Node<'_, '_>, full_jid: &str) {
         self.commit_caps_observation_for(
             presence,

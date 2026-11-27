@@ -4,6 +4,9 @@ use crate::escape::attr_escape;
 use crate::{ValidatedXmlFragment, XmlElement};
 use roxmltree::Document;
 
+mod presence_avatar;
+pub use presence_avatar::project_presence_avatar;
+
 pub fn remove_root_attribute(raw: &str, name: &str) -> String {
     if Document::parse(raw).is_err() {
         return raw.to_owned();

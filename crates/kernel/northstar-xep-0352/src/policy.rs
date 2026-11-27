@@ -137,12 +137,34 @@ impl StanzaMetadata {
     }
 }
 
+/// Delivery purpose of a deferred presence stanza, supplied by its producer.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum PresenceScope {
+    Status,
+    ProbeReply,
+    Directed,
+}
+
+/// Comparable within a process, or within the exact remote source connection.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum PresenceEpoch {
+    Local(u64),
+    Remote { connection: u128, sequence: u64 },
+}
+
 /// Coalescing key identifying replaceable soft-state signals.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CoalescingKey {
     /// Presence updates from a canonical JID (e.g., `presence:alice@example.test/Phone`).
     Presence { from: String },
+    ScopedPresence {
+        from: String,
+        scope: PresenceScope,
+        source_epoch: Option<PresenceEpoch>,
+    },
     /// Standalone chat state notifications from a canonical JID (e.g., `chatstate:bob@example.test/Phone`).
     ChatState { from: String },
     /// PEP item event updates (e.g., `pep:pub@example.test:node1:item:1,retract:2`).
@@ -179,6 +201,7 @@ impl CoalescingKey {
     pub fn as_key_string(&self) -> String {
         match self {
             Self::Presence { from } => format!("presence:{from}"),
+            Self::ScopedPresence { from, scope, .. } => format!("presence:{scope:?}:{from}"),
             Self::ChatState { from } => format!("chatstate:{from}"),
             Self::PepEvent {
                 from,
@@ -188,6 +211,46 @@ impl CoalescingKey {
                 format!("pep:{from}:{node}:{}", item_keys.join(","))
             }
             Self::Custom(key) => key.clone(),
+        }
+    }
+
+    pub(crate) fn matches_slot(&self, queued: &Self) -> bool {
+        match (self, queued) {
+            (
+                Self::ScopedPresence { from, scope, .. },
+                Self::ScopedPresence {
+                    from: old_from,
+                    scope: old_scope,
+                    ..
+                },
+            ) => from == old_from && scope == old_scope,
+            _ => false,
+        }
+    }
+
+    pub(crate) fn may_replace(&self, queued: &Self) -> bool {
+        match (self, queued) {
+            (
+                Self::ScopedPresence { source_epoch, .. },
+                Self::ScopedPresence {
+                    source_epoch: Some(old_epoch),
+                    ..
+                },
+            ) => match (source_epoch, old_epoch) {
+                (Some(PresenceEpoch::Local(next)), PresenceEpoch::Local(old)) => next >= old,
+                (
+                    Some(PresenceEpoch::Remote {
+                        connection,
+                        sequence,
+                    }),
+                    PresenceEpoch::Remote {
+                        connection: old_connection,
+                        sequence: old_sequence,
+                    },
+                ) => connection == old_connection && sequence >= old_sequence,
+                _ => false,
+            },
+            _ => true,
         }
     }
 }

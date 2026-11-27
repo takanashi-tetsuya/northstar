@@ -17,6 +17,22 @@ pub struct DeferredEntry<T> {
     pub byte_size: usize,
     /// Monotonically increasing sequence number for deterministic FIFO tracking.
     pub sequence: u64,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    presence: Option<CoalescingKey>,
+}
+
+impl<T> DeferredEntry<T> {
+    fn matches_key(&self, key: &CoalescingKey, key_str: &str) -> bool {
+        if let Some(presence) = &self.presence {
+            key.matches_slot(presence)
+        } else {
+            !matches!(key, CoalescingKey::ScopedPresence { .. })
+                && self.key.as_deref() == Some(key_str)
+        }
+    }
 }
 
 /// Explicit outcome of attempting to enqueue an item into the deferred queue.
@@ -173,15 +189,28 @@ impl<T> DeferredQueue<T> {
         byte_size: usize,
         key: Option<CoalescingKey>,
     ) -> EnqueueResult<T> {
-        let key_str = key.map(|k| k.as_key_string());
+        let key_str = key.as_ref().map(CoalescingKey::as_key_string);
+        let presence = key
+            .as_ref()
+            .filter(|key| matches!(key, CoalescingKey::ScopedPresence { .. }))
+            .cloned();
 
         // Check if an existing entry with the same coalescing key can be updated in-place
-        if let Some(ref k) = key_str {
+        if let (Some(key), Some(key_str)) = (&key, &key_str) {
             if let Some(pos) = self
                 .entries
                 .iter()
-                .position(|e| e.key.as_deref() == Some(k))
+                .position(|entry| entry.matches_key(key, key_str))
             {
+                if self.entries[pos]
+                    .presence
+                    .as_ref()
+                    .is_some_and(|queued| !key.may_replace(queued))
+                {
+                    return EnqueueResult::Discarded {
+                        discarded_item: payload,
+                    };
+                }
                 let old_size = self.entries[pos].byte_size;
                 let new_total_bytes = self
                     .total_bytes
@@ -194,9 +223,10 @@ impl<T> DeferredQueue<T> {
                         &mut self.entries[pos],
                         DeferredEntry {
                             payload,
-                            key: Some(k.clone()),
+                            key: Some(key_str.clone()),
                             byte_size,
                             sequence,
+                            presence,
                         },
                     );
                     self.total_bytes = new_total_bytes;
@@ -235,7 +265,7 @@ impl<T> DeferredQueue<T> {
                             if let Some(removed) = self.entries.pop_front() {
                                 // The projected replacement total already excludes
                                 // the target's old bytes, even if it is evicted.
-                                if removed.key.as_deref() != Some(k.as_str()) {
+                                if !removed.matches_key(key, key_str) {
                                     current_bytes = current_bytes.saturating_sub(removed.byte_size);
                                 }
                                 evicted.push(removed.payload);
@@ -246,16 +276,17 @@ impl<T> DeferredQueue<T> {
                         let replaced_previous = if let Some(new_pos) = self
                             .entries
                             .iter()
-                            .position(|e| e.key.as_deref() == Some(k))
+                            .position(|entry| entry.matches_key(key, key_str))
                         {
                             let sequence = self.entries[new_pos].sequence;
                             let old_entry = std::mem::replace(
                                 &mut self.entries[new_pos],
                                 DeferredEntry {
                                     payload,
-                                    key: Some(k.clone()),
+                                    key: Some(key_str.clone()),
                                     byte_size,
                                     sequence,
+                                    presence,
                                 },
                             );
                             Some(old_entry.payload)
@@ -264,9 +295,10 @@ impl<T> DeferredQueue<T> {
                             self.next_sequence = self.next_sequence.saturating_add(1);
                             self.entries.push_back(DeferredEntry {
                                 payload,
-                                key: Some(k.clone()),
+                                key: Some(key_str.clone()),
                                 byte_size,
                                 sequence: seq,
+                                presence,
                             });
                             None
                         };
@@ -297,6 +329,7 @@ impl<T> DeferredQueue<T> {
                 key: key_str,
                 byte_size,
                 sequence: seq,
+                presence,
             });
             return EnqueueResult::Enqueued {
                 replaced_previous: None,
@@ -342,6 +375,7 @@ impl<T> DeferredQueue<T> {
                     key: key_str,
                     byte_size,
                     sequence: seq,
+                    presence,
                 });
 
                 EnqueueResult::Overflow {
@@ -366,3 +400,6 @@ impl<T> DeferredQueue<T> {
         self.entries.drain(..).collect()
     }
 }
+
+#[cfg(test)]
+mod presence_tests;

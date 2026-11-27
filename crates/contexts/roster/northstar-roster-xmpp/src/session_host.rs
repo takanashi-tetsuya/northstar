@@ -157,6 +157,7 @@ pub trait RosterSessionHost:
         contact: &str,
         from: &str,
         stanza: &str,
+        source_epoch: Option<u64>,
     ) -> impl Future<Output = Result<()>> + Send;
     /// Echoes broadcast presence to the resources of the sender's own account on every node.
     fn echo_account_presence(
@@ -164,6 +165,7 @@ pub trait RosterSessionHost:
         account: &str,
         from: &str,
         stanza: &str,
+        source_epoch: Option<u64>,
     ) -> impl Future<Output = ()> + Send;
     /// Whether a local resource of `bare` is available.
     fn account_has_available_resource(&self, bare: &str) -> bool;

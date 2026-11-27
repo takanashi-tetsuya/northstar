@@ -1,9 +1,14 @@
 use super::{Action, ProtocolSession};
+use crate::outbound::PresenceDelivery;
 use crate::protocol::SessionHost;
+use northstar_xep_0352::policy::{PresenceEpoch, PresenceScope};
 use northstar_xep_0352::{
-    classify_stanza, CsiIndication, CsiPolicyConfig, CsiStateMachine, DeferredQueue,
+    classify_stanza, CoalescingKey, CsiIndication, CsiPolicyConfig, CsiStateMachine, DeferredQueue,
     DeliveryAction, EnqueueResult, OverflowDecision, StanzaMetadata,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static CSI_EVICTIONS: AtomicU64 = AtomicU64::new(0);
 
 pub(super) struct CsiSubstate {
     state: CsiStateMachine,
@@ -73,14 +78,52 @@ fn defer_stanza(
     let key = match classify_stanza(&item.stanza, &metadata, deferred.config()) {
         DeliveryAction::Immediate => return Some(item),
         DeliveryAction::Discard => return None,
+        DeliveryAction::Defer(CoalescingKey::Presence { from }) => {
+            let scoped = match item.presence_delivery {
+                Some(PresenceDelivery::Status { source_epoch }) => Some((
+                    PresenceScope::Status,
+                    source_epoch.map(PresenceEpoch::Local),
+                )),
+                Some(PresenceDelivery::RemoteStatus {
+                    connection,
+                    sequence,
+                }) => Some((
+                    PresenceScope::Status,
+                    Some(PresenceEpoch::Remote {
+                        connection: connection.as_u128(),
+                        sequence,
+                    }),
+                )),
+                Some(PresenceDelivery::ProbeReply) => Some((PresenceScope::ProbeReply, None)),
+                Some(PresenceDelivery::Directed) => Some((PresenceScope::Directed, None)),
+                None => None,
+            };
+            match scoped {
+                Some((scope, source_epoch)) => CoalescingKey::ScopedPresence {
+                    from,
+                    scope,
+                    source_epoch,
+                },
+                None => CoalescingKey::Presence { from },
+            }
+        }
         DeliveryAction::Defer(key) => key,
     };
     let byte_size = item.stanza.len();
     match deferred.enqueue(item, byte_size, Some(key)) {
         EnqueueResult::Enqueued { .. } | EnqueueResult::Discarded { .. } => None,
         EnqueueResult::Overflow {
-            decision: OverflowDecision::EvictedOldest { .. },
-        } => None,
+            decision: OverflowDecision::EvictedOldest { evicted, .. },
+        } => {
+            let dropped = evicted.len() as u64;
+            let total = CSI_EVICTIONS.fetch_add(dropped, Ordering::Relaxed) + dropped;
+            tracing::warn!(
+                dropped,
+                total,
+                "CSI deferred queue evicted outbound stanzas"
+            );
+            None
+        }
         EnqueueResult::Overflow {
             decision: OverflowDecision::Disconnect { unhandled_item, .. },
         } => Some(unhandled_item),
@@ -195,3 +238,6 @@ mod tests {
         assert!(queue.is_empty());
     }
 }
+
+#[cfg(test)]
+mod presence_tests;

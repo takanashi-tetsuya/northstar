@@ -1,8 +1,8 @@
-use super::inject_vcard_avatar_hash;
 use crate::AvatarPresenceGate;
 use anyhow::Result;
 use northstar_roster_application::presence::{PresenceRepository, PresenceService};
 use northstar_stream::local_routes::session::OnlineSession;
+use northstar_xml_builder::rewrite::project_presence_avatar;
 use std::future::Future;
 use uuid::Uuid;
 
@@ -38,10 +38,9 @@ pub(super) async fn refresh_avatar_presence_with_hash(
                 .last_presence
                 .write()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let refreshed = last_presence.as_deref().and_then(|raw| {
-                let document = roxmltree::Document::parse(raw).ok()?;
-                Some(inject_vcard_avatar_hash(raw, document.root_element(), hash))
-            });
+            let refreshed = last_presence
+                .as_deref()
+                .and_then(|raw| project_presence_avatar(raw, hash.map(Some)));
             if let Some(refreshed) = refreshed {
                 *last_presence = Some(refreshed);
             }

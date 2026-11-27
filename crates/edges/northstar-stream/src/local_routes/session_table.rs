@@ -607,7 +607,12 @@ impl LocalSessionTable {
         {
             return false;
         }
-        recipient.try_send(presence.to_owned()).is_ok()
+        recipient
+            .try_send_presence(
+                presence.to_owned(),
+                crate::outbound::PresenceDelivery::ProbeReply,
+            )
+            .is_ok()
     }
 
     pub fn local_caps_epoch_is_current(

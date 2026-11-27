@@ -6,6 +6,7 @@ use northstar_roster_core::PresenceAccount;
 use northstar_stream::local_routes::pending_subscription::{
     deliver_pending_subscription, PendingSubscriptionKey,
 };
+use northstar_stream::outbound::PresenceDelivery;
 use northstar_xml_builder::rewrite::set_to;
 use std::sync::atomic::Ordering;
 
@@ -105,17 +106,25 @@ pub async fn deliver_contact_presence<H: PresenceDeliveryHost>(
     contact: &str,
     from: &str,
     stanza: &str,
+    source_epoch: Option<u64>,
 ) -> Result<()> {
     for (_, target) in host
         .session_entries_for(contact)
         .into_iter()
         .filter(|(_, target)| target.available.load(Ordering::Relaxed))
     {
-        if host
+        if !host
             .privacy_allows_session(&target, from, PrivacyStanzaKind::PresenceIn)
             .await?
         {
-            let _ = target.sender.try_send(stanza.to_owned());
+            continue;
+        }
+        if let Err(error) = target
+            .sender
+            .try_send_presence(stanza.to_owned(), PresenceDelivery::Status { source_epoch })
+        {
+            host.post_accept_failure_telemetry().record_failure();
+            tracing::warn!(%from, %contact, %error, "could not enqueue local broadcast presence");
         }
     }
     host.broadcast_available_presence_remote(contact, stanza)
@@ -129,10 +138,20 @@ pub async fn echo_account_presence<H: PresenceDeliveryHost>(
     account: &str,
     from: &str,
     stanza: &str,
+    source_epoch: Option<u64>,
 ) {
     for (jid, target) in host.session_entries_for(account) {
-        if target.available.load(Ordering::Relaxed) || jid == from {
-            let _ = target.sender.try_send(set_to(stanza, &jid));
+        if (target.available.load(Ordering::Relaxed) || jid == from)
+            && target
+                .sender
+                .try_send_presence(
+                    set_to(stanza, &jid),
+                    PresenceDelivery::Status { source_epoch },
+                )
+                .is_err()
+        {
+            host.post_accept_failure_telemetry().record_failure();
+            tracing::warn!(%from, %jid, "could not enqueue broadcast presence echo");
         }
     }
     let account_delivery = set_to(stanza, account);

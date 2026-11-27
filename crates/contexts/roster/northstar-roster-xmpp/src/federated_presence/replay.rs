@@ -1,5 +1,5 @@
 use super::SubscriptionRevocationRoute;
-use crate::FederatedPresenceHost;
+use crate::{avatar_presence::render_current_presence_avatar, FederatedPresenceHost};
 use northstar_federation_core::FederationRoute;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_roster_core::PresenceAccount;
@@ -82,11 +82,17 @@ pub(super) async fn send_current_presence_to_remote<H: FederatedPresenceHost>(
                 continue;
             }
         }
-        let stanza = session
-            .last_presence
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+        let Some(cached) = session.current_presence() else {
+            continue;
+        };
+        let rendered = match cached {
+            Some(cached) => {
+                render_current_presence_avatar(state.presence_service(), session.user_id, &cached)
+                    .await
+            }
+            None => None,
+        };
+        let stanza = rendered
             .map(|presence| set_to(&presence, contact))
             .unwrap_or_else(|| {
                 XmlElement::new("presence")

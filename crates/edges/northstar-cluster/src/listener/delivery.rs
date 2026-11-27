@@ -149,6 +149,7 @@ pub(super) struct DirectDeliveryOptions<'a> {
     pub(super) mix_request_id: Option<uuid::Uuid>,
     pub(super) exact_control: Option<ExactControl>,
     exact_iq_request: Option<(bool, bool)>,
+    pub(super) presence_delivery: Option<northstar_stream::outbound::PresenceDelivery>,
 }
 
 pub(super) fn validate_direct_delivery<'a>(
@@ -376,6 +377,10 @@ pub(super) fn validate_direct_delivery<'a>(
     {
         return ListenerStep::Continue;
     }
+    let presence_delivery = presence::delivery_scope(
+        exact_control.as_ref(),
+        json["current_presence_replay"].as_bool() == Some(true),
+    );
     ListenerStep::Next(DirectDeliveryOptions {
         blocklist_requested_only,
         roster_requested_only,
@@ -395,6 +400,7 @@ pub(super) fn validate_direct_delivery<'a>(
         mix_request_id,
         exact_control,
         exact_iq_request,
+        presence_delivery,
     })
 }
 
@@ -708,12 +714,21 @@ impl DirectDeliveryOptions<'_> {
         target: &str,
         session: &northstar_stream::local_routes::session::OnlineSession,
     ) -> bool {
+        let (available, priority) = session.presence_route_state();
+        self.priority_matches_state(target, available, priority)
+    }
+
+    pub(super) fn priority_matches_state(
+        &self,
+        target: &str,
+        available: bool,
+        priority: i16,
+    ) -> bool {
         target.contains('/')
             || if self.available_nonnegative_only {
-                session.available_priority().is_some()
+                available && priority >= 0
             } else {
-                !(self.primary_one_to_one || self.available_only)
-                    || session.available.load(Ordering::Relaxed)
+                !(self.primary_one_to_one || self.available_only) || available
             }
     }
 }

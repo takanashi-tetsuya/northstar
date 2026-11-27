@@ -176,6 +176,17 @@ pub fn test_online_session(
 }
 
 impl OnlineSession {
+    /// Samples availability and its cached stanza under the broadcast commit guard.
+    pub fn current_presence(&self) -> Option<Option<String>> {
+        let cached = self
+            .last_presence
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        self.available
+            .load(Ordering::Acquire)
+            .then(|| cached.clone())
+    }
+
     /// Whether this resource joined the room under exactly this nick.
     pub fn joined_muc_as(&self, room: &str, nick: &str) -> bool {
         self.muc_memberships
@@ -185,11 +196,20 @@ impl OnlineSession {
 
     /// This resource's non-negative priority while available.
     pub fn available_priority(&self) -> Option<i16> {
-        if !self.available.load(Ordering::Relaxed) {
-            return None;
-        }
-        let priority = self.priority.load(Ordering::Relaxed);
-        (priority >= 0).then_some(priority)
+        let (available, priority) = self.presence_route_state();
+        (available && priority >= 0).then_some(priority)
+    }
+
+    /// Samples the local routing projection of a committed broadcast presence.
+    pub fn presence_route_state(&self) -> (bool, i16) {
+        let _guard = self
+            .last_presence
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        (
+            self.available.load(Ordering::Acquire),
+            self.priority.load(Ordering::Relaxed),
+        )
     }
 
     /// Snapshot this resource's active privacy list selection.

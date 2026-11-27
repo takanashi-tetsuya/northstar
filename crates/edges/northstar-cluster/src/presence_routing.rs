@@ -93,14 +93,30 @@ impl ClusterManager {
 
     /// Initial, roster-contact, and sibling-resource presence are volatile
     /// broadcasts. Keep routing to later nodes after one rejects a stanza.
-    pub async fn broadcast_available_presence_remote(&self, target: &str, stanza: &str) {
-        if let Ok(nodes) = self.lookup_nodes(target).await {
-            for node_id in nodes {
-                if node_id != self.node_id {
-                    let _ = self
-                        .send_to_node_available_presence(&node_id, target, stanza)
-                        .await;
-                }
+    pub async fn broadcast_available_presence_remote(
+        &self,
+        target: &str,
+        stanza: &str,
+        record_failure: impl Fn() + Send,
+    ) {
+        let nodes = match self.lookup_nodes(target).await {
+            Ok(nodes) => nodes,
+            Err(error) => {
+                record_failure();
+                tracing::warn!(%target, %error, "could not look up cluster presence audience");
+                return;
+            }
+        };
+        for node_id in nodes {
+            if node_id == self.node_id {
+                continue;
+            }
+            if let Err(error) = self
+                .send_to_node_available_presence(&node_id, target, stanza)
+                .await
+            {
+                record_failure();
+                tracing::warn!(%node_id, %target, %error, "could not route cluster broadcast presence");
             }
         }
     }

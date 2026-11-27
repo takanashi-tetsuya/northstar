@@ -1,4 +1,5 @@
 use super::render::presence_probe_status_response;
+use crate::avatar_presence::render_current_presence_avatar;
 use crate::FederatedPresenceHost;
 use anyhow::Result;
 use northstar_federation_core::wire::s2s_stanza_error;
@@ -54,14 +55,17 @@ pub(super) async fn route_inbound_presence_probe<H: FederatedPresenceHost>(
     available.retain(|(_, session)| session.available.load(Ordering::Relaxed));
     let mut privacy_allowed = Vec::with_capacity(available.len());
     for entry in available {
-        if state
+        if !state
             .privacy_allows_session(&entry.1, requester, PrivacyStanzaKind::PresenceIn)
             .await?
-            && state
+            || !state
                 .privacy_allows_session(&entry.1, requester, PrivacyStanzaKind::PresenceOut)
                 .await?
         {
-            privacy_allowed.push(entry);
+            continue;
+        }
+        if let Some(cached) = entry.1.current_presence() {
+            privacy_allowed.push((entry.0, entry.1.user_id, cached));
         }
     }
     let available = privacy_allowed;
@@ -79,12 +83,7 @@ pub(super) async fn route_inbound_presence_probe<H: FederatedPresenceHost>(
         .domainpart()
         .to_owned();
     let full_target = target_jid.resourcepart().is_some();
-    for (full_jid, session) in available {
-        let last_presence = session
-            .last_presence
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
+    for (full_jid, owner_id, last_presence) in available {
         let response = if full_target {
             // RFC 6121 section 4.3.2: a full-JID probe must expose only the
             // fact that this exact resource is available, never show/status,
@@ -106,7 +105,14 @@ pub(super) async fn route_inbound_presence_probe<H: FederatedPresenceHost>(
                 .optional_attr("id", original_id.as_deref())
                 .finish()
         } else {
-            last_presence
+            let rendered = match last_presence {
+                Some(cached) => {
+                    render_current_presence_avatar(state.presence_service(), owner_id, &cached)
+                        .await
+                }
+                None => None,
+            };
+            rendered
                 .map(|presence| set_to(&presence, requester))
                 .unwrap_or_else(|| {
                     XmlElement::new("presence")

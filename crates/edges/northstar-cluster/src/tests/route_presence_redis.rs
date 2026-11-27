@@ -173,6 +173,18 @@ async fn redis_message_route_presence_rejects_wrong_owner_instance_and_nonadvanc
     assert_eq!(record, format!("{connection}|0|-1|{latest_seq}"));
     let ttl: u64 = conn.ttl(&key).await.unwrap();
     assert!((1..=SESSION_TTL_SECONDS).contains(&ttl));
+
+    let eligible_seq = latest_seq + 2;
+    owner
+        .publish_route_presence(FULL, connection, true, 0, eligible_seq)
+        .await
+        .unwrap();
+    owner
+        .publish_route_presence(FULL, connection, true, -1, eligible_seq - 1)
+        .await
+        .unwrap();
+    let record: String = conn.get(&key).await.unwrap();
+    assert_eq!(record, format!("{connection}|1|0|{eligible_seq}"));
     cleanup(&owner).await;
 }
 

@@ -1,6 +1,5 @@
-use crate::presence::{
-    full_jid_probe_available_response, inject_vcard_avatar_hash, presence_probe_status_response,
-};
+use crate::avatar_presence::render_current_presence_avatar;
+use crate::presence::{full_jid_probe_available_response, presence_probe_status_response};
 use crate::PresenceDeliveryHost;
 use anyhow::Result;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
@@ -52,21 +51,16 @@ pub async fn answer_full_presence_probe<H: PresenceDeliveryHost>(
     let mut available_but_private = false;
     let mut original_presence_id = None;
     for (_, owner) in &owners {
-        if !owner.available.load(Ordering::Acquire) {
+        let Some(cached) = owner.current_presence() else {
             continue;
-        }
+        };
         if host
             .privacy_allows_session(owner, requester, PrivacyStanzaKind::PresenceOut)
             .await?
         {
             available = true;
             if original_presence_id.is_none() {
-                original_presence_id = owner
-                    .last_presence
-                    .read()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .as_deref()
-                    .and_then(presence_id);
+                original_presence_id = cached.as_deref().and_then(presence_id);
             }
         } else {
             available_but_private = true;
@@ -213,12 +207,6 @@ async fn send_current_availability_inner<H: PresenceDeliveryHost>(
     else {
         return;
     };
-    let authoritative_avatar_hash = {
-        host.presence_service()
-            .avatar_hash(expected_owner_id)
-            .await
-            .ok()
-    };
     let Ok(recipient) = northstar_xmpp_types::jid::canonicalize(recipient) else {
         return;
     };
@@ -267,25 +255,18 @@ async fn send_current_availability_inner<H: PresenceDeliveryHost>(
         ) else {
             continue;
         };
-        let presence = current_owner
-            .last_presence
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-            .map(|presence| {
-                let presence = authoritative_avatar_hash
-                    .as_ref()
-                    .and_then(|hash| {
-                        let document = roxmltree::Document::parse(&presence).ok()?;
-                        Some(inject_vcard_avatar_hash(
-                            &presence,
-                            document.root_element(),
-                            hash.as_deref(),
-                        ))
-                    })
-                    .unwrap_or(presence);
-                set_to(&presence, &recipient)
-            })
+        let Some(cached) = current_owner.current_presence() else {
+            continue;
+        };
+        let rendered = match cached {
+            Some(cached) => {
+                render_current_presence_avatar(host.presence_service(), expected_owner_id, &cached)
+                    .await
+            }
+            None => None,
+        };
+        let presence = rendered
+            .map(|presence| set_to(&presence, &recipient))
             .unwrap_or_else(|| {
                 XmlElement::namespaced("presence", "jabber:client")
                     .attr("from", &owner_key)

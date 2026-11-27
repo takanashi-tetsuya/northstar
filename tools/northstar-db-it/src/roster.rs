@@ -3,6 +3,7 @@
 mod blocking_presence;
 mod blocklist_revisions;
 mod communication_policy;
+mod presence_projection;
 mod presence_service;
 mod privacy;
 mod privacy_commands;

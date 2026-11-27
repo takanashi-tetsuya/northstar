@@ -78,7 +78,14 @@ async fn avatar_refresh_rewrites_parsable_presence_and_keeps_unparsable() {
         .unwrap();
 
         let refreshed = parsable.last_presence.read().unwrap();
-        let document = roxmltree::Document::parse(refreshed.as_deref().unwrap()).unwrap();
+        let cached = refreshed.as_deref().unwrap();
+        let advertised = if hash.is_none() {
+            assert!(!cached.contains("vcard-temp:x:update"));
+            northstar_xml_builder::rewrite::project_presence_avatar(cached, Some(None)).unwrap()
+        } else {
+            cached.to_owned()
+        };
+        let document = roxmltree::Document::parse(&advertised).unwrap();
         assert_eq!(
             document.root_element().attribute("from"),
             Some("alice@example.test/parsable")

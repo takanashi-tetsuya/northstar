@@ -90,6 +90,37 @@ boundaries are normative only in [docs/KNOWN_ISSUES.md](docs/KNOWN_ISSUES.md).
 - Take Push response counts from one snapshot and never send a stale Push
   claim.
 - Drop rate-limited client error messages silently.
+- Deliver roster pushes to each resource in version order, never older than
+  its last roster request, repairing a gap from the roster journal or
+  resynchronizing the resource. A resource that requests a version older
+  than the pushes it already received gets the complete roster.
+- Push blocklist changes in revision order and recover lost pushes within 30
+  seconds (migration 0165).
+- Answer an automatically approved federated subscription with subscribed
+  instead of an error, and acknowledge a revocation with unsubscribed.
+- Deliver federated presence, probe replies and subscription notices to
+  resources on every cluster node, and drop S2S presence whose sender domain
+  differs from the authenticated peer.
+- Send no reply to presence probes from blocked contacts.
+- Apply roster grants, blocks and privacy lists to full-JID IQs and cached
+  capability answers; denied requests get service-unavailable.
+- Send unavailable on block only to contacts that could see the user, and
+  restore presence on unblock only when both sides' policy allows it. A
+  domain/resource block now matches only that exact JID.
+- Stop renewing an expired active privacy list on policy reads, and consider
+  resources on every cluster node when changing or removing the default
+  privacy list.
+- Use the default privacy list for PEP notifications only when the resource
+  has no active list.
+- Omit denied occupants' presence and history when joining an MUC room, and
+  apply the receiving resource's privacy list to MIX channel copies.
+- Send unavailable presence at the end of a session to the audience captured
+  before it ended, retrying a refused target once.
+- Reject privacy and blocklist commands from a connection whose password was
+  changed or whose account was reset or disabled.
+- Settle both subscription directions when removing a disabled local contact.
+- Fix a deadlock between a MIX presence-sharing change and a roster update on
+  the same item.
 
 ## [0.2.0] - Release notes (publication date: GitHub Releases)
 

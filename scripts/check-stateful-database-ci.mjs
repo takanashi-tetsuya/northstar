@@ -39,6 +39,7 @@ const expectedManifestEntries = [
   ['muc', 'MUC database', 600, 'muc-db-wsl.sh'],
   ['pie', 'PIE database', 480, 'pie-db-wsl.sh'],
   ['privacy', 'Privacy database', 600, 'privacy-db-wsl.sh'],
+  ['roster-presence', 'Roster presence database', 600, 'roster-presence-db-wsl.sh'],
   ['http-upload', 'HTTP Upload database', 600, 'upload-db-wsl.sh'],
   ['muc-cluster', 'MUC cluster database', 600, 'muc-cluster-wsl.sh'],
   ['pubsub', 'PubSub database', 600, 'pubsub-db-wsl.sh'],

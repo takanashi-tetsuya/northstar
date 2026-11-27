@@ -220,6 +220,21 @@ priority, sequence); resources without a record rank as presence unknown.
 Queue acceptance is the handoff boundary: Live messages, Push and Carbons are
 not recalled after a transport accepts them.
 
+S51 moves the other per-recipient controls onto exact control contract
+version 15 (`EXACT_CONTROL_DELIVERY_VERSION`): roster pushes, blocklist and
+privacy pushes, directed, available, unavailable and teardown presence,
+current-presence replay, probe responses, federated inbound presence and
+blocking presence. Each control names its kind and the account UUID,
+authentication generation and expected connection of every captured route,
+plus the roster version, blocklist revision, verified remote peer or presence
+source where the kind needs one. The receiving listener re-checks the route
+before it enqueues and rejects the older flag-only forms; there is no bare-JID
+fallback. A resource that binds after capture recovers through a roster or
+blocklist request, the journal, the 30-second blocklist reconciliation or the
+next presence refresh. Version 13 and 14 nodes reject version 15 controls, so
+cross-node roster, policy and presence updates hold only when every node runs
+version 15. The heartbeat stays on version 13 and message payloads on 14.
+
 This closes the known late-commit hole in the recovery cutoff under a healthy
 database, but it does not make delivery instantaneous or exactly once. A
 cancelled `COMMIT` may leave the caller uncertain whether its message and wake

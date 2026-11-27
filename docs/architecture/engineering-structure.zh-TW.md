@@ -152,6 +152,7 @@ WP-495 後，operation runtime 的現行位置為
 | S48 C3 語義退出 | WP-695–704、715 | 唯讀審計 room 上下文（C3 MUC、C4 MIX 各 19 項）後修正 C3：共用的確切 occupant 路由契約（WP-695）；groupchat 與撤回投遞給 admission 時提交的受眾，本地路徑先取使用者鎖（WP-698）；房間退役回傳確切的效果（WP-699）；延遲事件以提交時的事實渲染、ordinal 保留取完整 claim、容量分片依升序鎖定（WP-700）；房間讀取在一個唯讀快照回答且不寫入（WP-701）；加入與 SM resume 以提交的權威渲染（WP-696）；私訊、voice 請求與邀請以確切路由投遞（WP-697）；注入的時鐘與 ID，鎖定房間的期限由 PostgreSQL 判斷（WP-702）；型別化的轉換與行動者權威（WP-703）；runtime 執行緒的 stack 提高到 8 MiB，修正推送後 CI 在 debug build 抓到的溢位（WP-715）；記錄階段（WP-704）。盤點見 5.44 | C3 的 19 項發現全部關閉；新增 47 個單元測試與 43 個 ignored 資料庫測試，資料庫測試登記在 CI 執行的 DB 腳本，合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱不變；全部門禁、Python 腳本測試與離線 CI 通過 |
 | S49 C4 語義退出 | WP-705–714、716、717 | 修正 S48 審計的 C4（MIX）：先只移動地把 MIX 協定與儲存的大檔拆成葉模組（WP-705），加入型別化的 MIX 位址與權威（WP-706）；presence 復原以資料庫時鐘的 cutoff 分頁清完（WP-709）；反射流量以一個 PAM 快照 admission，只有新的儲存扇出給入准帳號（WP-708）；PAM 投影與名冊 delta 跟 Core 成員同交易提交，遠端 PAM 加入轉送邀請與 ANON 偏好（WP-707）；管理表單以稀疏 patch 在頻道鎖下合併，項目時間戳由注入的時鐘取一次（WP-710）；託管探索在一個快照回答、隱藏頻道與不存在的頻道相同，MUC 鏡像在建立之後以頻道 UUID fence 連結（WP-711）；relay 回程只到 admission 時的確切路由，回覆與逾時恰好一個消費者（WP-712）；一般發布只渲染一次，持久投遞綁定收件者帳號（WP-713，migration 0163）；聯邦邀請的授權、token 與結果原子提交（WP-714）；叢集測試改等維護掃除已崩潰節點的 MUC 成員（WP-716）；記錄階段（WP-717）。盤點見 5.45 | C4 的 19 項發現全部關閉，room 上下文完成；新增 38 個單元測試與 45 個 ignored 資料庫測試，資料庫測試登記在 CI 執行的 `mix-family-db-wsl.sh`，合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱除了 WP-713 改名的一個之外不變；全部門禁、Python 腳本測試、離線 CI 與本機 PostgreSQL protocol integration 通過 |
 | S50 C5 語義退出 | WP-718、722–735 | 唯讀審計 message 上下文（WP-718，C5 的 21 項）後修正：先只移動地拆分訊息處理的大檔（WP-722），單獨修正持久叢集信封送到同名重建帳號的問題（WP-723），落地行動者 fence 與事件來源（WP-724）；叢集訊息契約第 14 版攜帶初始預留與確切受眾（WP-725）；直接訊息以一個政策快照授權提交，隱私查詢唯讀（WP-726）；重播重驗權威，Bind2 以確切的 MAM 投影證明才抑制（WP-727）；撤回綁定寄件者帳號並取消未被持有的原文（WP-728，migration 0164）；Push 的 claim 快照與擁有者 fence（WP-729）；C2S、S2S 與元件共用一個處理政策（WP-730）；ExtDisco 的查詢與命令型別化（WP-731）；bare JID 主要訊息依全叢集優先權排序（WP-732）；Carbons 投遞到擷取並重驗的受眾（WP-733）；記錄階段（WP-734）；推送後修正叢集測試的 ACK probe（WP-735）。盤點見 5.46 | C5 的 21 項發現全部關閉；新增 47 個單元測試與 35 個 ignored 測試（32 個資料庫測試登記在 CI 執行的 `message-authority-db-wsl.sh`，3 個 Redis 測試在 `muc-cluster-wsl.sh`），合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱全部保留；全部門禁、Python 腳本測試、離線 CI 與本機 PostgreSQL protocol integration 通過 |
+| S51 C6/C7 語義退出 | WP-736–760 | 平行唯讀審計 roster／presence（WP-736，C6 的 22 項）與隱私／封鎖（WP-737，C7 的 19 項）後修正：先只移動地拆分名冊、presence、隱私與封鎖處理的大檔（WP-738、739），落地共用的名冊行動者與確切路由型別（WP-740）、叢集確切控制契約第 15 版（WP-741）與唯讀的通訊政策讀取（WP-742）；訂閱轉移型別化，聯邦回覆在名冊交易內進 outbox（WP-743）；名冊推送依每資源游標排序並送到確切收件者（WP-744）；本地 available 在讀取完成後原子提交，CSI 依連線比較（WP-745）；服務通知的 claim 轉交 fence（WP-746）；MIX 偏好寫入先鎖帳號（WP-747）；名冊、政策推送與 caps 的協定 ID 與時間改為注入（WP-748）；封鎖清單修訂 journal（WP-749，migration 0165）；隱私命令 fence 行動者與租約拓撲（WP-750）；active 隱私選擇只有一個租約生命週期（WP-751）；本地廣播與 probe 由快照決定（WP-752）；full-JID IQ、caps 與 stanza 的資源可見性一次決定（WP-753）；聯邦 presence 經擷取的擁有節點投遞（WP-754）；待處理訂閱的重播依資源 gate（WP-755）；終止 presence 擷取受眾並逐目標重試（WP-756）；封鎖 presence 由提交的事實推導（WP-757）；MUC 與 MIX 共用房間投遞政策（WP-758）；PubSub 通知依確切路由政策 admission（WP-759）；記錄階段（WP-760）。盤點見 5.47 | C6 與 C7 的 41 項發現全部關閉；新增 115 個單元測試與 79 個 ignored 資料庫測試，資料庫測試登記在 CI 執行的 `roster-presence-db-wsl.sh`，合併前在本機 PostgreSQL 全部通過；workspace 測試原有名稱全部保留；全部門禁、Python 腳本測試、離線 CI 與本機 PostgreSQL protocol integration 通過 |
 
 獨立於結構工作的已知缺陷另以 `BUG-xx` 工作包處理。BUG-01（`operation_runtime::run_one`
 取消時 lease heartbeat 未停止）已修正；修正會讓檔案超過行數預算，因此先以 WP-31 把該檔測試
@@ -2313,6 +2314,130 @@ S50 後最大的生產檔是 `northstar-message-core` 的 `jingle.rs`（1,376 �
 `northstar-db-it`），原有名稱全部保留。新增 47 個單元測試與 35 個 ignored 測試：32 個資料庫測試登記在 CI 執行的
 `message-authority-db-wsl.sh`，3 個 Redis 測試在 `muc-cluster-wsl.sh`。Cargo.lock 仍是 485 個套件；新增 migration 0164，共 163 項。
 
+### 5.47 S51 盤點：C6/C7 語義退出（`ac4c8c2e317ed743cf29d40f826d34c020a03c05`）
+
+S51 依[後續路線圖](next-steps-roadmap.zh-TW.md)處理 D 的第三個上下文 roster／presence／privacy。先平行唯讀審計兩份
+（WP-736 名冊與 presence，C6 的 22 項；WP-737 隱私與封鎖，C7 的 19 項；報告不入庫）。WP-738、739 先只移動地拆分之後
+會被修改的大檔，WP-740–742 落地共用的型別、叢集確切控制契約第 15 版與唯讀的通訊政策讀取，之後 WP-743–759 各負責
+一組發現平行開發，在一條鏈上接起來。使用者決定了需要產品判斷的八組（C6-01／C7-04、C6-12／C6-04、C6-14／C6-07、
+C6-15、C7-03、C7-08、C7-12、C7-16），其他採審計的預設。C6 與 C7 的 41 項發現至此全部關閉。程式修改由 Codex CLI
+（`gpt-6.2-sol`）執行（第 6 節第 10 點）。
+
+| WP | 內容 |
+| --- | --- |
+| WP-736 | 唯讀審計 roster／presence 上下文（報告不入庫）：C6 的 22 項發現、封包與需要使用者決定的選項 |
+| WP-737 | 唯讀審計隱私與封鎖（XEP-0016、XEP-0191，報告不入庫）：C7 的 19 項發現、封包與需要使用者決定的選項 |
+| WP-738 | 只移動：roster-xmpp 的 `presence.rs` 拆成頭像、directed、訂閱路由、probe 路由、廣播（受眾、初始）與通知葉模組，`protocol_session.rs` 拆出名冊同步與 presence staging，`presence_delivery.rs` 拆成 directed、訂閱與 current，`federated_presence.rs` 拆成轉移、一般、重播、probe 與渲染，`roster.rs` 拆出渲染；roster-postgres 的 presence 拆成本地、入站與出站，persistence 拆出移除與 journal；cluster 的 node delivery、listener 的 presence 與 delivery、presence routing 的 probe，以及 stream dispatch 的 full-JID IQ 各拆出葉模組。從長函式移出的分支回傳 `ControlFlow`，保留原本的提前返回；公開入口與 re-export 不變，架構邊界檢查跟著讀新的子模組 |
+| WP-739 | 只移動：roster-postgres 的隱私模組拆成查詢、清單命令、active 租約與決定，封鎖拆成變更與候選；roster-xmpp 的封鎖、隱私與 fanout 拆成查詢、變更、推送、presence、active 選擇、清單命令與 codec；cluster 的政策推送與封鎖 presence 送出端各成子模組。行為、SQL、鎖順序、wire 輸出與測試不變，只有產生的 tracing target 跟著模組路徑 |
+| WP-740 | 契約：roster-core 新增 `RosterActor`（帳號 UUID、驗證 generation、連線、full JID）、`ExactPresenceRoute`（擷取的傳輸路由，不授權給之後持有同一 JID 的人）、`RosterVersion`、`SubscriptionAction`／`SubscriptionOrigin` 與提供時間和協定 ID 的 `RosterEventSource`；roster-application 的 `SystemRosterEvents`（UTC 時鐘、UUIDv4）；會話驗證並綁定後由 `SessionIdentity::roster_actor()` 提供行動者；xep-0016 的 `PrivacyListName` 與 `PrivacyMatcher`。呼叫端行為不變 |
+| WP-741 | 契約：叢集確切控制契約第 15 版（`EXACT_CONTROL_DELIVERY_VERSION`）。`ExactControl` 攜帶種類、帳號、驗證 generation、預期連線對應、名冊版本、封鎖清單修訂、遠端對端網域、presence 的來源行動者與序號；presence 種類的來源必須等於 stanza 的 from，只有聯邦入站 presence 可以帶遠端對端。送出端拒絕與 stanza 不符的控制，listener 在直接投遞前驗證控制與名冊推送內容。心跳維持第 13 版 |
+| WP-742 | 契約：roster-application 的 `CommunicationPolicyQuery` 與 `CommunicationDecision`（優先序 StaleAccount > OwnerBlocks > PeerBlocks > PrivacyDenies > Allow），以一次唯讀判斷取代分開讀帳號、封鎖與隱私，呼叫端保留各自的 wire 錯誤對應。roster-postgres 以一個陳述式把帳號 fence 與兩個方向的封鎖加進 `PRIVACY_DECISION_FACTS`，不取鎖、不續約選擇，預期的 active 清單不見或過期時拒絕。5 個 DB 測試 |
+| WP-743 | C6-11、13、15、20：roster-core 以三個型別化的轉移表取代方向 helper，儲存的舊值不變，舊 helper 與生產碼的分歧以測試記錄。admission 檢查擷取的帳號與驗證 generation，聯邦入站攜帶已驗證的對端網域；本地自動核准與聯邦投遞用同一個政策判斷。聯邦的自動核准改回 subscribed（原為錯誤），撤銷確認回 unsubscribed；回覆與元件 stanza 在名冊交易內進 outbox，admission 失敗時狀態、journal、pending 與意圖一起回滾。移除已停用的本地聯絡人時兩個方向都結算，不經路由；只有 pending 的遠端移除仍回 item-not-found（C6-15，使用者決定）。6 個 DB 測試 |
+| WP-744 | C6-01、02：每個要求名冊的資源有一個游標，在 GET 快照或下一個推送進入出站佇列時前進；已涵蓋的版本丟棄，進行中的重複合併；落在游標之後的 GET 回完整快照。出現缺口時以唯讀方式修補游標之後至多 512 個版本，需要每個版本都在且 MIX 註記與 GET 投影一致，否則經既有的重新同步路徑斷線並計數（C6-01，使用者決定）。提交的變更攜帶擁有者 UUID 與驗證 generation（儲存的位元組不變），本地與叢集轉交重驗身分、名冊興趣與擷取的連線。叢集每個目標節點一個 v15 `RosterPush`，拒絕舊版推送，沒有 bare JID fallback；擷取之後才綁定的資源由 GET 或 journal 復原。3 個 DB 測試 |
+| WP-745 | C6-16、17、18：名冊與頭像讀取在提交 available、快取的 presence、caps 與優先權之前完成，讀取失敗時保留原狀態，提交後的扇出失敗計數。每次提交的廣播帶程序內單調的 epoch，同一 full JID 重新綁定不會重設順序；CSI 只在同一個確切來源連線內比較序號，probe 回覆、狀態與 directed presence 用各自的槽。bare 重播與 SM 快取還原渲染擁有者的權威頭像 hash，讀取失敗時省略，明確的空照片保留；SM 未確認的位元組不變。2 個 DB 測試 |
+| WP-746 | C6-19：服務通知的 claim 30 秒後到期，等待中的送出可能在另一個資源重新 claim 之後才繼續。`ServiceMessageRepository`（claim、admit、complete）的每個 claim 帶 WP-740 的 `RosterActor`；operations-postgres 的 claim 檢查路由的帳號與驗證 generation，一個 admission 陳述式以資料庫時鐘（`statement_timestamp`，重新 claim 也用它）檢查 claim token、到期、帳號啟用與 generation。通知預留擷取連線的佇列位置、執行 admission、重驗確切的本地路由後同步入列；檢查失敗不送出，claim 可重試。完成仍綁定 token，佇列接受之後當機仍是至少一次。4 個 DB 測試 |
+| WP-747 | C6-22：MIX 的 share-presence 變更持有 PAM 名冊項目並等名冊版本，同時 C2S 名冊 SET 持有該使用者的列並等同一項目；偏好回覆在提交後重查帳號，可能讓已提交的寫入回失敗。偏好寫入在 MIX admission fence 下先以 `northstar_lock_user_rows_update` 依 UUID 順序鎖託管的 PAM 帳號，再鎖頻道與名冊列，與其他 MIX 成員路徑及 C2S 名冊 SET 同順序；成員集合在頻道鎖下重讀，必須與鎖定的帳號一致。推送由提交的 delta 渲染（不含停用的帳號，它們的持久名冊鏡像仍會改變），不再查帳號。3 個 DB 測試 |
+| WP-748 | C6-21、C7-14：名冊、隱私與封鎖清單推送、服務通知、caps 關聯與叢集控制的 UUID 與時鐘改由注入的來源產生：名冊推送與移除 presence 的 ID 來自 `SessionIdentity::roster_events`，stream 新增 `CapsEventSource`（單調時間、協定 ID），叢集簽章信封的時間戳與控制請求 ID 來自事件來源。生產仍是 UUIDv4 與既有的 ID 形式，TTL、信封格式、簽章與傳輸 nonce 不變；聯邦 outbox token 與 SM 租約 token 維持原樣（它們的 port 沒有 ID 來源，資料庫時間仍是租約權威） |
+| WP-749 | C7-04：migration 0165 新增每帳號的封鎖清單修訂計數與 journal，封鎖與解除封鎖在同一交易寫入實際改變的樣式並推進修訂；既有清單從修訂 0 開始，保留最近 10,000 個修訂，刪除帳號時一併刪除（C7-04，使用者決定）。GET 在一個快照之前把確切資源標為有興趣；live 資源的游標在下一個修訂進入出站佇列後才前進，通知只喚醒觀察者，30 秒的 reconciliation 與缺口重新同步修復遺失。遠端封鎖與隱私推送使用擷取的 v15 路由，沒有 bare JID fallback，拒絕舊版政策控制。5 個 DB 測試 |
+| WP-750 | C7-05、06、08、13：`PolicyCommandRepository` 接受已驗證的 `RosterActor` 並回 `ActorOutcome`，帳號不見、停用或 generation 改變時回 not-authorized，item-not-found 與 resource-constraint 的意義不變。具名 GET 以一個陳述式讀擁有者、清單與排序的項目；總覽以一個陳述式讀名稱、預設與請求者未過期的選擇。預設清單的選擇、拒絕與移除先鎖一次擁有者列（`northstar_lock_user_rows_update`，與會話預留的 key-share 鎖衝突），再讀其他所有 live 租約與它們的有效清單；保留中與 SM 暫停的租約也算，因為儲存層無法證明資源已發布（C7-08，使用者決定的保守拒絕）。不取會話 advisory 或租約鎖。7 個 DB 測試 |
+| WP-751 | C7-03、07、15：active 清單的選擇與拒絕以確切的 `RosterActor` 提交（驗證 generation 鎖、會話 advisory、live 綁定檢查），同交易更新 SM 儲存的選擇器，SM 衝突對應到清單使用中。容量維護在一個交易內續約 live 租約與這些連線既有且未過期的選擇；舊的刷新入口改為 no-op，政策讀取不再延長租約（C7-03，使用者決定）；斷線中或不可路由的會話不續約。容量租約的 reaper 之後以有界批次刪除過期的選擇，過期的列即使連線仍在也不授權。移除隱私清單在列鎖下清除過期列，SM resume 的外鍵對應到衝突；唯讀的 SM 政策查詢在一個 repeatable-read 快照內執行，SM 狀態不見時 fail closed。5 個 DB 測試 |
+| WP-752 | C6-03、04、05、12，C7-09、10：`BroadcastQuery` 與 `ProbeQuery` 在一個唯讀的 repeatable-read 快照內解出名冊方向、pending ask、帳號啟用、雙向封鎖與連線隱私，每批至多 128 個，不取列鎖或 advisory 鎖。`ProbeDecision` 選擇 Silent、Unsubscribed、Unavailable 或 Available，並指向確切的擁有者與收件者；轉交檢查帳號、驗證 generation 與連線，directed 回覆重驗擷取的授權。第一次 available 與核准後的重播在等待之前擷取受眾，產生重播時檢查目前的權威。叢集的 `CurrentPresenceReplay`、`AvailablePresence`、`ProbeResponse` 與 `UnavailablePresence` 使用 v15 確切控制，listener 拒絕舊的重播、probe 與訂閱形式；遠端重播請求的失敗經遙測 port 計數。5 個 DB 測試 |
+| WP-753 | C6-06，C7-10、17：`ResourceCommunicationPolicyReader` 在一個唯讀快照讀擷取資源的名冊授權、帳號 generation、封鎖與 active 或預設隱私；同帳號與 directed 授權滿足可見性，擁有者封鎖自己不算。full-JID 的請求、未關聯的回應，以及伺服器或快取代 full JID 的回答都依資源政策；請求另需可見性，被拒或過時的請求回 service-unavailable，結果與錯誤丟棄。伺服器管理、送往網域的請求、已關聯的 caps 與 Push 回覆、名冊與政策推送、驗證過的 return-control 維持豁免（C7-17 的審計預設）。S2S 入站 IQ 與叢集確切 IQ 用同一判斷，遠端資源由擁有節點在確切連線 fence 下決定，快取的 caps 回答與入列在轉交時重驗擷取的路由；一般訊息、叢集投遞與 Carbons 每個收件路由一個政策快照。4 個 DB 測試 |
+| WP-754 | C6-12、C7-09：ingress 擷取收件者的確切路由，交給每個擁有節點一個 v15 控制：一般與已提交的訂閱 presence 用 `FederatedInboundPresence`，重播與 probe 用帶已驗證 `remote_peer` 的 `CurrentPresenceReplay` 與 `ProbeResponse`。擁有節點在投遞前重驗帳號、驗證 generation、連線與收件者目前的政策；bare 目標送到 available 資源，full 目標只送擷取的資源。subscribe 送到 available 資源，live 投遞與重播以持久化的請求去重；subscribed、unsubscribe 與 unsubscribed 送到要求過名冊的資源。probe 由擁有節點回答自己的資源，ingress 至多送一個 unavailable，未授權的請求者收到 unsubscribed，被封鎖的請求者沒有回覆。訂閱的後續 presence 也在擁有節點執行：current presence 帶權威的頭像 hash（WP-745），撤銷後的 unavailable 進聯邦 outbox，取代 WP-743 只在 ingress 的 volatile 送出。S2S 入站 presence 的寄件網域與已驗證對端不同時丟棄；聯邦 MUC 廣播 presence 維持原路徑。3 個 DB 測試 |
+| WP-755 | C6-08、09、10，C7-03、16 的重播部分：待處理訂閱的重播依帳號、驗證 generation 與連線讀收件者的持久選擇器，略過停用的本地請求者，使用 kernel 的評估器與嚴格的封鎖比對，選擇不見或過期時 fail closed。預留佇列容量後在新的快照重驗請求身分、請求者、儲存的 stanza 與政策，再檢查確切路由後同步入列。stream 的一個 gate 以資源的 availability epoch、請求來源、請求者與持久化的建立時間（微秒）為鍵，本地 subscribe 投遞、確認的重試與重播共用；取消後的新請求得到新鍵。名冊重試在名冊列鎖下比對觀察到的時間戳、journal 版本與 pending 建立時間，回 Stale、Local 或 FederatedQueued，重送最小的 subscribe（C6-09 的審計預設）。5 個 DB 測試 |
+| WP-756 | C6-07、14，C7-03、07：本地 directed 授權記錄定址範圍與每個接受資源的 full JID、帳號、驗證 generation、連線與節點，聯邦與元件維持位址範圍。live 清理在路由靜止之後、清除 active 清單租約之前擷取受眾，SM 拆除在拆除 claim 下擷取；一次讀取名冊方向、兩個封鎖事實與隱私，發布使用這些判斷，終止查詢不取列鎖或 advisory 鎖。已知的拒絕在清理預算或 SM 租約內重試一次，缺少叢集 ACK 時退回 presence 刷新（C6-14／C6-07，使用者決定）。叢集的 `DirectedPresence`、`UnavailablePresence` 與 `TeardownUnavailable` 使用 v15 確切收件者 fence，listener 拒絕舊的模糊 full-JID 信封。4 個 DB 測試 |
+| WP-757 | C7-01、02、18，C7-16 的嚴格候選：封鎖與解除封鎖經行動者 fence 的交易提交（帳號啟用、驗證 generation；使用者、名冊、再 seed-0 的鎖順序），回傳排序的實際 delta、每個聯絡人前後的覆蓋、政策判斷與擷取的來源及收件路由；空 delta 不讀名冊，WP-749 的 journal 在提交前寫入。封鎖只在新覆蓋了原本可見的對象時送 unavailable（包含一般政策會壓下的既有 directed 授權）；解除封鎖只在覆蓋結束、反向封鎖與雙方隱私都允許時恢復 current presence，轉交重驗政策與路由，因此重新封鎖或被替換的連線不會收到。xep-0191 的 domain/resource 樣式只符合該 domain-only JID（C7-16，使用者決定）。fanout 以至多 1,024 個項目的有序切片規劃，一個轉交失敗不中斷後面的項目；叢集的 v15 `BlockingPresence` 以至多 64 個為一片，接收端拒絕只有旗標的控制，沒有 bare fallback。8 個 DB 測試 |
+| WP-758 | C7-11，C7-17 的 room 部分，C7-03 的 MUC 部分：room-application 的 `RoomDeliveryPolicyReader` 以一個唯讀陳述式把一批查詢（擷取的帳號與路由、可見的對象、可選的真實對象、stanza 種類）判為 Allow、PrivacyDenies、Blocked 或 StaleRoute，預期的 active 清單過期或不見時 fail closed。MUC 加入與重新加入省略被拒對象的 presence 與歷史，保留 self-presence、狀態碼、主題與錯誤；匿名房間的真實對象比對只在內部；拒絕邀請檢查房間與真實寄件者，離線儲存依收件者的預設清單。MIX 的 live 與持久頻道副本套用確切資源的隱私，遠端 relay 在一個 repeatable-read 快照讀 PAM 成員與政策；管理與 return-control IQ 豁免，直接邀請沿用 `CommunicationPolicyReader`。wire 與 ledger 不變。6 個 DB 測試 |
+| WP-759 | C7-12、19，C7-03 與 C7-16 的 PubSub／Profile 部分：`NotificationAdmission` 為 Service 或 PepPublisher 來源授權一個 `NotificationRecipient`（full JID、帳號、驗證 generation、連線、active 清單），回 Accepted、Suppressed 或 Retry；收件者的預設清單只在資源沒有 active 選擇時適用（C7-12，使用者決定）。PubSub outbox、PEP 重播與最後項目的 port 用一個聯合的封鎖與隱私 admission；presence 重播的 port 改讀 `CommunicationPolicyReader`，不再刷新租約，過期或不見的選擇 fail closed（取消 S46 的 PubSub 例外，C7-03）。Profile 的 `OwnerPrivacyPolicy` 載入評估對象相關的所有名冊事實並重用 kernel 評估器，訂閱資格仍由受眾決定。最後的轉交指向擷取的確切路由，本地與叢集的自我投遞同一規則。4 個 DB 測試；presence 重播的測試名稱不變，改為斷言不刷新租約 |
+| WP-760 | 記錄階段；新增 CI 執行的 `roster-presence-db-wsl.sh`，登記 S51 的 79 個資料庫測試；stateful 資料庫 lane 的接續與取消夾具涵蓋 7 個套件 |
+
+讀寫規則：
+
+- 行動者權威：名冊、隱私與封鎖命令、active 選擇、服務通知的 claim 與 MIX 偏好都以 `RosterActor`（帳號、驗證
+  generation、連線、full JID）在寫入交易內檢查；聯邦入站沒有本地行動者，攜帶已驗證的對端網域。
+- 鎖順序：使用者列（`northstar_lock_user_rows_update`）在名冊列之前，封鎖再接 seed-0；MIX 偏好依 UUID 順序先鎖 PAM
+  帳號，再鎖頻道與名冊；預設隱私清單的拓撲檢查只鎖擁有者列一次；active 選擇依序取驗證 generation 鎖、會話 advisory、
+  live 綁定。
+- 查詢不寫入：`CommunicationPolicyReader`、`ResourceCommunicationPolicyReader`、`RoomDeliveryPolicyReader`、廣播與 probe
+  查詢、終止受眾查詢都是唯讀快照，不取鎖、不續約。只有容量維護的心跳續約 active 選擇，容量租約的 reaper 刪除過期的
+  選擇；過期或不見的選擇 fail closed。
+- 確切路由：投遞以擷取的 `ExactPresenceRoute` 為準。跨節點的名冊推送、政策推送與 presence 使用 v15 `ExactControl`，
+  接收端重驗帳號、generation 與連線，拒絕舊的只有旗標的形式，沒有 bare JID fallback；擷取之後才綁定的資源由 GET、
+  journal、reconciliation 或 presence 刷新復原。
+- 順序：名冊推送以每資源游標與至多 512 個版本的修補排序，修補不了就重新同步；封鎖清單以修訂 journal 排序，30 秒的
+  reconciliation 修復遺失；presence 廣播帶程序內單調的 epoch，CSI 只比較同一連線的序號。
+- 轉交邊界：佇列接受即轉交；服務通知是至少一次，終止 presence 對已知的拒絕重試一次。
+- 時間與 ID：名冊、隱私與封鎖推送、服務通知、caps 與叢集控制的 ID 與時鐘由注入的來源產生；claim 的到期用資料庫時鐘。
+
+部署：
+
+- migration 0165 新增封鎖清單的修訂與 journal。舊版程序改 `blocked_jids` 時不推進修訂，已連線的資源要到下一次完整的
+  封鎖清單請求才看到；先排空所有舊的封鎖清單寫入者（停止舊的伺服器程序），migrate，再只啟動新版。runtime 對兩個新表
+  的權限記在 [資料庫角色](../DATABASE_ROLES.md)，沒有新的 routine。
+- 叢集確切控制契約第 15 版：名冊推送、封鎖與隱私推送、presence（directed、available、unavailable、拆除、重播、probe
+  回覆、聯邦入站）與封鎖 presence 都使用 v15。v13／v14 節點拒絕 v15 控制，新版 listener 拒絕舊的形式，沒有 bare JID
+  fallback；混版期間跨節點的這些更新會遺失，直到客戶端以 GET、journal、reconciliation 或 presence 刷新復原，所以所有
+  節點一起升級。WP-754 的控制要求接收端先部署。心跳仍是第 13 版，訊息 payload 仍是第 14 版。
+- active 選擇的續約只在容量維護的心跳，`deployment-capacity-lease-reaper` 選出的節點另外刪除過期的選擇；不需要新的
+  worker、設定或 Redis ACL。
+
+線上行為的改變：
+
+- 名冊推送依版本順序到達每個資源，不會比它最後一次 GET 舊；缺口以 journal 修補，修補不了就重新同步（C6-01，使用者
+  決定）。資源帶著比它已收到的推送還舊的版本 GET 時回完整名冊（RFC 6121 允許），新資源仍得到空結果與 journal 推送。封鎖清單推送依修訂順序，遺失會在 30 秒內修復（C7-04，使用者決定）。
+- 聯邦的自動核准回 subscribed（原為錯誤），撤銷確認回 unsubscribed；回覆與名冊狀態原子提交。移除已停用的本地聯絡人
+  時兩個方向都結算；只有 pending 的遠端移除仍回 item-not-found（C6-15，使用者決定）。
+- 只在另一個叢集節點上線的收件者也收到聯邦 presence、probe 回覆與訂閱通知（C6-12，使用者決定）；被封鎖的 probe
+  請求者沒有回覆；寄件網域與已驗證對端不符的 S2S presence 被丟棄。
+- full-JID IQ 與代 full JID 的 caps 回答遵守名冊授權、封鎖與隱私：被拒的請求回 service-unavailable，結果與錯誤丟棄。
+- 封鎖只在新覆蓋了原本可見的對象時送 unavailable，解除封鎖只在雙方政策都允許時恢復 current presence；domain/resource
+  的封鎖只符合該 domain-only JID（C7-16，使用者決定）。
+- 政策讀取不再續約過期的 active 隱私選擇，即使連線仍在也 fail closed（C7-03，使用者決定）；預設清單的選擇、拒絕與
+  移除考慮所有節點的 live 租約（C7-08，使用者決定）；改密、重設或停用之後，舊連線的隱私與封鎖命令回 not-authorized。
+- PEP 通知以接收資源的 active 清單決定，沒有 active 選擇時才用預設清單（C7-12，使用者決定）。
+- MUC 加入時省略被拒對象的 presence 與歷史，保留 self-presence、狀態碼與主題；MIX 頻道副本套用接收資源的隱私。
+- 終止與 directed unavailable 送到會話結束前擷取的受眾，已知的拒絕重試一次（C6-14／C6-07，使用者決定）；directed
+  授權不再由同一 JID 的替換連線繼承。
+- 服務通知只送到 claim 時的確切連線，停用或改密之後不送。
+- MIX 的 share-presence 變更與同一項目的名冊 SET 不再死結。
+
+其他 stanza、錯誤條件、儲存的編碼與 wire 格式都不變。
+
+與審計的差異：
+
+- C6-11：審計的預設是撤銷後的 unavailable 走 volatile。WP-743 先照此實作；WP-754 把訂閱的後續 presence 移到擁有節點，
+  擁有節點不一定持有到對端的已驗證路由，所以 unavailable 改進聯邦 outbox，WP-743 只在 ingress 的 volatile 送出刪除。
+- C6-16–18 與 C6-12：WP-745 的權威頭像 hash 原本在 ingress 渲染聯邦 current replay；WP-754 之後改在擁有節點的回覆中
+  渲染，每次回覆讀一次 hash，接鏈時合併。
+- C6-12：除了攜帶已驗證的對端，S2S 入站 presence 的寄件網域與已驗證對端不同時直接丟棄（審計未要求）。
+- C7-08：使用者選擇「只算已發布的資源」，但儲存層沒有發布的事實；實作依同一決定的「無法判斷時保守拒絕」，保留中與
+  SM 暫停的 live 租約也算。共用的 admission fence 是擁有者列鎖與會話預留的 key-share 鎖之間的衝突。
+- C7-17：依審計的預設保留伺服器管理與 return-control 的豁免；快取代 full JID 的回答與使用者 relay 改受資源政策約束。
+
+尚未處理：叢集確切 IQ 的信封不帶請求者的帳號與連線 fence，擁有節點只能以位址判斷 directed 授權；WP-755 的待處理訂閱
+gate 鍵不跨節點，跨節點的投遞與重播仍可能各送一次；撤回的相容 operation ID 仍取程序的隨機來源；WP-726 的確切選擇
+不跨節點；`clippy::too_many_arguments` 豁免改成參數結構；debug build 的大 frame 仍是結構債；D 的下一個上下文是 auth；
+E 可以開始；聯邦的對端互通仍是 `EXT-FEDERATION`。
+
+新決定：
+
+- 叢集確切控制契約第 15 版：名冊、政策與 presence 控制攜帶確切路由，拒絕舊形式，沒有 bare JID fallback（C6-12／C6-04，
+  WP-741 與各送出端）。
+- 名冊推送用每資源游標與既有 journal 修補；封鎖清單有持久的修訂 journal（C6-01／C7-04，WP-744、749，migration 0165）。
+- 終止 presence 擷取受眾，已知拒絕在目前的租約內重試一次，不新增資料表，當機靠刷新（C6-14／C6-07，WP-756）。
+- 封鎖範圍嚴格比對 domain/resource，SQL 端與 scalar 比對一致（C7-16，WP-757）。
+- 過期的 active 選擇不復活，政策讀取不續約，取消 S46 的 PubSub 例外（C7-03，WP-751、759）。
+- 預設清單的拓撲以所有 live 租約保守判斷（C7-08，WP-750）。
+- PEP 的預設清單是沒有 active 選擇時的後備，不是帳號層的否決（C7-12，WP-759）。
+- 只有 pending 的遠端移除維持 item-not-found，停用聯絡人的鏡像照樣結算（C6-15，WP-743）。
+
+S51 後最大的生產檔仍是 `northstar-message-core` 的 `jingle.rs`（1,376 行）。roster-xmpp 的 `presence.rs` 由 837 行降為
+212 行、`presence_delivery.rs` 由 536 行降為 23 行、`federated_presence.rs` 由 444 行降為 136 行、`fanout.rs` 由 801 行
+降為 425 行，roster-postgres 的 `privacy.rs` 由 803 行降為 181 行、`roster/presence.rs` 由 957 行降為 61 行；最大的
+測試檔仍是 `stage4_replay/tests.rs`（2,742 行）。workspace 測試由 3,937 個增為 4,131 個（ignored 由 518 個增為 597 個，
+其中 471 個在 `northstar-db-it`），原有名稱全部保留。新增 115 個單元測試與 79 個 ignored 資料庫測試，登記在 CI 執行的
+`roster-presence-db-wsl.sh`。Cargo.lock 仍是 485 個套件；新增 migration 0165，共 164 項。
+
 ## 6. 委派與驗收協議
 
 角色：**架構負責人**撰寫 WP 規格、執行全部驗證並審閱差異；**程式修改**由 Antigravity CLI（`agy`）執行，S8–S13 改由 Codex CLI 執行（第 8 點），S14 起回到 agy（第 9 點），S31 的 WP-483 起 agy 額度用盡，再改由 Codex CLI 執行（第 10 點）。
@@ -2657,6 +2782,17 @@ S50 後最大的生產檔是 `northstar-message-core` 的 `jingle.rs`（1,376 �
      payload，只會跟著夾具一起錯；`cluster-wsl.py` 的 ACK probe 到 CI 的多節點 job 才失敗（S50 的 WP-735）。
    - 審計建議的機制若只增加成本、不提供權威（WP-733 的遠端 Carbons probe 與入列前的檢查競爭，而後者才是權威），由架構
      負責人移除，並在盤點的「與審計的差異」記錄（S50）。
+   - 兩個平行 WP 為同一個函式加同一個參數時（WP-743 與 WP-754 都把已驗證的對端網域傳進聯邦 presence），三方合併只留一份並
+     統一名稱。後一個 WP 的設計取代前一個的部分時（WP-743 只在 ingress 的 volatile unavailable、WP-745 在 ingress 渲染
+     頭像），合併後把沒有呼叫者的 trait、impl 與函式一起刪掉，並在盤點的「與審計的差異」記錄（S51）。
+   - 鏈上的修正以 `fixup!` 提交，再以 `git rebase --autosquash` 併入對應的 WP；併入前後的樹要相同（S51）。
+   - 每個 WP 的單獨檢查只跑 `cargo check` 時，委派寫的測試中只有 clippy 會報的寫法（WP-752 的 `[x.clone()]`，Rust 1.97
+     的 `cloned_ref_to_slice_refs`）與只在 workspace、DB 或 integration 測試才跑的斷言到整條鏈的驗證才發現：WP-749 漏改 migration
+     ledger 的版本數，也沒把新表加進 workflows 自建 schema 的封鎖測試；WP-744 在有 `PartialEq` 的 `RosterChange` 加了讀取
+     投影沒有的欄位，其他 crate 比較 journal 讀取與提交結果的斷言失敗；WP-760 把新 runner 登記進 stateful 資料庫 lane，
+     lane 的接續與取消夾具仍寫死 6 個套件；WP-744 讓版本落在游標之後的 GET 回完整名冊，本機 integration 腳本仍假設同一
+     資源拿到 delta。修正併回改變共用行為的 WP。新增 migration 的 WP 要搜尋寫死最新版本號的測試
+     （`role_attestation/tests.rs`）與自建 schema 的測試，替共用型別加欄位的 WP 要搜尋整個 workspace 的相等斷言（S51）。
 10. Codex（S31 的 WP-483 起，2026-11-16）：agy 額度用盡期間，程式修改改由 Codex CLI（`gpt-6.1-sol`，2026-11-19 起
     `gpt-6.2-sol`）執行，呼叫方式與
     限制同第 8 點，`model_reasoning_effort` 依任務難度選擇；第 1、3、4、7 點與第 9 點的機械搬移做法照舊。agy 恢復後回到
@@ -3312,3 +3448,28 @@ Stage 證據仍綁定其原提交。
 | WP-733 | 完成：Carbons 投遞到擷取的確切連線，入列前重驗啟用、封鎖與隱私，遠端以 v14 carbons-only 信封傳送（C5-07） | 見 `git log --grep '\[WP-733\]'` |
 | WP-734 | 完成：記錄 S50 的階段與盤點（5.46）、目標架構第 4、5 節、執行計劃的 C5 列、已知問題的 `ARCH-MSG-EXACT-AUTHORITY`、架構與運維文件的第 14 版訊息契約、程式職責表、CHANGELOG 與路線圖的狀態；新增 CI 執行的 `message-authority-db-wsl.sh`。WP-725–733 接成一條鏈驗證：fmt、clippy、受影響 28 個 crate 的單獨建置與測試、workspace 測試與名稱比對、全部門禁與 Python 腳本測試、Stage 4 lanes、node 腳本測試、離線 CI、本機 PostgreSQL 上的資料庫測試（新的 runner 以一個共用 schema 執行）與 repository conformance，以及本機的 PostgreSQL protocol integration。接鏈抓到 WP-728 與 WP-730 對元件 no-store 撤回的交會，以及漏加排名欄位的 Carbon 路由與漏加政策欄位的資料庫測試，修正併入對應的 WP；WP-728 的提交訊息補上 C5-12 與 C5-19 | 見 `git log --grep '\[WP-734\]'` |
 | WP-735 | 完成：叢集測試的 ACK probe 改為檢查第 14 版的確切訊息契約與目標連線，離線的單元測試同步 | 見 `git log --grep '\[WP-735\]'` |
+| WP-736 | 完成：唯讀審計 roster／presence 上下文，C6 的 22 項發現、封包與需要使用者決定的選項（報告不入庫） | 無（報告不入庫） |
+| WP-737 | 完成：唯讀審計隱私與封鎖（XEP-0016、XEP-0191），C7 的 19 項發現、封包與需要使用者決定的選項（報告不入庫） | 無（報告不入庫） |
+| WP-738 | 完成：名冊與 presence 處理的大檔只移動地拆成葉模組 | 見 `git log --grep '\[WP-738\]'` |
+| WP-739 | 完成：隱私、封鎖與 fanout 處理的大檔只移動地拆成葉模組 | 見 `git log --grep '\[WP-739\]'` |
+| WP-740 | 完成：共用的名冊行動者、確切 presence 路由、名冊版本、訂閱動作與事件來源，以及隱私清單名稱與比對器的型別 | 見 `git log --grep '\[WP-740\]'` |
+| WP-741 | 完成：叢集確切控制契約第 15 版（種類、帳號、generation、預期連線、名冊版本、封鎖修訂、遠端對端、來源行動者） | 見 `git log --grep '\[WP-741\]'` |
+| WP-742 | 完成：唯讀的通訊政策讀取，一個陳述式判斷帳號 fence、雙向封鎖與隱私 | 見 `git log --grep '\[WP-742\]'` |
+| WP-743 | 完成：訂閱轉移型別化，聯邦回覆在名冊交易內進 outbox，移除停用的聯絡人時結算兩個方向（C6-11、13、15、20） | 見 `git log --grep '\[WP-743\]'` |
+| WP-744 | 完成：名冊推送依每資源游標排序並修補缺口，叢集以 v15 送到確切收件者（C6-01、02） | 見 `git log --grep '\[WP-744\]'` |
+| WP-745 | 完成：本地 available 在讀取完成後原子提交，重播帶權威頭像 hash，CSI 依連線比較（C6-16、17、18） | 見 `git log --grep '\[WP-745\]'` |
+| WP-746 | 完成：服務通知的 claim 綁定行動者，轉交前以資料庫時鐘 admission 並重驗確切路由（C6-19） | 見 `git log --grep '\[WP-746\]'` |
+| WP-747 | 完成：MIX 偏好寫入先依 UUID 順序鎖 PAM 帳號，推送由提交的 delta 渲染（C6-22） | 見 `git log --grep '\[WP-747\]'` |
+| WP-748 | 完成：名冊與政策推送、服務通知、caps 與叢集控制的 ID 與時鐘改由注入的來源產生（C6-21、C7-14） | 見 `git log --grep '\[WP-748\]'` |
+| WP-749 | 完成：封鎖清單修訂 journal，推送依修訂排序並以 reconciliation 修復（C7-04，migration 0165） | 見 `git log --grep '\[WP-749\]'` |
+| WP-750 | 完成：隱私命令 fence 行動者，GET 一個陳述式，預設清單的拓撲涵蓋所有節點的 live 租約（C7-05、06、08、13） | 見 `git log --grep '\[WP-750\]'` |
+| WP-751 | 完成：active 隱私選擇只由容量維護續約，選擇與拒絕 fence 行動者與 SM，過期的選擇由 reaper 刪除（C7-03、07、15） | 見 `git log --grep '\[WP-751\]'` |
+| WP-752 | 完成：本地廣播、probe 與重播由唯讀快照決定，叢集以 v15 確切控制送出（C6-03、04、05、12，C7-09、10） | 見 `git log --grep '\[WP-752\]'` |
+| WP-753 | 完成：full-JID IQ、caps 回答與 stanza 的資源可見性以一個快照決定，遠端資源由擁有節點決定（C6-06，C7-10、17） | 見 `git log --grep '\[WP-753\]'` |
+| WP-754 | 完成：聯邦 presence、probe 與訂閱後續經擷取的擁有節點投遞，S2S 寄件網域必須等於已驗證對端（C6-12，C7-09） | 見 `git log --grep '\[WP-754\]'` |
+| WP-755 | 完成：待處理訂閱的重播依資源政策 gate 並去重，重試在名冊列鎖下確認請求仍有效（C6-08、09、10） | 見 `git log --grep '\[WP-755\]'` |
+| WP-756 | 完成：終止與 directed unavailable 擷取受眾，已知的拒絕重試一次，叢集以 v15 確切收件者送出（C6-07、14，C7-03、07） | 見 `git log --grep '\[WP-756\]'` |
+| WP-757 | 完成：封鎖 presence 由提交的實際 delta 推導，domain/resource 嚴格比對，叢集以 v15 切片送出（C7-01、02、16、18） | 見 `git log --grep '\[WP-757\]'` |
+| WP-758 | 完成：MUC 與 MIX 共用一個唯讀的房間投遞政策（C7-03、11、17） | 見 `git log --grep '\[WP-758\]'` |
+| WP-759 | 完成：PubSub 與 PEP 通知依確切路由的封鎖與隱私 admission，預設清單只作後備，重播不刷新租約（C7-03、12、16、19） | 見 `git log --grep '\[WP-759\]'` |
+| WP-760 | 完成：記錄 S51 的階段與盤點（5.47）、目標架構第 4、5 節、執行計劃的 C6／C7 列、已知問題的 `ARCH-ROSTER-EXACT-AUTHORITY`、叢集、架構與運維文件的第 15 版確切控制契約、程式職責表的容量租約 reaper、CHANGELOG 與路線圖的狀態；新增 CI 執行的 `roster-presence-db-wsl.sh`，stateful 資料庫 lane 的接續與取消夾具涵蓋 7 個套件。WP-743–759 接成一條鏈驗證：fmt、clippy、受影響 34 個 crate 的單獨建置與測試、workspace 測試與名稱比對、全部門禁與 Python 腳本測試、Stage 4 lanes、node 腳本測試、離線 CI、本機 PostgreSQL 上的資料庫測試（新的 runner 以一個共用 schema 執行）與 repository conformance，以及本機的 PostgreSQL protocol integration。接鏈抓到重複的 `communication_policy` 模組與衝突的 `CommunicationPolicyReader` impl、WP-743 與 WP-754 對聯邦訂閱後續的重疊（保留 WP-743 的交易內回覆，路由與後續改由 WP-754 的擁有節點負責）、WP-745 與 WP-754 的頭像渲染位置、WP-749 漏改的 migration ledger 測試與自建 schema 的封鎖測試、WP-744 的 `owner_authority` 讓 journal 讀取的相等斷言失敗、落在游標之後的 GET 改回完整名冊而 integration 腳本仍期待 delta、MUC 加入事件至少一次送達而 WP-758 每次投遞讀取政策讓重送晚於下一個 IQ 結果，以及 WP-752 測試的 clippy 錯誤，修正併入對應的 WP | 見 `git log --grep '\[WP-760\]'` |

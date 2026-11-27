@@ -29,7 +29,7 @@
 9. **每個語義修正都有證據。** 單元測試證明純決策；資料庫測試以暫停點在讀取或寫入中途提交競爭的變更，證明快照與 fence；
    在唯讀連線上執行查詢，證明查詢不寫入。穩定狀態下的 XML、錯誤條件、順序與 RSM 游標不變，除非該變更是記錄在案的決定。
 
-## 2. S50 後的現況
+## 2. S51 後的現況
 
 - 工作區 95 個 package（94 個 member 加根 crate）：`kernel`（XEP 線格式、XML、時間型別）、`platform`（設定、PostgreSQL、runtime、安全、遙測、web
   surface）、`contexts`（abuse、archive、auth、federation、message、operations、pubsub、room、roster、session、upload，
@@ -38,19 +38,20 @@
   `catalog/crates.yaml` 執行。
 - 結構工作完成：行數基線為空（生產檔 ≤ 1,500 行、測試檔 ≤ 3,000 行），根目錄沒有測試檔，靜態門禁中能改為測試的
   已改寫（S35、S36），門禁再審計完成（S42）。S46 再拆分 9 個接近上限的檔案（WP-663–671），S47 拆分 MIX repository
-  port 與治理資料生命週期模組（WP-685、WP-686），S49 把 MIX 協定與儲存的大檔拆成葉模組（WP-705），S50 把訊息處理與 session table 的大檔拆成葉模組（WP-722）；
+  port 與治理資料生命週期模組（WP-685、WP-686），S49 把 MIX 協定與儲存的大檔拆成葉模組（WP-705），S50 把訊息處理與 session table 的大檔拆成葉模組（WP-722），S51 把名冊、presence、隱私與封鎖處理的大檔拆成葉模組（WP-738、739）；
   目前最大的生產檔是 `northstar-message-core` 的 `jingle.rs`（1,376 行）。
 - 語義退出：C1（PubSub/PEP）16 項發現全部關閉（S44 的 8 項、S46 的 8 項），C2（Archive/MAM）15 項
   全部關閉：S45 修正 10 項、C2-12（良性競態）以測試固定並維持現狀，S47 依使用者的產品決策實作其餘 4 項（C2-08、09、10、
   13）。聯邦 MUC MAM 統一格式的對端互通證據留在 K 的 `EXT-FEDERATION`。D 從 room 開始：S48 審計 C3（MUC）與 C4
   （MIX）各 19 項，C3 在 S48、C4 在 S49 全部關閉（工程結構藍圖 5.44、5.45），room 完成。S50 審計 message（C5，21 項）
-  並全部關閉（5.46），message 完成。其他上下文尚未做語義退出審計，下一個是 roster／presence／privacy。
-- workspace 測試 3,937 個（S50 的 `f94a3dc6`），其中 518 個是 ignored 測試，需要 PostgreSQL、Redis 或其他專用環境，
-  由 CI 的專用腳本執行（其中 392 個在 `northstar-db-it`，包括 6 個不在 CI 執行的按需量測情境）。
-- Cargo.lock 485 個套件；migration 到 `0164`；`cargo audit` 忽略 RUSTSEC-2026-0459（SQLx 的 `libsqlite3-sys` 升到 ≥ 0.39
+  並全部關閉（5.46），message 完成。S51 審計 roster／presence（C6，22 項）與隱私／封鎖（C7，19 項）並全部關閉（5.47），
+  roster 完成。其他上下文尚未做語義退出審計，下一個是 auth。
+- workspace 測試 4,131 個（S51 的 `ac4c8c2e`），其中 597 個是 ignored 測試，需要 PostgreSQL、Redis 或其他專用環境，
+  由 CI 的專用腳本執行（其中 471 個在 `northstar-db-it`，包括 6 個不在 CI 執行的按需量測情境）。
+- Cargo.lock 485 個套件；migration 到 `0165`；`cargo audit` 忽略 RUSTSEC-2026-0459（SQLx 的 `libsqlite3-sys` 升到 ≥ 0.39
   前保留）、RUSTSEC-2026-0543 與 RUSTSEC-2026-0542（`object_store` 經 chrono／humantime 引入，`cargo deny` 有相同例外）。
 
-## 3. 已完成的任務（S0–S50）
+## 3. 已完成的任務（S0–S51）
 
 細節見工程結構藍圖第 5 節的階段表與各盤點小節。
 
@@ -70,6 +71,7 @@
 | S48 | D 的 room C3（MUC）：唯讀審計 room 上下文，修正 C3 的 19 項：確切的 occupant 路由與第 2 版叢集信封、提交時的受眾、房間退役的確切效果、延遲事件的渲染事實、唯讀快照、加入與 SM 連續性、定址投遞與邀請、注入的時鐘與 ID、型別化權威；runtime 執行緒保留 8 MiB stack（WP-715） |
 | S49 | D 的 room C4（MIX）：先只移動地拆分 MIX 大檔並加入型別化的 MIX 位址，再修正 C4 的 19 項：PAM 投影與名冊 delta 同交易提交、反射流量的 PAM 快照、presence 復原依資料庫時鐘分頁清完、管理表單的稀疏 patch、託管探索的單一快照與鏡像連結的 fence、relay 回程的確切路由與單一消費者、投遞綁定收件者帳號（migration 0163）、聯邦邀請結果原子提交；叢集測試改等維護掃除（WP-716） |
 | S50 | D 的 message C5：先只移動地拆分訊息處理的大檔並落地行動者 fence 與事件來源，再修正 C5 的 21 項：叢集訊息契約第 14 版的確切路由交接與全叢集優先權排序、提交交易內的單一政策快照與唯讀隱私查詢、重播重驗與 Bind2 的 MAM 證明、撤回綁定寄件者帳號並取消未被持有的原文（migration 0164）、Push 的 claim 快照、C2S／S2S／元件共用處理政策、ExtDisco 型別化、Carbons 的確切受眾 |
+| S51 | D 的 roster C6、C7：平行唯讀審計名冊與 presence（C6，22 項）和隱私與封鎖（C7，19 項），先只移動地拆分大檔並落地行動者、確切路由、第 15 版確切控制契約與唯讀的通訊政策讀取，再修正 41 項：訂閱轉移型別化與交易內的聯邦回覆、名冊推送的每資源游標與封鎖清單修訂 journal（migration 0165）、presence 的原子提交與 CSI、服務通知 fence、MIX 偏好的鎖順序、注入的時間與 ID、隱私命令與 active 選擇的租約、廣播與 probe 的快照、資源可見性、聯邦 presence 經擁有節點、待處理訂閱 gate、終止與封鎖 presence、房間與 PubSub 的政策 |
 
 ## 4. 待辦總表
 
@@ -81,8 +83,8 @@
 | A | C1 語義退出第二批（C1-05、07、08、09、12、14、15、16） | 程式 | P0 | 無；A0 先做 | 5.1 | 完成（S46，工程結構藍圖 5.42） |
 | B | C2 的 4 項產品決策與實作（C2-08、09、10、13） | 決策＋程式 | P1 | 使用者決定 | 5.2 | 完成（S47，工程結構藍圖 5.43） |
 | C | 接近行數上限的檔案預先拆分 | 結構 | P0（隨 A 一起） | 無 | 5.3 | 完成（S46，工程結構藍圖 5.42） |
-| D | 其他上下文的語義退出審計與修正 | 審計＋程式 | P1 | A 的做法定型 | 5.4 | 進行中：room 完成（S48 的 C3 MUC、S49 的 C4 MIX，工程結構藍圖 5.44、5.45），message 完成（S50 的 C5，5.46），下一個是 roster／presence／privacy |
-| E | `northstar-workflows` 的範圍審查 | 結構 | P2 | D 的審計結果 | 5.5 | 未開始；前提（room、message 的審計）已在 S50 完成 |
+| D | 其他上下文的語義退出審計與修正 | 審計＋程式 | P1 | A 的做法定型 | 5.4 | 進行中：room 完成（S48 的 C3 MUC、S49 的 C4 MIX，工程結構藍圖 5.44、5.45），message 完成（S50 的 C5，5.46），roster／presence／privacy 完成（S51 的 C6、C7，5.47），下一個是 auth |
+| E | `northstar-workflows` 的範圍審查 | 結構 | P2 | D 的審計結果 | 5.5 | 未開始；前提（room、message、roster 的審計）已在 S51 完成 |
 | F | 服務能力收斂（`ARCH-SVC`） | 程式 | P2 | 無 | 5.6 | 未開始 |
 | G | 資料庫角色分權（`ARCH-DB-ROLE`） | 程式＋migration | P2 | F | 5.7 | 未開始 |
 | H | 叢集與投影的故障證據（`ARCH-CLU*`） | 測試＋環境 | P3 | 隔離 VM | 5.8 | 未開始 |
@@ -91,7 +93,7 @@
 | K | 發佈資格（8.2 的 7 個 gate、R1–R3） | 環境證據 | P3 | 凍結候選版本 | 5.11 | 未開始 |
 | L | 可選產品範圍（XEP-0357、0447/0448、0487） | 產品 | P3 | K | 5.12 | 未開始 |
 
-建議的階段編號（實際編號以開工時為準）：S46 = A＋C（已完成）；S47 = B（已完成）；S48 = D 的 room C3（已完成）；S49 = room C4（MIX，已完成）；S50 = message C5（已完成）；S51 起依 5.4 的順序每個上下文一個階段；
+建議的階段編號（實際編號以開工時為準）：S46 = A＋C（已完成）；S47 = B（已完成）；S48 = D 的 room C3（已完成）；S49 = room C4（MIX，已完成）；S50 = message C5（已完成）；S51 = roster／presence／privacy C6、C7（已完成）；S52 起依 5.4 的順序每個上下文一個階段；
 E、F、G、I 在 D 的空檔或之後插入。WP 編號接續 WP-662（本文件）。
 
 ## 5. 各項詳細說明
@@ -181,7 +183,7 @@ R1 的上限是生產檔 1,500 行、測試檔 3,000 行，由 `node scripts/che
 
 ### 5.4 D：其他上下文的語義退出審計
 
-**進度**：room 已審計（S48，C3 MUC 19 項、C4 MIX 19 項；審計報告不入庫）。C3 在 S48、C4 在 S49 全部關閉（見[工程結構藍圖](engineering-structure.zh-TW.md) 5.44、5.45），room 完成。message 在 S50 審計（C5，21 項）並全部關閉（5.46），message 完成；下一個是 roster／presence／privacy。
+**進度**：room 已審計（S48，C3 MUC 19 項、C4 MIX 19 項；審計報告不入庫）。C3 在 S48、C4 在 S49 全部關閉（見[工程結構藍圖](engineering-structure.zh-TW.md) 5.44、5.45），room 完成。message 在 S50 審計（C5，21 項）並全部關閉（5.46），message 完成。roster／presence／privacy 在 S51 審計（C6 名冊與 presence 22 項、C7 隱私與封鎖 19 項）並全部關閉（5.47），roster 完成；下一個是 auth。
 
 S19–S30 把各上下文搬成 crate 時，SQL 與交易邊界逐字搬移，沒有逐條檢查快照與競態。C1、C2 的審計都找到 15 項左右的發現，
 其他上下文很可能有同類問題。每個上下文照 C1／C2 的方式做：先唯讀審計（一個 WP，報告不入庫），再依發現切修正 WP。
@@ -222,8 +224,8 @@ crate。
    會話與 SM），每個只依賴它需要的上下文。拆分前量測增量編譯時間與依賴扇入，拆分後再量，沒有改善就不拆。
 3. 目標架構的跨上下文交易清單隨之更新；架構驗證器的層級規則不變。
 
-這項依賴 D 的審計結果（審計會順便指出哪些 workflow 其實只屬於一個上下文），排在 D 的前兩個上下文之後；room 與 message
-已在 S48–S50 完成，可以開始。
+這項依賴 D 的審計結果（審計會順便指出哪些 workflow 其實只屬於一個上下文），排在 D 的前兩個上下文之後；room、message 與 roster
+已在 S48–S51 完成，可以開始。
 
 ### 5.6 F：服務能力收斂（`ARCH-SVC`）
 
@@ -297,8 +299,9 @@ S47  B（已完成）：4 個修正 WP 可並行（檔案大多不重疊；B-甲
 S48  D-room C3（已完成）：WP-695 契約先行，WP-696–701 平行，WP-702、703 依序，WP-715 修正 stack 溢位
 S49  D-room C4（已完成）：WP-705 只移動、WP-706 型別先行，WP-707–714 平行，WP-716 修正叢集測試
 S50  D-message C5（已完成）：WP-722 只移動、WP-723 單獨修正、WP-724 型別先行，WP-725–733 平行，WP-735 修正叢集測試
-S51+ D：每個上下文先審計，再修正；審計可提前並行（唯讀），修正依順序
-     E：D 的 room、message 審計已完成，可以開始
+S51  D-roster C6／C7（已完成）：兩份審計並行，WP-738、739 只移動，WP-740–742 契約先行，WP-743–759 平行
+S52+ D：每個上下文先審計，再修正；審計可提前並行（唯讀），修正依順序
+     E：D 的 room、message、roster 審計已完成，可以開始
      F → G：可在 D 的空檔並行（G 的 migration 依領域逐一進行）
      I：隨時可做的小 WP
 K、L：凍結候選版本後
@@ -439,6 +442,10 @@ crate 當成最新（S44 的教訓）。不要在 codex、驗證或 cargo 正在
 - 新的 Redis 指令先對照 runtime 的 ACL，能用既有指令（pipeline 的 GET 取代 MGET）就不改 ACL（S50 的 WP-732）。
 - 改變 wire 版本時，搜尋 `scripts/` 中比對 `protocol_version` 的夾具與載入它的離線測試；合成 payload 的離線測試抓不到
   夾具過時，只有 CI 的多節點 job 會失敗（S50 的 WP-735）。
+- 兩個平行 WP 為同一個函式加同一個參數時，三方合併只留一份；後一個 WP 的設計取代前一個的部分時，合併後刪掉沒有呼叫者的
+  trait、impl 與函式，並在盤點記錄與審計的差異（S51 的 WP-743、745、754）。
+- 新增 migration 的 WP 要搜尋寫死最新版本號的測試（`role_attestation/tests.rs` 的 ledger 斷言），它只在 workspace 測試執行
+  （S51 的 WP-749）。
 
 ### 9.4 委派
 

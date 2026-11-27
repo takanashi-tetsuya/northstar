@@ -103,7 +103,7 @@ printf 'fixture-wrapper-start title=%q\n' "$title"
 EOF
 chmod 0700 "$runtime_dir/scripts/github-ci-run.sh"
 
-for suite in roster-service-db-wsl.sh muc-db-wsl.sh pie-db-wsl.sh privacy-db-wsl.sh upload-db-wsl.sh muc-cluster-wsl.sh; do
+for suite in roster-service-db-wsl.sh muc-db-wsl.sh pie-db-wsl.sh privacy-db-wsl.sh roster-presence-db-wsl.sh upload-db-wsl.sh muc-cluster-wsl.sh; do
   cat >"$runtime_dir/scripts/$suite" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -128,12 +128,13 @@ EOF
   chmod 0700 "$runtime_dir/scripts/$suite"
 done
 
-declare -a suite_ids=(roster-service muc pie privacy http-upload muc-cluster)
+declare -a suite_ids=(roster-service muc pie privacy roster-presence http-upload muc-cluster)
 declare -A expected_timeouts=(
   ['Roster service database']=480
   ['MUC database']=600
   ['PIE database']=480
   ['Privacy database']=600
+  ['Roster presence database']=600
   ['HTTP Upload database']=600
   ['MUC cluster database']=600
 )
@@ -205,10 +206,10 @@ normal_status="$(run_fixture normal-failure "$normal_output" "$normal_timeouts")
   || fail "ordinary failure returned $normal_status, expected aggregate failure 1"
 assert_terminal_results_once "$normal_output"
 assert_result "$normal_output" pie failed command-exit 23
-for suite_id in roster-service muc privacy http-upload muc-cluster; do
+for suite_id in roster-service muc privacy roster-presence http-upload muc-cluster; do
   assert_result "$normal_output" "$suite_id" passed command-completed 0
 done
-grep -Fq 'phase=database_shard_completed shard=collaboration-storage passed=5 failed=1 total=6' "$normal_output" \
+grep -Fq 'phase=database_shard_completed shard=collaboration-storage passed=6 failed=1 total=7' "$normal_output" \
   || fail 'ordinary failure aggregate did not describe the complete suite manifest'
 assert_timeout_contract "$normal_timeouts"
 
@@ -219,10 +220,10 @@ timeout_status="$(run_fixture timeout "$timeout_output" "$timeout_timeouts")"
   || fail "timeout returned $timeout_status, expected aggregate failure 1"
 assert_terminal_results_once "$timeout_output"
 assert_result "$timeout_output" pie timeout command-deadline 124
-for suite_id in roster-service muc privacy http-upload muc-cluster; do
+for suite_id in roster-service muc privacy roster-presence http-upload muc-cluster; do
   assert_result "$timeout_output" "$suite_id" passed command-completed 0
 done
-grep -Fq 'phase=database_shard_completed shard=collaboration-storage passed=5 failed=1 total=6' "$timeout_output" \
+grep -Fq 'phase=database_shard_completed shard=collaboration-storage passed=6 failed=1 total=7' "$timeout_output" \
   || fail 'timeout aggregate did not describe the complete suite manifest'
 assert_timeout_contract "$timeout_timeouts"
 
@@ -235,7 +236,7 @@ assert_terminal_results_once "$child_cancel_output"
 assert_result "$child_cancel_output" roster-service passed command-completed 0
 assert_result "$child_cancel_output" muc passed command-completed 0
 assert_result "$child_cancel_output" pie cancelled process-group-cancellation 143 runner-exit-signal-TERM
-for suite_id in privacy http-upload muc-cluster; do
+for suite_id in privacy roster-presence http-upload muc-cluster; do
   assert_result "$child_cancel_output" "$suite_id" not-run process-group-cancellation 143 runner-exit-signal-TERM
   assert_not_started "$child_cancel_output" "$suite_id"
 done
@@ -273,7 +274,7 @@ if [[ "$term_fixture_supported" == true ]]; then
   assert_result "$term_output" roster-service passed command-completed 0
   assert_result "$term_output" muc passed command-completed 0
   assert_result "$term_output" pie cancelled process-group-cancellation 143 parent-signal-TERM
-  for suite_id in privacy http-upload muc-cluster; do
+  for suite_id in privacy roster-presence http-upload muc-cluster; do
     assert_result "$term_output" "$suite_id" not-run process-group-cancellation 143 parent-signal-TERM
     assert_not_started "$term_output" "$suite_id"
   done

@@ -1223,6 +1223,16 @@ Updated nodes also write guarded Redis `session_presence:{full_jid}` records
 for cluster-wide priority ranking of bare primary messages. They use the
 existing runtime Redis ACL; no ACL change is needed, and resources on
 old nodes rank as presence unknown.
+S51 nodes send roster pushes, blocklist and privacy pushes and presence
+controls as exact control contract version 15, which names the account UUID,
+authentication generation and connection UUID of every recipient route.
+Version 13 and 14 nodes reject version 15 controls, and updated listeners
+reject the older flag-only forms with no bare-JID fallback, so a
+mixed-version cluster loses cross-node roster, policy and presence updates
+until clients recover through a roster or blocklist request, the 30-second
+blocklist reconciliation or the next presence refresh; upgrade all nodes
+together. Policy reads no longer extend expired privacy active-list
+selections; the elected capacity lease reaper deletes them.
 On an existing volume, stop every old server process, generate the new storage
 password and URL secrets, reconcile the new role, run migrations and exact
 grants, then start the new binary. The older binary's exact role/ACL audit does

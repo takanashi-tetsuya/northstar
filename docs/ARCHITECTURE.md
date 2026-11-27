@@ -446,7 +446,7 @@ which adds the initial spool reservation and the exact audience (account
 UUID, authentication generation and connection UUID captured before commit);
 the receiver re-checks that route before enqueueing and never resolves the
 JID again. A v13 peer rejects a v14 message payload, and the sender falls
-back to same-account replay. Unsafe
+back to same-account replay. Roster pushes, blocklist and privacy pushes and presence controls use exact control contract v15 (S51), which names the account, authentication generation and connection of every captured recipient route; older peers reject v15 and updated receivers reject the flag-only forms, with no bare-JID fallback. Unsafe
 volatile/durable combinations with a legacy v6 peer fail closed. When
 XEP-0198 is enabled, TCP, WebSocket and BOSH persist the exact spool fence in
 the counted unacknowledged entry before transport output and delete it only

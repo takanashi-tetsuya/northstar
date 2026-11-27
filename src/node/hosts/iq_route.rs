@@ -214,7 +214,10 @@ impl IqRouteHost for ServerNode {
             .await
     }
 
-    async fn blocklist(session: &ProtocolSession<Self>, request: IqRequest<'_>) -> Result<Action> {
+    async fn blocklist(
+        session: &mut ProtocolSession<Self>,
+        request: IqRequest<'_>,
+    ) -> Result<Action> {
         session
             .blocklist(request.id, request.stanza, request.payload)
             .await

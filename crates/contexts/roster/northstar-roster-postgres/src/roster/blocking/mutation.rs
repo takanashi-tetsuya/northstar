@@ -65,10 +65,12 @@ pub async fn block_jids(pool: &PgPool, owner_id: Uuid, jids: &[String]) -> Resul
     }
     lock_block_policy_in_transaction(&mut transaction, owner_id).await?;
     let update = insert_blocks(&mut transaction, owner_id, &jids).await?;
-    if update == BlockJidsUpdate::QuotaExceeded {
-        transaction.rollback().await?;
-    } else {
-        transaction.commit().await?;
+    match &update {
+        BlockJidsUpdate::Changed(changed) => {
+            super::journal::append(&mut transaction, owner_id, "block", changed).await?;
+            transaction.commit().await?;
+        }
+        _ => transaction.rollback().await?,
     }
     Ok(update)
 }
@@ -116,6 +118,12 @@ pub async fn unblock_jids(
     }
     lock_block_policy_in_transaction(&mut transaction, owner_id).await?;
     let changed = delete_blocks(&mut transaction, owner_id, canonical_jids.as_deref()).await?;
+    let action = if jids.is_some() {
+        "unblock"
+    } else {
+        "unblock-all"
+    };
+    super::journal::append(&mut transaction, owner_id, action, &changed).await?;
     transaction.commit().await?;
     Ok(UnblockJidsUpdate::Changed(changed))
 }
@@ -212,8 +220,14 @@ pub(in super::super) async fn apply_blocking(
     } else {
         presence_facts::capture(&mut transaction, actor, route_candidates, &before, &delta).await?
     };
+    // The revision journal commits with the delta, under the same locks.
+    let action = match mutation {
+        BlockingMutation::Block(_) => "block",
+        BlockingMutation::Unblock(_) => "unblock",
+        BlockingMutation::UnblockAll => "unblock-all",
+    };
+    super::journal::append(&mut transaction, actor.account_id, action, &delta).await?;
     let change = CommittedBlockingChange { delta, contacts };
-    // WP-749 appends the revision journal here, before releasing these locks.
     transaction.commit().await?;
     Ok(Committed(change))
 }

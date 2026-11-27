@@ -3,10 +3,12 @@
 use anyhow::Result;
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
 use northstar_roster_application::blocking_mutation::CommittedBlockingChange;
+use northstar_roster_application::blocklist_revisions::BlocklistRevisionRepository;
 use northstar_roster_application::privacy::commands::PolicyCommandRepository;
 use northstar_roster_application::{RosterRepository, RosterService, S2sOutboxPolicy};
 use northstar_roster_core::{
-    ClusterPresenceAuthority, LocalRosterContact, PresenceAccount, RosterChange, RosterEventSource,
+    ClusterPresenceAuthority, LocalRosterContact, PresenceAccount, RosterActor, RosterChange,
+    RosterEventSource,
 };
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_stream::outbound::OutboundSender;
@@ -48,13 +50,16 @@ pub trait RosterSessionHost:
     + crate::blocking::BlockingMutationHost
     + crate::SubscriptionRetryWake
     + DirectedPresenceHost
+    + crate::fanout::PolicyPushLocalRoutes
 {
     /// The node's gate for projecting the current avatar into cached presence.
     fn avatar_presence_gate(&self) -> &AvatarPresenceGate;
     /// The roster service, over the repository the composition root binds.
     fn roster_service(&self) -> &RosterService<impl RosterRepository<Error = anyhow::Error>>;
     /// The blocking service, over the repository the composition root binds.
-    fn blocking_service(&self) -> &BlockingService<impl BlockingRepository>;
+    fn blocking_service(
+        &self,
+    ) -> &BlockingService<impl BlockingRepository + BlocklistRevisionRepository>;
     /// The post-accept side-effect failure counter.
     fn post_accept_failure_telemetry(&self) -> PostAcceptFailureTelemetry;
     fn publish_route_presence(
@@ -87,12 +92,7 @@ pub trait RosterSessionHost:
         stanza: &str,
     ) -> impl Future<Output = ()> + Send;
     /// Pushes a committed blocklist change to the owner's resources that requested the blocklist, on every node.
-    fn push_blocklist_change(
-        &self,
-        owner: &str,
-        payload: &str,
-        events: &dyn RosterEventSource,
-    ) -> impl Future<Output = ()> + Send;
+    fn push_blocklist_change(&self, actor: &RosterActor) -> impl Future<Output = ()> + Send;
     /// Delivers the polite-blocking presence transitions of a blocklist change, on every node.
     fn deliver_blocking_presence_change(
         &self,
@@ -111,10 +111,9 @@ pub trait RosterSessionHost:
     /// node. The push for the resource of connection `current_connection` is returned instead of queued.
     fn push_privacy_change(
         &self,
-        account: &str,
+        actor: &RosterActor,
         name: &str,
         base: &str,
-        current_connection: Uuid,
     ) -> impl Future<Output = Option<String>> + Send;
     /// Whether `domain` is a configured external component's domain.
     fn presence_component_domain(&self, domain: &str) -> bool;

@@ -13,6 +13,9 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
+mod blocklist_observation;
+pub use blocklist_observation::BlocklistObservation;
+
 #[derive(Clone)]
 pub struct OnlineSession {
     /// Stable database identity and credential epoch that authorized this
@@ -109,6 +112,7 @@ pub struct OnlineSession {
     pub disconnect: CancellationToken,
     pub pending_subscription_delivery:
         Arc<super::pending_subscription::PendingSubscriptionDelivery>,
+    pub blocklist_observation: Arc<BlocklistObservation>,
 }
 
 /// A detached local session for tests of crates that cannot name the route-incarnation type.
@@ -165,6 +169,7 @@ pub fn test_online_session(
             last_activity: Arc::new(std::sync::RwLock::new(now)),
             disconnect: CancellationToken::new(),
             pending_subscription_delivery: Arc::default(),
+            blocklist_observation: Arc::default(),
         },
         receiver,
     )

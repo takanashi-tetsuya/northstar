@@ -1206,6 +1206,13 @@ matches; every other row stays address-scoped until it expires. The migration
 drops the address-only identity index that older binaries name as their
 conflict target, so stop every old server process before migrating and start
 only updated binaries.
+[Migration `0165`](../migrations/0165_blocklist_revisions.sql) adds a
+per-account blocklist revision and a change journal that keeps the latest
+10,000 revisions per account. Existing blocklists start at revision zero, and
+deleting an account removes its journal. Drain every old blocklist writer
+before starting updated binaries: an older process changes `blocked_jids`
+without advancing the revision, so connected resources would not see the
+change until their next full blocklist request.
 S50 cluster nodes send personal message payloads as exact delivery contract
 version 14, which carries the captured route (account UUID, authentication
 generation, connection UUID) and the initial spool reservation. A version 13

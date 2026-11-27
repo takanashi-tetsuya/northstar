@@ -64,6 +64,29 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
             if !options.priority_matches(target, current) {
                 return DirectDeliverySend::Accepted(false);
             }
+            if let Some(control) = &options.exact_control {
+                match control.kind {
+                    crate::ExactControlKind::BlocklistPush => {
+                        return DirectDeliverySend::Accepted(
+                            control.blocklist_revision.is_some_and(|revision| {
+                                current.signal_blocklist_revision(revision)
+                            }),
+                        );
+                    }
+                    crate::ExactControlKind::PrivacyPush => {
+                        if !current.privacy_requested.load(Ordering::Acquire) {
+                            return DirectDeliverySend::Accepted(false);
+                        }
+                        if current.sender.try_send(delivery.clone()).is_err() {
+                            current.sender.disconnect_backpressured_transport();
+                            current.disconnect.cancel();
+                            return DirectDeliverySend::Accepted(false);
+                        }
+                        return DirectDeliverySend::Accepted(true);
+                    }
+                    _ => {}
+                }
+            }
             if let Some(durable) = durable_delivery {
                 return DirectDeliverySend::Accepted(
                     current

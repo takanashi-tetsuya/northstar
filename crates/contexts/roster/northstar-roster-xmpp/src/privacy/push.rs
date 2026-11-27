@@ -5,12 +5,14 @@ use uuid::Uuid;
 
 pub(super) async fn push_privacy_list_change<S: PrivacySession>(
     session: &S,
-    username: &str,
     name: &str,
 ) -> Result<Option<String>> {
-    let account = format!("{}@{}", username, session.session_local_domain());
-    let base = privacy_push_base(&account, name, || session.roster_events().new_protocol_id())?;
-    Ok(session.privacy_push_change(&account, name, &base).await)
+    let Some(actor) = session.roster_actor() else {
+        return Ok(None);
+    };
+    let account = actor.bare_jid();
+    let base = privacy_push_base(account, name, || session.roster_events().new_protocol_id())?;
+    Ok(session.privacy_push_change(&actor, name, &base).await)
 }
 
 fn privacy_push_base(account: &str, name: &str, new_id: impl FnOnce() -> Uuid) -> Result<String> {

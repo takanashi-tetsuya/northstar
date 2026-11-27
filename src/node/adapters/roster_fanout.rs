@@ -2,11 +2,19 @@
 
 use crate::node::ServerNode;
 use anyhow::Result;
-use northstar_roster_xmpp::fanout::RosterFanoutRoutes;
+use northstar_roster_core::RosterActor;
+use northstar_roster_xmpp::fanout::{PolicyPushLocalRoutes, RosterFanoutRoutes};
 use northstar_roster_xmpp::roster_push::RemoteRouteFailure;
 use northstar_roster_xmpp::PostAcceptFailureTelemetry;
 use northstar_stream::local_routes::session::OnlineSession;
+use northstar_stream::local_routes::session_table::LocalSessionTable;
 use std::sync::Arc;
+
+impl PolicyPushLocalRoutes for ServerNode {
+    fn policy_sessions(&self) -> LocalSessionTable {
+        self.session.live().sessions().clone()
+    }
+}
 
 impl RosterFanoutRoutes for ServerNode {
     fn fanout_sessions(&self, jid: &str) -> Vec<(String, OnlineSession)> {
@@ -22,11 +30,12 @@ impl RosterFanoutRoutes for ServerNode {
 
     async fn remote_blocklist_push(
         &self,
-        owner: &str,
-        push: impl FnMut() -> String + Send,
+        actor: &RosterActor,
+        revision: i64,
+        push: impl FnMut() -> Result<String> + Send,
     ) -> Result<Vec<RemoteRouteFailure>> {
         self.cluster
-            .route_remote_blocklist_push(owner, push)
+            .route_remote_blocklist_push(actor, revision, push)
             .await
             .map(|failures| {
                 failures
@@ -41,11 +50,11 @@ impl RosterFanoutRoutes for ServerNode {
 
     async fn remote_privacy_push(
         &self,
-        account: &str,
+        actor: &RosterActor,
         base: &str,
     ) -> Result<Vec<RemoteRouteFailure>> {
         self.cluster
-            .route_remote_privacy_push(account, base)
+            .route_remote_privacy_push(actor, base)
             .await
             .map(|failures| {
                 failures

@@ -20,6 +20,16 @@ pub(super) fn validate_control_and_roster_push<'a>(
     (expected_user_id, expected_auth_generation): (Option<Uuid>, Option<i64>),
 ) -> ListenerStep<(RosterPushOptions<'a>, Option<ExactControl>)> {
     if !is_exact_control_version(json) {
+        if ["blocklist_requested_only", "privacy_requested_only"]
+            .iter()
+            .any(|flag| json[*flag].as_bool() == Some(true))
+            || matches!(
+                json["exact_control"]["kind"].as_str(),
+                Some("blocklist_push" | "privacy_push")
+            )
+        {
+            return ListenerStep::Continue;
+        }
         // Directed and broadcast C2S presence shared the old generic
         // delivery envelope. There is no safe way to route that envelope
         // while requiring exact recipients for directed/terminal effects.

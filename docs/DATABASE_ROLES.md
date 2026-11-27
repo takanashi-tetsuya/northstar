@@ -707,3 +707,8 @@ identity index with two partial unique indexes: account-scoped for local
 intents and address-scoped otherwise. It adds no routine or grant: runtime
 already inserts and reads the intents, and the foreign-key check runs as the
 table owner with only a `FOR KEY SHARE` lock on the referenced `users` row.
+[Migration `0165`](../migrations/0165_blocklist_revisions.sql)
+creates `blocklist_revisions` and `blocklist_change_log`, both removed with
+their `users` row. Runtime holds `SELECT`, `INSERT` and `UPDATE` on the
+revision counter and `SELECT`, `INSERT` and `DELETE` on the journal, which it
+prunes to the retained window. It adds no routine.

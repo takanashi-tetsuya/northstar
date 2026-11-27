@@ -53,7 +53,7 @@ pub trait PrivacySession: crate::SessionIdentity {
     /// session when it asked for them, for the caller to send after its reply.
     fn privacy_push_change(
         &self,
-        account: &str,
+        actor: &northstar_roster_core::RosterActor,
         name: &str,
         base: &str,
     ) -> impl std::future::Future<Output = Option<String>> + Send;
@@ -66,9 +66,9 @@ pub async fn privacy_set<H: crate::RosterSessionHost + PrivacySelectionHost>(
     root: Node<'_, '_>,
     query: Node<'_, '_>,
 ) -> Result<(String, Option<String>)> {
-    let Some(user) = session.session_account() else {
+    if session.session_account().is_none() {
         return Ok((iq_error(id, "not-authorized"), None));
-    };
+    }
     if !privacy_iq_addressed_to_account(root, session.privacy_full_jid())
         || !valid_query_shell(query)
         || query.document().input_text().len() > MAX_PRIVACY_QUERY_BYTES
@@ -98,7 +98,7 @@ pub async fn privacy_set<H: crate::RosterSessionHost + PrivacySelectionHost>(
     let Some(name) = changed_list else {
         return Ok((response, None));
     };
-    let current_push = push_privacy_list_change(session, &user.username, &name).await?;
+    let current_push = push_privacy_list_change(session, &name).await?;
     Ok((response, current_push))
 }
 

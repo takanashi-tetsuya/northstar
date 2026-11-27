@@ -132,6 +132,12 @@ async fn blocking_is_atomic_bounded_and_indexed_in_postgresql() {
     .execute(&pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../../../migrations/0165_blocklist_revisions.sql"
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
     let owner_id = Uuid::new_v4();
     sqlx::query("INSERT INTO users(id, username) VALUES($1, 'alice')")
         .bind(owner_id)

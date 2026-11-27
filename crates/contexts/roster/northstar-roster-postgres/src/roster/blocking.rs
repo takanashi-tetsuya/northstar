@@ -6,6 +6,7 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 mod candidates;
+pub(super) mod journal;
 mod mutation;
 
 pub use candidates::{

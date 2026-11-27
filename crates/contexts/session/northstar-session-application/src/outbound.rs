@@ -53,6 +53,7 @@ pub struct OutboundItem {
     /// HTTP response body is completed or discarded. Ordinary routed stanzas
     /// never set this field.
     pub transient_sm_capacity: Option<std::sync::Arc<Vec<crate::sm_capacity::SmCapacityLease>>>,
+    snapshot_push_fence: Option<CancellationToken>,
 }
 
 pub type RouteEnqueue = northstar_message_core::route_item::RouteEnqueue<OutboundItem>;
@@ -87,6 +88,7 @@ impl OutboundItem {
             transport_receipt: None,
             transport_write_receipt: None,
             transient_sm_capacity: None,
+            snapshot_push_fence: None,
         }
     }
 
@@ -100,6 +102,7 @@ impl OutboundItem {
             transport_receipt: None,
             transport_write_receipt: None,
             transient_sm_capacity: None,
+            snapshot_push_fence: None,
         }
     }
 
@@ -118,6 +121,7 @@ impl OutboundItem {
                 transport_receipt: None,
                 transport_write_receipt: None,
                 transient_sm_capacity: None,
+                snapshot_push_fence: None,
             },
             receiver,
         )
@@ -158,6 +162,7 @@ impl OutboundItem {
             transport_receipt: Some(receipt),
             transport_write_receipt: None,
             transient_sm_capacity: None,
+            snapshot_push_fence: None,
         }
     }
 
@@ -184,11 +189,18 @@ impl OutboundItem {
             transport_receipt: None,
             transport_write_receipt: None,
             transient_sm_capacity: Some(capacity),
+            snapshot_push_fence: None,
         }
     }
 
     pub fn is_bosh_auth_control(&self) -> bool {
         self.bosh_auth_control
+    }
+
+    pub fn snapshot_push_is_current(&self) -> Option<bool> {
+        self.snapshot_push_fence
+            .as_ref()
+            .map(|fence| !fence.is_cancelled())
     }
 
     pub fn with_auth_publication(mut self, holder: impl AuthControl) -> anyhow::Result<Self> {
@@ -309,6 +321,18 @@ impl OutboundSender {
     pub fn try_send(&self, stanza: String) -> Result<(), mpsc::error::TrySendError<String>> {
         self.try_send_item(OutboundItem::plain(stanza))
             .map_err(map_try_send_error)
+    }
+
+    pub fn try_send_snapshot_push(
+        &self,
+        stanza: String,
+        fence: &CancellationToken,
+    ) -> Result<(), mpsc::error::TrySendError<String>> {
+        self.try_send_item(OutboundItem {
+            snapshot_push_fence: Some(fence.clone()),
+            ..OutboundItem::plain(stanza)
+        })
+        .map_err(map_try_send_error)
     }
 
     pub fn try_send_durable(

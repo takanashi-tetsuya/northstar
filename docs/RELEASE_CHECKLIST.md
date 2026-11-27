@@ -236,9 +236,12 @@ and Docker artifacts and their provenance. They do not repeat source CI.
   with every old server process stopped: it drops the address-only retraction
   identity index that older binaries use as their conflict target. Start only
   updated binaries.
+- [ ] Apply [migration `0165`](../migrations/0165_blocklist_revisions.sql)
+  after draining every old blocklist writer; an older process changes the
+  blocklist without advancing its revision. Start only updated binaries.
 - [ ] Run `cargo run --release --locked -- migrate` using only the migrator
-  identity and verify all 163 migrations from `0001` through the current
-  repository maximum `0164`, with `0021` as the sole intentional gap.
+  identity and verify all 164 migrations from `0001` through the current
+  repository maximum `0165`, with `0021` as the sole intentional gap.
 - [ ] Start the final runtime identity and prove startup performs only ledger,
   checksum and authority verification.
 - [ ] Budget one additional PostgreSQL connection per process for the

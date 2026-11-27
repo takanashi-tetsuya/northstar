@@ -15,7 +15,7 @@ pub async fn block<S: BlockingSession>(
     id: &str,
     root: Node<'_, '_>,
 ) -> Result<String> {
-    let (Some(user), Some(actor)) = (session.session_account(), session.roster_actor()) else {
+    let (Some(_), Some(actor)) = (session.session_account(), session.roster_actor()) else {
         return Ok(iq_error(id, "not-authorized"));
     };
     let items = match northstar_xep_0191::parse_iq(root) {
@@ -36,9 +36,8 @@ pub async fn block<S: BlockingSession>(
         }
     };
     if !change.delta.is_empty() {
-        let changed = change.delta.clone();
         notify_blocking_presence(session, change).await;
-        push_blocking_change(session, &user, "block", &changed).await;
+        push_blocking_change(session).await;
     }
     Ok(iq_result(id, ""))
 }
@@ -49,7 +48,7 @@ pub async fn unblock<S: BlockingSession>(
     id: &str,
     root: Node<'_, '_>,
 ) -> Result<String> {
-    let (Some(user), Some(actor)) = (session.session_account(), session.roster_actor()) else {
+    let (Some(_), Some(actor)) = (session.session_account(), session.roster_actor()) else {
         return Ok(iq_error(id, "not-authorized"));
     };
     let mutation = match northstar_xep_0191::parse_iq(root) {
@@ -64,7 +63,6 @@ pub async fn unblock<S: BlockingSession>(
         BlockingMutation::UnblockAll => Mutation::UnblockAll,
         BlockingMutation::Block(_) => unreachable!("unblock parser returned block mutation"),
     };
-    let unblock_all = matches!(mutation, Mutation::UnblockAll);
     let change = match session.apply_blocking(actor, mutation).await? {
         BlockingMutationOutcome::Committed(change) => change,
         BlockingMutationOutcome::QuotaExceeded => return Ok(iq_error(id, "resource-constraint")),
@@ -73,15 +71,8 @@ pub async fn unblock<S: BlockingSession>(
         }
     };
     if !change.delta.is_empty() {
-        let changed = change.delta.clone();
         notify_blocking_presence(session, change).await;
-        push_blocking_change(
-            session,
-            &user,
-            "unblock",
-            if unblock_all { &[] } else { &changed },
-        )
-        .await;
+        push_blocking_change(session).await;
     }
     Ok(iq_result(id, ""))
 }

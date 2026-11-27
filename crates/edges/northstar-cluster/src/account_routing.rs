@@ -5,6 +5,8 @@ use anyhow::Result;
 
 mod blocking_presence;
 mod policy_push;
+#[cfg(test)]
+pub(crate) use policy_push::require_policy_push_ack;
 
 #[cfg(test)]
 pub(crate) use blocking_presence::send_blocking_pages;

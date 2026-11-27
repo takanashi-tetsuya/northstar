@@ -6,7 +6,7 @@ use northstar_roster_application::blocking_mutation::CommittedBlockingChange;
 mod command_host;
 mod mutation;
 mod presence;
-mod push;
+pub(crate) mod push;
 mod query;
 
 pub use command_host::BlockingMutationHost;
@@ -17,14 +17,10 @@ pub use query::blocklist;
 pub trait BlockingSession: crate::SessionIdentity + BlockingMutationHost {
     /// The blocking service, over the repository the composition root binds.
     fn blocking_service(&self) -> &BlockingService<impl BlockingRepository>;
-    /// Records that this session asked for the blocklist, which makes it a target of later pushes.
-    fn blocking_mark_requested(&self);
-    /// Delivers the XEP-0191 `payload` as a push to every resource of `owner` that asked for the
-    /// blocklist, on this node and on the others.
+    /// Wakes blocklist observers for a committed change on this node and the others.
     fn blocking_push_change(
         &self,
-        owner: &str,
-        payload: &str,
+        actor: &northstar_roster_core::RosterActor,
     ) -> impl std::future::Future<Output = ()> + Send;
     /// Delivers presence to the exact audience captured by the commit.
     fn blocking_presence_change(

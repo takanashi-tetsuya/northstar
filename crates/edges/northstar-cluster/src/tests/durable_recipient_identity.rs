@@ -251,5 +251,7 @@ mod exact_iq_visibility;
 #[path = "exact_control_contract.rs"]
 mod exact_control_contract;
 
+#[path = "policy_push_exact.rs"]
+mod policy_push_exact;
 #[path = "terminal_exact.rs"]
 mod terminal_exact;

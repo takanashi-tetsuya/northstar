@@ -479,6 +479,7 @@ mod tests {
             connected_at: std::time::Instant::now(),
             last_activity: Arc::new(std::sync::RwLock::new(std::time::Instant::now())),
             disconnect: CancellationToken::new(),
+            blocklist_observation: Arc::default(),
         }
     }
 

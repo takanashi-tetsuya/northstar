@@ -1,20 +1,21 @@
 use super::mutation::patterns_from_jids;
 use super::BlockingSession;
-use northstar_roster_core::PresenceAccount;
+use northstar_roster_application::blocklist_revisions::{BlocklistAction, BlocklistChange};
 use northstar_xep_0191::{BlockingCommand, BlockingMutation};
 
-pub(super) async fn push_blocking_change<S: BlockingSession>(
-    session: &S,
-    user: &PresenceAccount,
-    action: &str,
-    jids: &[String],
-) {
-    let owner = format!("{}@{}", user.username, session.session_local_domain());
-    let Some(payload) = blocking_change_payload(action, jids) else {
-        tracing::error!(action, "refused unknown XEP-0191 push action");
-        return;
+pub(super) async fn push_blocking_change<S: BlockingSession>(session: &S) {
+    if let Some(actor) = session.roster_actor() {
+        session.blocking_push_change(&actor).await;
+    }
+}
+
+pub(crate) fn journal_payload(change: &BlocklistChange) -> Option<String> {
+    let (action, patterns) = match change.action {
+        BlocklistAction::Block => ("block", change.patterns.as_slice()),
+        BlocklistAction::Unblock => ("unblock", change.patterns.as_slice()),
+        BlocklistAction::UnblockAll => ("unblock", &[][..]),
     };
-    session.blocking_push_change(&owner, &payload).await;
+    blocking_change_payload(action, patterns)
 }
 
 pub(super) fn blocking_change_payload(action: &str, jids: &[String]) -> Option<String> {

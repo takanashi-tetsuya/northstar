@@ -63,6 +63,12 @@ impl<R: BlockingRepository> BlockingService<R> {
         self.repository.unblock(owner, jids).await
     }
 }
+
+impl<R: crate::blocklist_revisions::BlocklistRevisionRepository> BlockingService<R> {
+    pub fn revisions(&self) -> &R {
+        &self.repository
+    }
+}
 pub fn matches(pattern: &str, jid: &str) -> bool {
     northstar_xmpp_types::jid_scope_matches(pattern, jid)
 }

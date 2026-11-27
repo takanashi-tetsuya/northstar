@@ -109,6 +109,7 @@ pub(crate) fn session(connection_id: Uuid, routable: bool) -> OnlineSession {
         last_activity: Arc::new(std::sync::RwLock::new(Instant::now())),
         disconnect: CancellationToken::new(),
         pending_subscription_delivery: Arc::default(),
+        blocklist_observation: Arc::default(),
     }
 }
 

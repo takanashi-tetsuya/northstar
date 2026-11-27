@@ -262,6 +262,8 @@ VALUES
   ('pubsub_affiliations',TRUE,TRUE,TRUE,TRUE,'0014'),
   ('pubsub_subscriptions',TRUE,TRUE,TRUE,TRUE,'0014'),
   ('roster_change_log',TRUE,TRUE,TRUE,TRUE,'0018'),
+  ('blocklist_revisions',TRUE,TRUE,TRUE,FALSE,'0165'),
+  ('blocklist_change_log',TRUE,TRUE,FALSE,TRUE,'0165'),
   ('s2s_outbox',TRUE,TRUE,TRUE,TRUE,'0019'),
   ('mam_preferences',TRUE,TRUE,TRUE,TRUE,'0025'),
   ('mam_preference_jids',TRUE,TRUE,TRUE,TRUE,'0025'),

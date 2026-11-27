@@ -1,6 +1,7 @@
 //! Presence and privacy-list repositories.
 
 mod blocking_presence;
+mod blocklist_revisions;
 mod communication_policy;
 mod presence_service;
 mod privacy;

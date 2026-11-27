@@ -19,7 +19,7 @@ use northstar_roster_application::{
     BeginRosterSyncError, RosterRepository, RosterService, RosterSyncPermit, S2sOutboxPolicy,
 };
 use northstar_roster_core::PresenceAccount;
-use northstar_roster_core::{LocalRosterContact, RosterChange};
+use northstar_roster_core::{LocalRosterContact, RosterActor, RosterChange};
 use northstar_stream::protocol::{ProtocolSession, SessionHost, SessionIdentityHost};
 use northstar_stream::transport::Action;
 use northstar_xml_builder::stanza::stanza_error;
@@ -73,14 +73,8 @@ impl<H: SessionHost + RosterSessionHost> crate::blocking::BlockingSession for Pr
         self.host().blocking_service()
     }
 
-    fn blocking_mark_requested(&self) {
-        self.blocklist_requested.store(true, Ordering::Release);
-    }
-
-    async fn blocking_push_change(&self, owner: &str, payload: &str) {
-        self.host()
-            .push_blocklist_change(owner, payload, crate::SessionIdentity::roster_events(self))
-            .await;
+    async fn blocking_push_change(&self, actor: &RosterActor) {
+        self.host().push_blocklist_change(actor).await;
     }
 
     async fn blocking_presence_change(
@@ -95,7 +89,7 @@ impl<H: SessionHost + RosterSessionHost> crate::blocking::BlockingSession for Pr
 #[allow(async_fn_in_trait)] // Called on the root's concrete session type only.
 pub trait BlockingHandlers {
     async fn blocklist(
-        &self,
+        &mut self,
         id: &str,
         root: Node<'_, '_>,
         _blocklist: Node<'_, '_>,
@@ -109,14 +103,12 @@ pub trait BlockingHandlers {
 
 impl<H: SessionHost + RosterSessionHost> BlockingHandlers for ProtocolSession<H> {
     async fn blocklist(
-        &self,
+        &mut self,
         id: &str,
         root: Node<'_, '_>,
         _blocklist: Node<'_, '_>,
     ) -> Result<Action> {
-        crate::blocking::blocklist(self, id, root)
-            .await
-            .map(Action::Send)
+        crate::blocking::blocklist(self, id, root).await
     }
 
     async fn block(&self, id: &str, root: Node<'_, '_>, _block: Node<'_, '_>) -> Result<Action> {
@@ -178,10 +170,13 @@ impl<H: SessionHost + RosterSessionHost> crate::privacy::PrivacySession for Prot
         self.host().privacy_list_active_locally(account, name)
     }
 
-    async fn privacy_push_change(&self, account: &str, name: &str, base: &str) -> Option<String> {
-        self.host()
-            .push_privacy_change(account, name, base, self.connection_id)
-            .await
+    async fn privacy_push_change(
+        &self,
+        actor: &RosterActor,
+        name: &str,
+        base: &str,
+    ) -> Option<String> {
+        self.host().push_privacy_change(actor, name, base).await
     }
 }
 

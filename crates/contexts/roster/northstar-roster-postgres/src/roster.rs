@@ -657,7 +657,7 @@ mod application_repository {
     mod blocking_mutation;
     #[derive(Clone)]
     pub struct PostgresBlockingRepository {
-        pool: PgPool,
+        pub(super) pool: PgPool,
     }
     impl PostgresBlockingRepository {
         pub fn new(pool: PgPool) -> Self {

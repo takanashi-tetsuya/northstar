@@ -119,7 +119,7 @@ pub trait IqRouteHost: DiscoveryHost {
     ) -> impl Future<Output = Result<Action>> + Send;
 
     fn blocklist(
-        session: &ProtocolSession<Self>,
+        session: &mut ProtocolSession<Self>,
         request: IqRequest<'_>,
     ) -> impl Future<Output = Result<Action>> + Send;
 

@@ -84,6 +84,25 @@ impl LocalSessionTable {
             .map(|session| send(&session))
     }
 
+    pub fn with_exact_policy_session<T>(
+        &self,
+        actor: &northstar_roster_core::RosterActor,
+        send: impl FnOnce(&OnlineSession) -> T,
+    ) -> Option<T> {
+        self.with_exact_message_route(
+            &ExactMessageRoute {
+                full_jid: actor.full_jid.clone(),
+                account_id: actor.account_id,
+                auth_generation: actor.auth_generation,
+                connection_id: actor.connection_id,
+                node_id: None,
+                priority: None,
+                available: None,
+            },
+            send,
+        )
+    }
+
     #[expect(
         clippy::result_large_err,
         reason = "return the exact refused outbound item"

@@ -49,6 +49,9 @@ impl<H: SessionHost> ProtocolSession<H> {
         &mut self,
         item: crate::outbound::OutboundItem,
     ) -> Option<crate::outbound::OutboundItem> {
+        if let Some(current) = item.snapshot_push_is_current() {
+            return current.then_some(item);
+        }
         if self.csi.state.is_active() {
             return Some(item);
         }

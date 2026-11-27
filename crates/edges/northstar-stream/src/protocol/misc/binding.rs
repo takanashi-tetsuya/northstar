@@ -201,6 +201,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                 last_activity: Arc::clone(&self.last_activity),
                 disconnect: self.disconnect.clone(),
                 pending_subscription_delivery: Arc::default(),
+                blocklist_observation: Arc::default(),
             },
         );
         // Release the entry guard before touching PostgreSQL on a collision.

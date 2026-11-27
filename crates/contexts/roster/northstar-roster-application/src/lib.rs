@@ -10,6 +10,7 @@ pub use northstar_roster_core::*;
 pub mod blocking;
 pub mod blocking_mutation;
 pub mod blocking_mutation_repository;
+pub mod blocklist_revisions;
 pub mod communication_policy;
 mod events;
 pub mod notification_admission;

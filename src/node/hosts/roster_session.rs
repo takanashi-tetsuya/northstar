@@ -7,6 +7,7 @@ use northstar_muc_xmpp::MucHandlers;
 use northstar_pubsub_xmpp::PubSubHandlers;
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
 use northstar_roster_application::blocking_mutation::CommittedBlockingChange;
+use northstar_roster_application::blocklist_revisions::BlocklistRevisionRepository;
 use northstar_roster_application::privacy::commands::PolicyCommandRepository;
 use northstar_roster_application::{RosterRepository, RosterService, S2sOutboxPolicy};
 use northstar_roster_core::{
@@ -53,7 +54,9 @@ impl RosterSessionHost for ServerNode {
         self.roster.roster_service()
     }
 
-    fn blocking_service(&self) -> &BlockingService<impl BlockingRepository> {
+    fn blocking_service(
+        &self,
+    ) -> &BlockingService<impl BlockingRepository + BlocklistRevisionRepository> {
         self.roster.blocking_service()
     }
 
@@ -147,13 +150,9 @@ impl RosterSessionHost for ServerNode {
         .await;
     }
 
-    async fn push_blocklist_change(
-        &self,
-        owner: &str,
-        payload: &str,
-        events: &dyn northstar_roster_core::RosterEventSource,
-    ) {
-        fanout::push_blocklist_change(self, owner, payload, || events.new_protocol_id()).await;
+    async fn push_blocklist_change(&self, actor: &RosterActor) {
+        fanout::push_blocklist_change(self, self.roster.blocking_service().revisions(), actor)
+            .await;
     }
 
     async fn deliver_blocking_presence_change(&self, change: CommittedBlockingChange) {
@@ -182,12 +181,11 @@ impl RosterSessionHost for ServerNode {
 
     async fn push_privacy_change(
         &self,
-        account: &str,
+        actor: &RosterActor,
         name: &str,
         base: &str,
-        current_connection: Uuid,
     ) -> Option<String> {
-        fanout::push_privacy_change(self, account, name, base, current_connection).await
+        fanout::push_privacy_change(self, actor, name, base).await
     }
 
     fn presence_component_domain(&self, domain: &str) -> bool {

@@ -2,30 +2,35 @@
 
 use crate::roster_push::RemoteRouteFailure;
 use anyhow::Result;
+use northstar_roster_core::RosterActor;
 use northstar_stream::local_routes::session::OnlineSession;
 use std::future::Future;
 use std::time::Duration;
 
 mod blocking_presence;
+mod policy_routes;
 mod pushes;
 
 pub use blocking_presence::deliver_blocking_presence_change;
+pub use policy_routes::PolicyPushLocalRoutes;
 pub use pushes::{blocking_push_stanza, push_blocklist_change, push_privacy_change};
+pub(crate) use pushes::{resynchronize_blocklist, run_blocklist_observer};
 
 pub const BLOCKING_PUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Node-owned routes for committed block-list, privacy-list and blocking-presence changes.
-pub trait RosterFanoutRoutes: Send + Sync {
+pub trait RosterFanoutRoutes: PolicyPushLocalRoutes {
     fn fanout_sessions(&self, jid: &str) -> Vec<(String, OnlineSession)>;
     fn record_fanout_failure(&self);
     fn remote_blocklist_push(
         &self,
-        owner: &str,
-        push: impl FnMut() -> String + Send,
+        actor: &RosterActor,
+        revision: i64,
+        push: impl FnMut() -> Result<String> + Send,
     ) -> impl Future<Output = Result<Vec<RemoteRouteFailure>>> + Send;
     fn remote_privacy_push(
         &self,
-        account: &str,
+        actor: &RosterActor,
         base: &str,
     ) -> impl Future<Output = Result<Vec<RemoteRouteFailure>>> + Send;
 }
@@ -37,8 +42,11 @@ mod tests {
     use northstar_stream::local_routes::session::test_online_session;
     use northstar_xml_builder::rewrite::set_to;
     use std::sync::atomic::{AtomicU64, Ordering};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
     use uuid::Uuid;
+
+    pub(super) mod policy_routes;
+    use policy_routes::{actor, start_observer, TestJournal};
 
     #[derive(Debug, PartialEq)]
     enum RemoteCall {
@@ -51,7 +59,7 @@ mod tests {
         request_push: bool,
         remote_pushes: Mutex<Vec<String>>,
         sessions: Vec<(String, OnlineSession)>,
-        failures: AtomicU64,
+        failures: Arc<AtomicU64>,
         calls: Mutex<Vec<RemoteCall>>,
     }
 
@@ -72,29 +80,32 @@ mod tests {
 
         async fn remote_blocklist_push(
             &self,
-            owner: &str,
-            mut push: impl FnMut() -> String + Send,
+            actor: &RosterActor,
+            revision: i64,
+            mut push: impl FnMut() -> Result<String> + Send,
         ) -> Result<Vec<RemoteRouteFailure>> {
+            let owner = actor.bare_jid();
             assert_eq!(owner, "alice@example.test");
+            assert_eq!(revision, 1);
             self.calls
                 .lock()
                 .unwrap()
                 .push(RemoteCall::Blocklist(owner.to_owned()));
             if self.request_push {
-                self.remote_pushes.lock().unwrap().push(push());
+                self.remote_pushes.lock().unwrap().push(push()?);
             }
             Ok(Vec::new())
         }
 
         async fn remote_privacy_push(
             &self,
-            account: &str,
+            actor: &RosterActor,
             base: &str,
         ) -> Result<Vec<RemoteRouteFailure>> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(RemoteCall::Privacy(account.to_owned(), base.to_owned()));
+            self.calls.lock().unwrap().push(RemoteCall::Privacy(
+                actor.bare_jid().to_owned(),
+                base.to_owned(),
+            ));
             Ok(Vec::new())
         }
     }
@@ -142,8 +153,11 @@ mod tests {
                 ..Routes::default()
             };
             let payload = "<unblock xmlns='urn:xmpp:blocking'/>";
-            push_blocklist_change(&routes, "alice@example.test", payload, Uuid::new_v4).await;
-            let push = interested_rx.try_recv().unwrap().stanza;
+            let actor = actor("interested", interested.connection_id);
+            let journal = TestJournal::unblock_all();
+            start_observer(&routes, &interested, &actor, journal.clone());
+            push_blocklist_change(&routes, &journal, &actor).await;
+            let push = interested_rx.recv().await.unwrap().stanza;
             assert_to(&push, "alice@example.test/interested");
             assert!(push.contains(payload));
             assert!(interested_rx.try_recv().is_err());
@@ -172,13 +186,11 @@ mod tests {
                 sessions: vec![("alice@example.test/closed".into(), session.clone())],
                 ..Routes::default()
             };
-            push_blocklist_change(
-                &routes,
-                "alice@example.test",
-                "<block xmlns='urn:xmpp:blocking'/>",
-                Uuid::new_v4,
-            )
-            .await;
+            let actor = actor("closed", session.connection_id);
+            let journal = TestJournal::unblock_all();
+            start_observer(&routes, &session, &actor, journal.clone());
+            push_blocklist_change(&routes, &journal, &actor).await;
+            session.disconnect.cancelled().await;
             assert!(session.disconnect.is_cancelled());
             assert!(session.sender.backpressure_disconnect().is_cancelled());
             assert_eq!(routes.failures.load(Ordering::Relaxed), 1);
@@ -200,13 +212,11 @@ mod tests {
                 ..Routes::default()
             };
             let started = tokio::time::Instant::now();
-            push_blocklist_change(
-                &routes,
-                "alice@example.test",
-                "<block xmlns='urn:xmpp:blocking'/>",
-                Uuid::new_v4,
-            )
-            .await;
+            let actor = actor("full", session.connection_id);
+            let journal = TestJournal::unblock_all();
+            start_observer(&routes, &session, &actor, journal.clone());
+            push_blocklist_change(&routes, &journal, &actor).await;
+            session.disconnect.cancelled().await;
             assert!(started.elapsed() >= Duration::from_secs(2));
             assert!(started.elapsed() < Duration::from_secs(3));
             assert!(session.disconnect.is_cancelled());
@@ -243,10 +253,9 @@ mod tests {
             let base = "<iq type='set' id='privacy'><query xmlns='jabber:iq:privacy'><list name='work'/></query></iq>";
             let returned = push_privacy_change(
                 &routes,
-                "alice@example.test",
+                &actor("current", current.connection_id),
                 "work",
                 base,
-                current.connection_id,
             )
             .await;
             assert_eq!(returned, Some(set_to(base, "alice@example.test/current")));
@@ -283,8 +292,7 @@ mod tests {
             };
             let base = "<iq type='set' id='privacy'><query xmlns='jabber:iq:privacy'><list name='work'/></query></iq>";
             assert_eq!(
-                push_privacy_change(&routes, "alice@example.test", "work", base, Uuid::new_v4())
-                    .await,
+                push_privacy_change(&routes, &actor("other", Uuid::new_v4()), "work", base).await,
                 None
             );
             assert!(session.disconnect.is_cancelled());
@@ -377,18 +385,22 @@ mod tests {
             .unwrap()
             .block_on(async {
                 let routes = Routes::default();
-                // Constructing a stanza with this payload would panic. The
-                // remote route ignores the closure, so it must stay unbuilt.
-                push_blocklist_change(&routes, "alice@example.test", "<unblock", Uuid::new_v4)
-                    .await;
+                let actor = actor("sender", Uuid::new_v4());
+                let mut invalid = TestJournal::unblock_all();
+                invalid.changes[0].action =
+                    northstar_roster_application::blocklist_revisions::BlocklistAction::Block;
+                invalid.changes[0].patterns = vec!["@".into()];
+                push_blocklist_change(&routes, &invalid, &actor).await;
                 assert!(routes.remote_pushes.lock().unwrap().is_empty());
+                assert_eq!(routes.failures.load(Ordering::Relaxed), 0);
 
                 let routes = Routes {
                     request_push: true,
                     ..Routes::default()
                 };
                 let payload = "<unblock xmlns='urn:xmpp:blocking'/>";
-                push_blocklist_change(&routes, "alice@example.test", payload, Uuid::new_v4).await;
+                let journal = TestJournal::unblock_all();
+                push_blocklist_change(&routes, &journal, &actor).await;
                 let pushes = routes.remote_pushes.lock().unwrap();
                 assert_eq!(pushes.len(), 1);
                 let push = roxmltree::Document::parse(&pushes[0]).unwrap();
@@ -410,6 +422,4 @@ mod tests {
         assert!(push.contains("to='alice@example.test/Phone'"));
         assert!(push.contains("<unblock xmlns='urn:xmpp:blocking'/>"));
     }
-
-    mod push_ids;
 }

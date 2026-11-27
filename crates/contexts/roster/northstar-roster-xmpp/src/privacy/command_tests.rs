@@ -1,6 +1,6 @@
 use super::list_commands::{edit_list, select_default};
 use super::{privacy_get, PrivacySession};
-use crate::blocking::{blocklist, BlockingMutationHost, BlockingSession};
+use crate::blocking::{BlockingMutationHost, BlockingSession};
 use crate::SessionIdentity;
 use anyhow::Result;
 use northstar_roster_application::blocking::{
@@ -135,7 +135,7 @@ impl PrivacySession for CommandSession {
         unreachable!()
     }
 
-    async fn privacy_push_change(&self, _: &str, _: &str, _: &str) -> Option<String> {
+    async fn privacy_push_change(&self, _: &RosterActor, _: &str, _: &str) -> Option<String> {
         unreachable!()
     }
 }
@@ -147,11 +147,7 @@ impl BlockingSession for CommandSession {
         &*UNUSED
     }
 
-    fn blocking_mark_requested(&self) {
-        unreachable!("stale blocklist GET must not register interest")
-    }
-
-    async fn blocking_push_change(&self, _: &str, _: &str) {
+    async fn blocking_push_change(&self, _: &RosterActor) {
         unreachable!()
     }
 
@@ -317,7 +313,7 @@ impl BlockingRepository for UnusedRepository {
 }
 
 #[tokio::test]
-async fn stale_actor_gets_not_authorized_for_privacy_commands_and_blocklist() {
+async fn stale_actor_gets_not_authorized_for_privacy_commands() {
     let session = CommandSession::new(true);
     for (kind, controls) in [
         ("get", ""),
@@ -335,12 +331,6 @@ async fn stale_actor_gets_not_authorized_for_privacy_commands_and_blocklist() {
             iq_error("p", "not-authorized")
         );
     }
-    let doc = Document::parse("<iq type='get' id='b'><blocklist xmlns='urn:xmpp:blocking'/></iq>")
-        .unwrap();
-    assert_eq!(
-        blocklist(&session, "b", doc.root_element()).await.unwrap(),
-        iq_error("b", "not-authorized")
-    );
 }
 
 #[tokio::test]

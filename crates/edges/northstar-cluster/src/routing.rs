@@ -4,6 +4,8 @@ use super::*;
 
 mod blocking_presence;
 mod policy_push;
+#[cfg(test)]
+pub(crate) use policy_push::policy_push_control;
 
 impl ClusterManager {
     pub(super) async fn touch_node(&self) -> Result<()> {

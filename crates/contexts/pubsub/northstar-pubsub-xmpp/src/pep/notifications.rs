@@ -400,8 +400,13 @@ async fn deliver_pep_replay<C: PepLastItemDelivery>(
     recipient: &str,
     expected_local_epoch: Option<C::CapsEpoch>,
 ) -> Result<()> {
+    let mut recipient_account = None;
     loop {
         let page = context.last_item_replay_page(&query).await?;
+        if recipient_account.is_some() && recipient_account != page.recipient_account_id {
+            return Ok(());
+        }
+        recipient_account = page.recipient_account_id;
         for entry in page.entries {
             let owner = canonical_account_jid(&entry.owner_username, &query.local_domain)?;
             let message = pep_last_item_message(
@@ -414,7 +419,13 @@ async fn deliver_pep_replay<C: PepLastItemDelivery>(
                 context.last_item_time_sources().new_uuid(),
             )?;
             context
-                .last_item_route(&owner, recipient, message, expected_local_epoch)
+                .last_item_route(
+                    &owner,
+                    recipient,
+                    message,
+                    expected_local_epoch,
+                    recipient_account,
+                )
                 .await?;
         }
         let Some(next) = page.next else {

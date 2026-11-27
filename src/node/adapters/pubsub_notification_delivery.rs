@@ -13,9 +13,8 @@ use uuid::Uuid;
 impl ServerNode {
     pub(crate) fn pubsub_notification_delivery(
         &self,
-    ) -> PubSubNotificationDelivery<PostgresPubSubRepository, PepLastItemsAdapters> {
+    ) -> PubSubNotificationDelivery<PepLastItemsAdapters> {
         PubSubNotificationDelivery::new(
-            self.pubsub.pubsub_service.clone(),
             LocalSessionTable::new(Arc::clone(self.session.live().sessions())),
             self.config.domain.clone(),
             self.pep_last_items_adapters(),
@@ -25,7 +24,7 @@ impl ServerNode {
 
 /// The root routes the PubSub delivery workers use.
 pub(crate) struct PubSubRootRoutes {
-    notification: PubSubNotificationDelivery<PostgresPubSubRepository, PepLastItemsAdapters>,
+    notification: PubSubNotificationDelivery<PepLastItemsAdapters>,
     pep: PepLastItemsContext<PostgresPubSubRepository, PepLastItemsAdapters>,
 }
 
@@ -93,9 +92,16 @@ impl northstar_pubsub_xmpp::delivery::PubSubDeliveryRoutes for PubSubRootRoutes 
         sender_bare_jid: &str,
         recipient: &str,
         message: String,
+        expected_recipient_account: Option<Uuid>,
     ) -> Result<()> {
         self.pep
-            .route_message(sender_bare_jid, recipient, message, None)
+            .route_message(
+                sender_bare_jid,
+                recipient,
+                message,
+                None,
+                expected_recipient_account,
+            )
             .await
     }
 }

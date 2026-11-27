@@ -9,6 +9,7 @@ use northstar_message_application::messaging::ExactMessageRoute;
 use northstar_stream::local_routes::session_table::LocalSessionTable;
 
 mod exact_control;
+mod notification;
 mod policy;
 mod roster;
 
@@ -22,6 +23,7 @@ pub(super) struct StanzaDelivery<'a> {
     direct_delivery_contract_valid: bool,
     carbons_only: bool,
     privacy_peer_kind: Option<(String, northstar_xep_0016::PrivacyStanzaKind)>,
+    pubsub_event: bool,
 }
 
 pub(super) async fn resolve_stanza_delivery<'a, A: ClusterAdapters>(
@@ -91,6 +93,9 @@ pub(super) async fn resolve_stanza_delivery<'a, A: ClusterAdapters>(
     if carbons_only && privacy_peer_kind.is_none() {
         return ListenerStep::Continue;
     }
+    let pubsub_event = parsed_stanza
+        .as_ref()
+        .is_some_and(notification::is_pubsub_event);
     let mut muc_senders = roxmltree::Document::parse(stanza)
         .ok()
         .and_then(|document| document.root_element().attribute("from").map(str::to_owned))
@@ -110,6 +115,7 @@ pub(super) async fn resolve_stanza_delivery<'a, A: ClusterAdapters>(
             direct_delivery_contract_valid,
             carbons_only,
             privacy_peer_kind,
+            pubsub_event,
         },
         muc_senders,
     ))
@@ -393,6 +399,7 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
         direct_delivery_contract_valid,
         carbons_only,
         ref privacy_peer_kind,
+        pubsub_event,
     } = *stanza_delivery;
     let DirectDeliveryOptions {
         blocklist_requested_only,
@@ -414,8 +421,22 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
         mix_unsupported,
         mix_unknown,
         mix_handoff,
+        control_processed,
         ..
     } = turn;
+    let notification_source = if !carbons_only
+        && matches!(
+            resolved_message_delivery,
+            Some(ResolvedNodeMessageDelivery::Volatile)
+        ) {
+        privacy_peer_kind.as_ref().and_then(|(peer, _)| {
+            notification::source(peer, &message_policy.local_domain, pubsub_event)
+        })
+    } else {
+        None
+    };
+    let mut notification_suppressed = false;
+    let mut notification_retry = false;
     let mut targets = dispatch.session_entries_for(target);
     targets.retain(|(jid, session)| {
         expected_connections
@@ -437,6 +458,17 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
             || (is_message_stanza && resolved_message_delivery.is_none())
         {
             break;
+        }
+        if notification_source.is_some()
+            && !delivery_user_identity_matches(
+                expected_user_id,
+                expected_auth_generation,
+                session.user_id,
+                session.auth_generation,
+            )
+        {
+            notification_suppressed = true;
+            continue;
         }
         if exclude_jids.contains(&jid)
             || (is_message_stanza
@@ -512,6 +544,25 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
                 message_policy.record_online_queue_acceptance(false);
                 *delivered += 1;
                 accepted_full_jid.get_or_insert(jid);
+            }
+            continue;
+        }
+        if let Some(source) = notification_source {
+            use northstar_roster_application::notification_admission::NotificationHandoff;
+
+            match notification::handoff(message_policy, dispatch, &jid, &session, source, stanza)
+                .await
+            {
+                NotificationHandoff::Accepted => {
+                    message_policy.record_online_queue_acceptance(false);
+                    *delivered += 1;
+                    accepted_full_jid.get_or_insert(jid);
+                    if primary_one_to_one {
+                        break;
+                    }
+                }
+                NotificationHandoff::Suppressed => notification_suppressed = true,
+                NotificationHandoff::Retry => notification_retry = true,
             }
             continue;
         }
@@ -604,6 +655,11 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
                 break;
             }
         }
+    }
+    if notification_suppressed && !notification_retry && *delivered == 0 {
+        // Use the existing correlated acknowledgement for a terminal policy
+        // result, leaving its delivered count reserved for queue acceptance.
+        *control_processed = Some(true);
     }
 }
 

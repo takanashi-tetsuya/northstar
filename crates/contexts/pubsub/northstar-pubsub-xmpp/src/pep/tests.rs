@@ -100,6 +100,7 @@ async fn pep_replay_modes_keep_exact_message_bytes_and_route_epochs() {
                     let next = PepReplayCursor::Explicit(uuid::Uuid::nil());
                     if query.after.is_none() {
                         return Ok(PepReplayPage {
+                            recipient_account_id: None,
                             entries: Vec::new(),
                             next: Some(next),
                             scanned: 100,
@@ -123,6 +124,7 @@ async fn pep_replay_modes_keep_exact_message_bytes_and_route_epochs() {
                 PepReplayMode::AfterSubscribe { .. } => panic!("unexpected direct replay"),
             };
             Ok(PepReplayPage {
+                recipient_account_id: None,
                 entries: vec![PepReplayEntry {
                     owner_id: uuid::Uuid::from_u128(1),
                     owner_username: "owner".to_owned(),
@@ -157,6 +159,7 @@ async fn pep_replay_modes_keep_exact_message_bytes_and_route_epochs() {
             recipient: &str,
             message: String,
             epoch: Option<u64>,
+            _: Option<uuid::Uuid>,
         ) -> Result<()> {
             assert_eq!(sender_bare_jid, OWNER);
             self.routed

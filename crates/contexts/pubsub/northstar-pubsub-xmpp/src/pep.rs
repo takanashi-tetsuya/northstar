@@ -134,6 +134,7 @@ pub trait PepLastItemDelivery: Sync {
         recipient: &str,
         message: String,
         expected_local_epoch: Option<Self::CapsEpoch>,
+        expected_recipient_account: Option<uuid::Uuid>,
     ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
 }
 

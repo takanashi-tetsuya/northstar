@@ -7,6 +7,8 @@ use uuid::Uuid;
 pub struct PresenceReplayQuery {
     pub recipient: PubSubAddress,
     pub recipient_id: Uuid,
+    pub expected_auth_generation: Option<i64>,
+    pub connection_id: Uuid,
     pub active_privacy_list: Option<String>,
     pub service: PubSubBareJid,
     pub show: String,

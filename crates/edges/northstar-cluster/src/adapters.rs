@@ -59,6 +59,8 @@ pub trait ClusterAdapters: Send + Sync + 'static {
     type Mix: MixRepository + 'static;
     type SmTeardownMuc: SmTeardownMucRepository + 'static;
     type Message: MessageRepository + 'static;
+    type Notification: northstar_roster_application::notification_admission::NotificationAdmission
+        + 'static;
     type DirectSpoolWake: DirectSpoolWakeRepository + 'static;
     type Presence: PresenceRepository + 'static;
     type Federation: FederationRoute + Clone;

@@ -17,6 +17,7 @@ pub(crate) const PRESENCE_REPLAY_PAGE_LIMIT: usize = 100;
 #[derive(Clone, Debug)]
 pub struct PresenceReplayAdmissionRequest {
     pub recipient_id: Uuid,
+    pub expected_auth_generation: Option<i64>,
     pub active_privacy_list: Option<String>,
     pub connection_id: Uuid,
     pub service: PubSubBareJid,
@@ -24,11 +25,12 @@ pub struct PresenceReplayAdmissionRequest {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PresenceReplayAdmissionOutcome {
+    /// The account, blocklist or selected privacy policy denies the replay.
     Blocked,
     Admitted,
 }
 
-/// Admit replay and refresh the connection's active privacy lease when applicable.
+/// Read current replay policy for the exact recipient without writing a lease.
 pub trait PresenceReplayAdmission: Send + Sync {
     fn admit_presence_replay(
         &self,

@@ -9,3 +9,5 @@ pub mod session;
 pub mod session_table;
 pub mod sm_teardown;
 pub mod suspended_muc;
+
+pub use northstar_roster_application::notification_admission;

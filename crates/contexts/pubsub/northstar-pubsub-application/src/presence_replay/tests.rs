@@ -66,6 +66,8 @@ fn service(
 
 fn query(limit: usize) -> PresenceReplayQuery {
     PresenceReplayQuery {
+        expected_auth_generation: None,
+        connection_id: Uuid::nil(),
         recipient: PubSubAddress::parse("reader@example.test/mobile").unwrap(),
         recipient_id: Uuid::nil(),
         active_privacy_list: None,

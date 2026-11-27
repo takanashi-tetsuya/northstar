@@ -59,6 +59,8 @@ pub struct PepReplayEntry {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PepReplayPage {
+    /// Incarnation of a local recipient read in the same snapshot as this page.
+    pub recipient_account_id: Option<Uuid>,
     pub entries: Vec<PepReplayEntry>,
     pub next: Option<PepReplayCursor>,
     /// Candidates examined on this page, including owners that yielded no entry.

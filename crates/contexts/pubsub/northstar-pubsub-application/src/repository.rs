@@ -308,11 +308,6 @@ pub trait PubSubOutboxRepository: Send + Sync {
         jid: &str,
     ) -> impl std::future::Future<Output = Result<Option<PubSubSubscription>>> + Send;
 
-    fn local_account_blocks_pubsub(
-        &self,
-        username: &str,
-        service: &str,
-    ) -> impl std::future::Future<Output = Result<bool>> + Send;
     fn authorize_pep_outbox_delivery(
         &self,
         item: &ClaimedPubSubOutboxDelivery,

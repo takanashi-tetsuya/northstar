@@ -10,7 +10,14 @@ use northstar_stream::local_routes::session_table::{
 use northstar_xmpp_types::jid::CanonicalJid;
 use std::sync::{atomic::Ordering, Arc};
 
-use crate::notification_delivery::PubSubNotificationPorts;
+use crate::notification_delivery::{
+    notification_recipient, notification_requires_retry, with_current_notification_route,
+    PubSubNotificationPorts,
+};
+use northstar_stream::local_routes::notification_admission::{
+    NotificationHandoff, NotificationSource,
+};
+use uuid::Uuid;
 
 /// Access to CAPS observations, session privacy, cluster routes and federation.
 pub trait PepLastItemsPorts: PubSubNotificationPorts {
@@ -100,6 +107,7 @@ impl<R, P: PepLastItemsPorts> PepLastItemsContext<R, P> {
         recipient: &str,
         message: String,
         expected_local_epoch: Option<LocalCapsEpoch>,
+        expected_recipient_account: Option<Uuid>,
     ) -> Result<()> {
         let sender_bare_jid = northstar_xmpp_types::jid::canonicalize_bare(sender_bare_jid)?;
         let recipient_jid = CanonicalJid::parse(recipient)?;
@@ -108,23 +116,30 @@ impl<R, P: PepLastItemsPorts> PepLastItemsContext<R, P> {
             let mut delivered = false;
             let recipient_key = recipient_jid.to_string();
             let targets = session_entries_for_in(&self.sessions, &recipient_key);
-            let same_account = recipient_jid.bare() == sender_bare_jid;
-            let mut policy_eligible = 0_usize;
-            for (_, target) in &targets {
+            let mut suppressed = false;
+            let mut retry = false;
+            for (jid, target) in &targets {
                 if expected_local_epoch
                     .is_some_and(|epoch| target.connection_id != epoch.connection_id)
                 {
                     continue;
                 }
-                if !same_account
-                    && !self
-                        .ports
-                        .privacy_allows_session(target, &sender_bare_jid)
-                        .await?
-                {
+                if expected_recipient_account.is_some_and(|id| target.user_id != id) {
+                    suppressed = true;
                     continue;
                 }
-                policy_eligible += 1;
+                let active = target.privacy_active_snapshot();
+                if !self
+                    .ports
+                    .authorize_notification(
+                        notification_recipient(jid, target, active.as_deref()),
+                        NotificationSource::PepPublisher(&sender_bare_jid),
+                    )
+                    .await?
+                {
+                    suppressed = true;
+                    continue;
+                }
                 if let Some(epoch) = expected_local_epoch {
                     // Policy I/O stays outside the gate; the final exact route
                     // check and nonblocking send share the current epoch.
@@ -133,15 +148,22 @@ impl<R, P: PepLastItemsPorts> PepLastItemsContext<R, P> {
                     if !self.local_epoch_is_current(&recipient_key, epoch, Some(&expected_gate)) {
                         continue;
                     }
-                    match target.sender.try_send(message.clone()) {
-                        Ok(()) => delivered = true,
-                        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    match with_current_notification_route(
+                        &self.sessions,
+                        jid,
+                        target,
+                        active.as_deref(),
+                        |current| current.sender.try_send(message.clone()),
+                    ) {
+                        None => continue,
+                        Some(Ok(())) => delivered = true,
+                        Some(Err(tokio::sync::mpsc::error::TrySendError::Full(_))) => {
                             target.sender.disconnect_backpressured_transport();
                             anyhow::bail!(
                                 "exact local PEP transport queue is full for {recipient_key}"
                             );
                         }
-                        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        Some(Err(tokio::sync::mpsc::error::TrySendError::Closed(_))) => {
                             anyhow::bail!(
                                 "exact local PEP transport queue is closed for {recipient_key}"
                             );
@@ -149,29 +171,37 @@ impl<R, P: PepLastItemsPorts> PepLastItemsContext<R, P> {
                     }
                     continue;
                 }
-                delivered |= target.sender.try_send(message.clone()).is_ok();
+                let accepted = with_current_notification_route(
+                    &self.sessions,
+                    jid,
+                    target,
+                    active.as_deref(),
+                    |current| current.sender.try_send(message.clone()).is_ok(),
+                ) == Some(true);
+                delivered |= accepted;
+                retry |= !accepted;
             }
-            let mut remote_nodes = 0_usize;
             if !delivered && expected_local_epoch.is_none() {
                 for node_id in self.ports.remote_nodes(recipient).await? {
-                    remote_nodes += 1;
-                    if self
+                    match self
                         .ports
-                        .send_pubsub_notification(&node_id, recipient, &message)
+                        .send_pubsub_notification(
+                            &node_id,
+                            recipient,
+                            &message,
+                            expected_recipient_account,
+                        )
                         .await?
                     {
-                        delivered = true;
-                        break;
+                        NotificationHandoff::Accepted => return Ok(()),
+                        NotificationHandoff::Suppressed => suppressed = true,
+                        NotificationHandoff::Retry => retry = true,
                     }
                 }
             }
-            if !delivered {
-                if expected_local_epoch.is_some() {
-                    return Ok(());
-                }
-                if remote_nodes == 0 && !targets.is_empty() && policy_eligible == 0 {
-                    return Ok(());
-                }
+            if expected_local_epoch.is_none()
+                && notification_requires_retry(delivered, suppressed, retry)
+            {
                 anyhow::bail!("no local PEP resource accepted the notification");
             }
         } else if self.federation_domain_allowed(domain) {
@@ -212,8 +242,15 @@ impl<R: crate::PubSubRepositories, P: PepLastItemsPorts> crate::pep::PepLastItem
         recipient: &str,
         message: String,
         expected_local_epoch: Option<LocalCapsEpoch>,
+        expected_recipient_account: Option<Uuid>,
     ) -> Result<()> {
-        self.route_message(sender_bare_jid, recipient, message, expected_local_epoch)
-            .await
+        self.route_message(
+            sender_bare_jid,
+            recipient,
+            message,
+            expected_local_epoch,
+            expected_recipient_account,
+        )
+        .await
     }
 }

@@ -10,6 +10,7 @@ pub use northstar_roster_core::*;
 pub mod blocking;
 pub mod communication_policy;
 mod events;
+pub mod notification_admission;
 pub mod presence;
 pub mod privacy;
 pub mod repository;

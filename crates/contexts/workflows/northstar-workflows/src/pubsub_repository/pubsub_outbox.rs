@@ -49,18 +49,6 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
         outcome.map_err(map_database_busy)
     }
 
-    async fn local_account_blocks_pubsub(&self, username: &str, service: &str) -> Result<bool> {
-        let outcome: Result<_> = async {
-            let Some(user) =
-                northstar_auth_postgres::users::find_enabled_user(&self.pool, username).await?
-            else {
-                return Ok(false);
-            };
-            northstar_roster_postgres::roster::is_blocked(&self.pool, user.id, service).await
-        }
-        .await;
-        outcome.map_err(map_database_busy)
-    }
     async fn authorize_pep_outbox_delivery(
         &self,
         item: &ClaimedPubSubOutboxDelivery,
@@ -254,39 +242,27 @@ impl PubSubOutboxRepository for PostgresPubSubRepository {
             }
 
             if !same_account
-                && northstar_roster_postgres::privacy::privacy_denies_in_transaction(
+                && (active_notification_selection(
                     &mut transaction,
                     subject.sender_account_id,
                     subject.sender_connection_id,
-                    &item.recipient_jid,
-                    northstar_xep_0016::PrivacyStanzaKind::Message,
                 )
                 .await?
+                .is_some_and(|(_, live)| !live)
+                    || northstar_roster_postgres::privacy::privacy_denies_in_transaction(
+                        &mut transaction,
+                        subject.sender_account_id,
+                        subject.sender_connection_id,
+                        &item.recipient_jid,
+                        northstar_xep_0016::PrivacyStanzaKind::Message,
+                    )
+                    .await?)
             {
                 transaction.rollback().await?;
                 return Ok(PepOutboxAuthorizationOutcome::Drop(
                     PepOutboxDropReason::PrivacyDenied,
                 ));
             }
-            if !same_account {
-                if let Some(recipient_id) = subject.recipient_account_id {
-                    if northstar_roster_postgres::privacy::privacy_denies_in_transaction(
-                        &mut transaction,
-                        recipient_id,
-                        None,
-                        &subject.sender_bare_jid,
-                        northstar_xep_0016::PrivacyStanzaKind::Message,
-                    )
-                    .await?
-                    {
-                        transaction.rollback().await?;
-                        return Ok(PepOutboxAuthorizationOutcome::Drop(
-                            PepOutboxDropReason::PrivacyDenied,
-                        ));
-                    }
-                }
-            }
-
             if lock_plan == PepOutboxAuthorizationLockPlan::AudienceThenBlockPolicy {
                 let policy = sqlx::query(
                 "SELECT access_model,deliver_notifications,roster_groups_allowed,access_whitelist

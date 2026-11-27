@@ -107,6 +107,7 @@ impl DirectDeliveryFixture {
                 local_domain: "example.test".into(),
                 presence: PresenceService::new(UnusedPorts),
                 message: MessageService::new(message_ports.clone(), false),
+                notification: UnusedPorts,
                 mix: MixService::new(
                     UnusedPorts,
                     MixMessageContentKeyring::new(Arc::clone(&generations)),

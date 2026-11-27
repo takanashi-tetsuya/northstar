@@ -44,6 +44,7 @@ impl ClusterAdapters for Adapters {
     type Mix = UnusedPorts;
     type SmTeardownMuc = UnusedPorts;
     type Message = MessagePorts;
+    type Notification = UnusedPorts;
     type DirectSpoolWake = UnusedPorts;
     type Presence = UnusedPorts;
     type Federation = UnusedPorts;

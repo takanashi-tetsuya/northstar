@@ -39,6 +39,7 @@ impl northstar_cluster::ClusterAdapters for PostgresClusterAdapters {
     type SmTeardownMuc =
         northstar_workflows::sm_teardown_muc_repository::PostgresSmTeardownMucRepository;
     type Message = northstar_workflows::message_repository::PostgresMessageRepository;
+    type Notification = northstar_workflows::pubsub_repository::PostgresPubSubRepository;
     type DirectSpoolWake =
         northstar_message_postgres::direct_spool_wake::PostgresDirectSpoolWakeRepository;
     type Presence = northstar_workflows::presence_repository::PostgresPresenceRepository;

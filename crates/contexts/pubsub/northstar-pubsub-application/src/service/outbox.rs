@@ -66,11 +66,6 @@ impl<R: PubSubOutboxRepository> PubSubService<R> {
 }
 
 impl<R: PubSubOutboxRepository> PubSubService<R> {
-    pub async fn local_account_blocks_pubsub(&self, username: &str, service: &str) -> Result<bool> {
-        self.repository
-            .local_account_blocks_pubsub(username, service)
-            .await
-    }
     pub async fn authorize_pep_outbox_delivery(
         &self,
         item: &ClaimedPubSubOutboxDelivery,

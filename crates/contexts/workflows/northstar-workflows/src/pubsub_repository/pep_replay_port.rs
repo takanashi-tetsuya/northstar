@@ -27,7 +27,19 @@ impl PepReplayQueryRepository for PostgresPubSubRepository {
         }
         let result = async {
             let mut tx = begin_pep_snapshot(&self.pool).await?;
-            let page = if let PepReplayMode::AfterSubscribe { owner, node, .. } = &query.mode {
+            let recipient = query.requester.canonical();
+            let recipient_account_id = if recipient.domainpart() == self.domain {
+                let Some(username) = recipient.localpart() else {
+                    return Ok(PepReplayPage::default());
+                };
+                let Some(account) = find_enabled_user(&mut *tx, username).await? else {
+                    return Ok(PepReplayPage::default());
+                };
+                Some(account.id)
+            } else {
+                None
+            };
+            let mut page = if let PepReplayMode::AfterSubscribe { owner, node, .. } = &query.mode {
                 ensure!(
                     query.after.is_none(),
                     "direct PEP replay does not take a cursor"
@@ -37,6 +49,7 @@ impl PepReplayQueryRepository for PostgresPubSubRepository {
             } else {
                 self.pep_replay_presence_page(&mut tx, query).await?
             };
+            page.recipient_account_id = recipient_account_id;
             tx.commit().await?;
             Ok(page)
         }
@@ -149,8 +162,8 @@ impl PostgresPubSubRepository {
         let entry = read_entry(tx, &owner, &requester, &query.mode, node, has_explicit).await?;
         Ok(PepReplayPage {
             entries: entry.into_iter().collect(),
-            next: None,
             scanned: 1,
+            ..PepReplayPage::default()
         })
     }
 }

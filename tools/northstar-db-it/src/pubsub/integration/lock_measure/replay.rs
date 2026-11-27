@@ -17,7 +17,19 @@ async fn measure_presence_replay_reads() {
     let scenario = Scenario::new("presence_replay_reads", 1).await;
     let pool = &scenario.pool;
     let suffix = Uuid::new_v4().simple().to_string();
-    let requester = format!("measure-replay-reader-{suffix}@{DOMAIN}");
+    let username = format!("measure-replay-reader-{suffix}");
+    let requester = format!("{username}@{DOMAIN}");
+    let account = northstar_auth_postgres::users::create_user(
+        pool,
+        &username,
+        "Initial password for test!42",
+        false,
+        true,
+        4096,
+        false,
+    )
+    .await
+    .unwrap();
     let subscriber = format!("{requester}/desktop");
     let items = [("latest".to_owned(), "<item id='latest'/>".to_owned())];
     let pubsub = test_pubsub_service(pool.clone(), DOMAIN);
@@ -48,7 +60,9 @@ async fn measure_presence_replay_reads() {
 
     let query = PresenceReplayQuery {
         recipient: PubSubAddress::parse(&subscriber).unwrap(),
-        recipient_id: Uuid::new_v4(),
+        recipient_id: account.id,
+        expected_auth_generation: Some(account.auth_generation),
+        connection_id: Uuid::new_v4(),
         active_privacy_list: None,
         service: PubSubBareJid::parse(&format!("pubsub.{DOMAIN}")).unwrap(),
         show: "online".to_owned(),

@@ -16,6 +16,10 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
+mod policy;
+use self::policy::OwnerPrivacyPolicy;
+use crate::pubsub_repository::{active_notification_selection, PEP_AUDIENCE_ROSTER_SQL};
+
 pub struct PostgresProfileRepository {
     pool: PgPool,
     domain: String,
@@ -57,18 +61,12 @@ impl PostgresProfileRepository {
         );
 
         // Existing roster rows are locked so unsubscribe/removal cannot commit
-        // between authorization and the outbox projection. A newly-added row
-        // is intentionally absent from this event-time snapshot.
-        let roster_rows = sqlx::query(
-            "SELECT contact_jid,subscription,groups
-               FROM roster_items
-              WHERE owner_id=$1 AND subscription IN ('from','both')
-              ORDER BY contact_jid
-              FOR SHARE",
-        )
-        .bind(user_id)
-        .fetch_all(&mut **transaction)
-        .await?;
+        // between authorization and the outbox projection. Explicit
+        // subscribers can carry privacy groups in any subscription state.
+        let roster_rows = sqlx::query(PEP_AUDIENCE_ROSTER_SQL)
+            .bind(user_id)
+            .fetch_all(&mut **transaction)
+            .await?;
         let mut roster = HashMap::with_capacity(roster_rows.len());
         for row in roster_rows {
             let jid: String = row.try_get("contact_jid")?;
@@ -107,7 +105,9 @@ impl PostgresProfileRepository {
         // cannot interleave with the snapshot and concurrent profile fan-out
         // cannot introduce a lock cycle.
         let mut localparts = roster
-            .keys()
+            .iter()
+            .filter(|(_, entry)| entry.qualifies_for_implicit_delivery())
+            .map(|(jid, _)| jid)
             .chain(explicit.iter())
             .filter_map(|jid| northstar_xmpp_types::jid::CanonicalJid::parse(jid).ok())
             .filter(|jid| jid.domainpart() == self.domain)
@@ -183,14 +183,12 @@ impl PostgresProfileRepository {
             if !profile_access_allowed(&policy, &bare, roster_entry)? {
                 return Ok(false);
             }
-            Ok(!privacy
-                .as_ref()
-                .is_some_and(|privacy| privacy_denies_message(privacy, jid, roster_entry)))
+            Ok(!privacy_denies_message(&privacy, jid, roster_entry))
         };
 
         let mut roster_jids = Vec::new();
         for (jid, entry) in &roster {
-            if authorized(jid, Some(entry))? {
+            if entry.qualifies_for_implicit_delivery() && authorized(jid, Some(entry))? {
                 roster_jids.push(jid.clone());
             }
         }
@@ -595,25 +593,17 @@ struct RosterAudienceEntry {
     groups: Vec<String>,
 }
 
+impl RosterAudienceEntry {
+    fn qualifies_for_implicit_delivery(&self) -> bool {
+        matches!(self.subscription.as_str(), "from" | "both")
+    }
+}
+
 struct StoredProfileNodePolicy {
     access_model: String,
     roster_groups_allowed: Vec<String>,
     access_whitelist: Vec<String>,
     deliver_notifications: bool,
-}
-
-struct StoredPrivacyPolicy {
-    items: Vec<StoredPrivacyItem>,
-}
-
-struct StoredPrivacyItem {
-    deny: bool,
-    match_type: Option<String>,
-    match_value: Option<String>,
-    message: bool,
-    iq: bool,
-    presence_in: bool,
-    presence_out: bool,
 }
 
 struct AvatarProjection {
@@ -846,31 +836,24 @@ async fn owner_privacy_policy(
     transaction: &mut Transaction<'_, Postgres>,
     owner_id: Uuid,
     connection_id: Uuid,
-) -> Result<Option<StoredPrivacyPolicy>> {
-    let active = sqlx::query_scalar::<_, String>(
-        "SELECT list_name FROM privacy_active_sessions
-          WHERE owner_id=$1 AND connection_id=$2 AND expires_at>NOW()
-          FOR SHARE",
-    )
-    .bind(owner_id)
-    .bind(connection_id)
-    .fetch_optional(&mut **transaction)
-    .await?;
-    let selected = match active {
-        Some(active) => Some(active),
-        None => {
-            sqlx::query_scalar::<_, String>(
-                "SELECT list_name FROM privacy_default_lists
+) -> Result<OwnerPrivacyPolicy> {
+    let selected =
+        match active_notification_selection(transaction, owner_id, Some(connection_id)).await? {
+            Some((_, false)) => return Ok(OwnerPrivacyPolicy::Unavailable),
+            Some((active, true)) => Some(active),
+            None => {
+                sqlx::query_scalar::<_, String>(
+                    "SELECT list_name FROM privacy_default_lists
                   WHERE owner_id=$1
                   FOR SHARE",
-            )
-            .bind(owner_id)
-            .fetch_optional(&mut **transaction)
-            .await?
-        }
-    };
+                )
+                .bind(owner_id)
+                .fetch_optional(&mut **transaction)
+                .await?
+            }
+        };
     let Some(selected) = selected else {
-        return Ok(None);
+        return Ok(OwnerPrivacyPolicy::Unselected);
     };
     let exists = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM privacy_lists WHERE owner_id=$1 AND name=$2)",
@@ -879,9 +862,11 @@ async fn owner_privacy_policy(
     .bind(&selected)
     .fetch_one(&mut **transaction)
     .await?;
-    anyhow::ensure!(exists, "selected profile privacy list is missing");
+    if !exists {
+        return Ok(OwnerPrivacyPolicy::Unavailable);
+    }
     let rows = sqlx::query(
-        "SELECT action,match_type,match_value,filter_message,filter_iq,
+        "SELECT item_order,action,match_type,match_value,filter_message,filter_iq,
                 filter_presence_in,filter_presence_out
            FROM privacy_list_items
           WHERE owner_id=$1 AND list_name=$2
@@ -892,36 +877,7 @@ async fn owner_privacy_policy(
     .bind(&selected)
     .fetch_all(&mut **transaction)
     .await?;
-    let mut items = Vec::with_capacity(rows.len());
-    for row in rows {
-        let action: String = row.try_get("action")?;
-        anyhow::ensure!(
-            matches!(action.as_str(), "allow" | "deny"),
-            "invalid privacy action"
-        );
-        let match_type: Option<String> = row.try_get("match_type")?;
-        anyhow::ensure!(
-            match_type
-                .as_deref()
-                .is_none_or(|kind| matches!(kind, "jid" | "group" | "subscription")),
-            "invalid privacy match type"
-        );
-        let match_value: Option<String> = row.try_get("match_value")?;
-        anyhow::ensure!(
-            match_type.is_some() == match_value.is_some(),
-            "incomplete privacy matcher"
-        );
-        items.push(StoredPrivacyItem {
-            deny: action == "deny",
-            match_type,
-            match_value,
-            message: row.try_get("filter_message")?,
-            iq: row.try_get("filter_iq")?,
-            presence_in: row.try_get("filter_presence_in")?,
-            presence_out: row.try_get("filter_presence_out")?,
-        });
-    }
-    Ok(Some(StoredPrivacyPolicy { items }))
+    policy::decode_list(selected, &rows)
 }
 
 fn profile_access_allowed(
@@ -931,11 +887,9 @@ fn profile_access_allowed(
 ) -> Result<bool> {
     match policy.access_model.as_str() {
         "open" => Ok(true),
-        "presence" => {
-            Ok(roster.is_some_and(|entry| matches!(entry.subscription.as_str(), "from" | "both")))
-        }
+        "presence" => Ok(roster.is_some_and(RosterAudienceEntry::qualifies_for_implicit_delivery)),
         "roster" => Ok(roster.is_some_and(|entry| {
-            matches!(entry.subscription.as_str(), "from" | "both")
+            entry.qualifies_for_implicit_delivery()
                 && entry.groups.iter().any(|group| {
                     policy
                         .roster_groups_allowed
@@ -962,33 +916,11 @@ fn blocked_by_any(patterns: &[String], candidate: &str) -> bool {
 }
 
 fn privacy_denies_message(
-    policy: &StoredPrivacyPolicy,
+    policy: &OwnerPrivacyPolicy,
     candidate: &str,
     roster: Option<&RosterAudienceEntry>,
 ) -> bool {
-    for item in &policy.items {
-        let has_filter = item.message || item.iq || item.presence_in || item.presence_out;
-        if has_filter && !item.message {
-            continue;
-        }
-        let entity_matches = match (item.match_type.as_deref(), item.match_value.as_deref()) {
-            (None, None) => true,
-            (Some("jid"), Some(value)) => {
-                northstar_roster_postgres::roster::blocked_jid_matches(value, candidate)
-            }
-            (Some("group"), Some(value)) => {
-                roster.is_some_and(|entry| entry.groups.iter().any(|group| group == value))
-            }
-            (Some("subscription"), Some(value)) => {
-                roster.map_or(value == "none", |entry| entry.subscription == value)
-            }
-            _ => false,
-        };
-        if entity_matches {
-            return item.deny;
-        }
-    }
-    false
+    policy.denies_message(candidate, roster)
 }
 
 #[allow(clippy::too_many_arguments)]

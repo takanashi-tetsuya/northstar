@@ -13,6 +13,10 @@ impl ServerNode {
             local_domain: self.config.domain.clone(),
             presence: self.roster.presence_service.clone(),
             message: self.message.message_service.clone(),
+            notification: northstar_workflows::pubsub_repository::PostgresPubSubRepository::new(
+                self.pool.clone(),
+                &self.config.domain,
+            ),
             mix: self.room.mix_service.clone(),
             verifier: northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier::new(
                 northstar_session_postgres::node_message_projection_repository::PostgresNodeMessageProjectionRepository::new(

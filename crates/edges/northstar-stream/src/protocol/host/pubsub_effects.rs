@@ -20,6 +20,7 @@ pub trait SessionPubSubEffectsHost: Send + Sync + 'static {
         self: Arc<Self>,
         outbound: crate::outbound::OutboundSender,
         recipient_id: uuid::Uuid,
+        auth_generation: i64,
         active_privacy_list: Option<String>,
         connection_id: uuid::Uuid,
         recipient: String,

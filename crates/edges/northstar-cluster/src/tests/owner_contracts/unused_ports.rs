@@ -1080,6 +1080,7 @@ mod sm {
     }
 }
 
+mod notification;
 mod pam_projection_repository;
 mod prepared_message_history;
 #[cfg(test)]

@@ -259,11 +259,30 @@ impl ClusterNodeDelivery {
         node_id: &str,
         target_jid: &str,
         stanza: &str,
-    ) -> Result<bool> {
-        Ok(self
-            .send_to_node_receipt(node_id, target_jid, stanza, NodeDeliveryOptions::default())
-            .await?
-            .delivered)
+        expected_account: Option<uuid::Uuid>,
+    ) -> Result<northstar_roster_application::notification_admission::NotificationHandoff> {
+        use northstar_roster_application::notification_admission::NotificationHandoff;
+
+        let mut suppressed = false;
+        let receipt = self
+            .send_to_node_with_suppression(
+                node_id,
+                target_jid,
+                stanza,
+                NodeDeliveryOptions {
+                    expected_user_id: expected_account,
+                    ..NodeDeliveryOptions::default()
+                },
+                Some(&mut suppressed),
+            )
+            .await?;
+        Ok(if receipt.delivered {
+            NotificationHandoff::Accepted
+        } else if suppressed {
+            NotificationHandoff::Suppressed
+        } else {
+            NotificationHandoff::Retry
+        })
     }
 
     pub(super) fn key(&self, suffix: String) -> String {
@@ -315,6 +334,18 @@ impl ClusterNodeDelivery {
         target_jid: &str,
         stanza: &str,
         options: NodeDeliveryOptions<'_>,
+    ) -> Result<NodeDeliveryReceipt> {
+        self.send_to_node_with_suppression(node_id, target_jid, stanza, options, None)
+            .await
+    }
+
+    async fn send_to_node_with_suppression(
+        &self,
+        node_id: &str,
+        target_jid: &str,
+        stanza: &str,
+        options: NodeDeliveryOptions<'_>,
+        suppressed: Option<&mut bool>,
     ) -> Result<NodeDeliveryReceipt> {
         if options.exact_control.is_some() {
             anyhow::ensure!(
@@ -625,6 +656,9 @@ impl ClusterNodeDelivery {
                                 .is_some_and(|jid| routes.contains_key(jid))
                         })
                 }) {
+                    if let Some(suppressed) = suppressed {
+                        *suppressed = ack.control_processed == Some(true);
+                    }
                     return Ok(if options.carbons_only && exact_message_version {
                         crate::message_routing::carbons::exact_carbon_receipt(&ack, receipt)
                     } else {

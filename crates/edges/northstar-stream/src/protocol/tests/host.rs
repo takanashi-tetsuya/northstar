@@ -747,6 +747,7 @@ mod host_ports {
             self: Arc<Self>,
             _outbound: crate::outbound::OutboundSender,
             _recipient_id: uuid::Uuid,
+            _auth_generation: i64,
             _active_privacy_list: Option<String>,
             _connection_id: uuid::Uuid,
             _recipient: String,

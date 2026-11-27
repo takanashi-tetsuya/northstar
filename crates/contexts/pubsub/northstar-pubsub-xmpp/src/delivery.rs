@@ -46,6 +46,7 @@ pub trait PubSubDeliveryRoutes: Send + Sync + 'static {
         sender_bare_jid: &str,
         recipient: &str,
         message: String,
+        expected_recipient_account: Option<Uuid>,
     ) -> impl Future<Output = Result<()>> + Send;
 }
 
@@ -282,6 +283,7 @@ impl<R: PubSubOutboxRepository, N: PubSubDeliveryRoutes> PubSubEventOutboxWorker
                         &subject.sender_bare_jid,
                         &item.recipient_jid,
                         item.payload_xml.clone(),
+                        subject.recipient_account_id,
                     )
                     .await
             }
@@ -482,6 +484,7 @@ pub async fn deliver_last_items_on_presence<R>(
     service: String,
     outbound: northstar_stream::outbound::OutboundSender,
     recipient_id: uuid::Uuid,
+    auth_generation: i64,
     active_privacy_list: Option<String>,
     connection_id: uuid::Uuid,
     recipient: String,
@@ -492,14 +495,14 @@ where
 {
     let replay_recipient = PubSubAddress::parse(&recipient)?;
     let replay_service = PubSubBareJid::parse(&service)?;
-    if pubsub
-        .admit_presence_replay(PresenceReplayAdmissionRequest {
-            recipient_id,
-            active_privacy_list: active_privacy_list.clone(),
-            connection_id,
-            service: replay_service.clone(),
-        })
-        .await?
+    let request = PresenceReplayAdmissionRequest {
+        recipient_id,
+        expected_auth_generation: Some(auth_generation),
+        active_privacy_list: active_privacy_list.clone(),
+        connection_id,
+        service: replay_service.clone(),
+    };
+    if pubsub.admit_presence_replay(request.clone()).await?
         == PresenceReplayAdmissionOutcome::Blocked
     {
         return Ok(());
@@ -507,6 +510,8 @@ where
     let query = PresenceReplayQuery {
         recipient: replay_recipient,
         recipient_id,
+        expected_auth_generation: Some(auth_generation),
+        connection_id,
         active_privacy_list,
         service: replay_service,
         show: show.to_owned(),
@@ -516,6 +521,7 @@ where
     let outbound = &outbound;
     let service = service.as_str();
     let recipient = recipient.as_str();
+    let request = &request;
     pubsub
         .replay_presence_pages(
             query,
@@ -528,7 +534,22 @@ where
                     .attr("to", recipient)
                     .validated_fragment(&children)?
                     .finish();
-                Ok(outbound.send(message).await.is_ok())
+                let mut policy_error = None;
+                let sent = outbound
+                    .send_if_current(message, || true, async {
+                        match pubsub.admit_presence_replay(request.clone()).await {
+                            Ok(outcome) => outcome == PresenceReplayAdmissionOutcome::Admitted,
+                            Err(error) => {
+                                policy_error = Some(error);
+                                false
+                            }
+                        }
+                    })
+                    .await;
+                if let Some(error) = policy_error {
+                    return Err(error);
+                }
+                Ok(matches!(sent, Ok(true)))
             },
         )
         .await
@@ -672,6 +693,7 @@ mod tests {
             "pubsub.example.test".into(),
             OutboundSender::new(sender),
             Uuid::from_u128(8),
+            1,
             Some("allow".into()),
             Uuid::from_u128(9),
             "reader@example.test/mobile".into(),

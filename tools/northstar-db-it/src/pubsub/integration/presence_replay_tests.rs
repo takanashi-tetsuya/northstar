@@ -54,6 +54,8 @@ impl Fixture {
 
     fn query(&self, active_privacy_list: Option<&str>) -> PresenceReplayQuery {
         PresenceReplayQuery {
+            expected_auth_generation: None,
+            connection_id: Uuid::nil(),
             recipient: PubSubAddress::parse(&self.recipient).unwrap(),
             recipient_id: self.recipient_id,
             active_privacy_list: active_privacy_list.map(str::to_owned),
@@ -248,7 +250,10 @@ async fn presence_replay_page_succeeds_on_read_only_connections() {
 
     let pubsub = test_pubsub_service(read_pool.clone(), DOMAIN);
     let page = pubsub
-        .presence_replay_page(&fixture.query(Some("allow")))
+        .presence_replay_page(&PresenceReplayQuery {
+            connection_id,
+            ..fixture.query(Some("allow"))
+        })
         .await
         .unwrap();
     let accepted = candidates(page, 1);
@@ -380,6 +385,7 @@ async fn presence_replay_admission_refreshes_lease_only_when_not_blocked() {
     .await
     .unwrap();
     let request = PresenceReplayAdmissionRequest {
+        expected_auth_generation: None,
         recipient_id: fixture.recipient_id,
         active_privacy_list: Some("deny".into()),
         connection_id,
@@ -413,12 +419,15 @@ async fn presence_replay_admission_refreshes_lease_only_when_not_blocked() {
 
     assert_eq!(
         pubsub.admit_presence_replay(request).await.unwrap(),
-        PresenceReplayAdmissionOutcome::Admitted,
+        PresenceReplayAdmissionOutcome::Blocked,
     );
-    assert!(fixture.lease_expiry(&pool, connection_id).await > old_expiry);
+    assert_eq!(fixture.lease_expiry(&pool, connection_id).await, old_expiry);
     assert!(matches!(
         pubsub
-            .presence_replay_page(&fixture.query(Some("deny")))
+            .presence_replay_page(&PresenceReplayQuery {
+                connection_id,
+                ..fixture.query(Some("deny"))
+            })
             .await
             .unwrap(),
         PresenceReplayPage::Denied

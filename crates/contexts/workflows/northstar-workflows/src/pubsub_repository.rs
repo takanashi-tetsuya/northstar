@@ -36,6 +36,7 @@ use uuid::Uuid;
 
 mod discovery_snapshot_port;
 mod item_snapshot_port;
+mod notification_admission;
 mod owner_preflight_port;
 mod pep_ports;
 mod pep_replay_port;
@@ -44,7 +45,14 @@ mod presence_replay_port;
 mod pubsub_outbox;
 mod pubsub_ports;
 
+pub(super) use notification_admission::active_notification_selection;
+
 const BOOKMARKS2: &str = "urn:xmpp:bookmarks:1";
+pub(super) const PEP_AUDIENCE_ROSTER_SQL: &str = "SELECT contact_jid,subscription,groups
+               FROM roster_items
+              WHERE owner_id=$1
+              ORDER BY contact_jid
+              FOR SHARE";
 
 struct PepBookmarkReplacementOutbox<'a> {
     factory: &'a dyn PepOutboxFactory,
@@ -371,16 +379,10 @@ impl PostgresPubSubRepository {
         // The owner users row is held FOR SHARE by the caller. Production
         // roster mutations take it FOR UPDATE, so rows and groups below cannot
         // change until this event has been projected.
-        let roster_rows = sqlx::query(
-            "SELECT contact_jid,subscription,groups
-               FROM roster_items
-              WHERE owner_id=$1
-              ORDER BY contact_jid
-              FOR SHARE",
-        )
-        .bind(owner_id)
-        .fetch_all(&mut **transaction)
-        .await?;
+        let roster_rows = sqlx::query(PEP_AUDIENCE_ROSTER_SQL)
+            .bind(owner_id)
+            .fetch_all(&mut **transaction)
+            .await?;
         let mut roster = BTreeMap::new();
         for row in roster_rows {
             let jid = northstar_xmpp_types::jid::canonicalize_bare(

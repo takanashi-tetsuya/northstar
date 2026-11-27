@@ -452,11 +452,11 @@ impl<H: SessionHost + PubSubHost> PubSubHandlers for ProtocolSession<H> {
             return Ok(Action::None);
         }
         let requester_full = northstar_xmpp_types::jid::canonicalize(from)?;
-        let requester_id = self
+        let requester = self
             .authenticated
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("PubSub presence requires an authenticated account"))?
-            .id;
+            .ok_or_else(|| anyhow::anyhow!("PubSub presence requires an authenticated account"))?;
+        let (requester_id, auth_generation) = (requester.id, requester.auth_generation);
         let active_privacy_list = self
             .privacy_active
             .read()
@@ -477,6 +477,7 @@ impl<H: SessionHost + PubSubHost> PubSubHandlers for ProtocolSession<H> {
                 state,
                 outbound,
                 requester_id,
+                auth_generation,
                 active_privacy_list,
                 connection_id,
                 requester_full,

@@ -9,6 +9,7 @@ pub struct ClusterListenerMessagePolicy<A: ClusterAdapters> {
     pub local_domain: String,
     pub presence: northstar_roster_application::presence::PresenceService<A::Presence>,
     pub message: northstar_message_application::messaging::MessageService<A::Message>,
+    pub notification: A::Notification,
     pub mix: northstar_room_application::mix_service::MixService<A::Mix>,
     pub verifier:
         northstar_session_application::node_message_contract_verifier::NodeMessageContractVerifier<

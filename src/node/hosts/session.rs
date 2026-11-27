@@ -766,10 +766,12 @@ impl SessionPubSubEffectsHost for ServerNode {
         ClientSession::pubsub_authorization_response_unless_busy(session, root).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn replay_pubsub_last_items(
         self: Arc<Self>,
         outbound: northstar_stream::outbound::OutboundSender,
         recipient_id: uuid::Uuid,
+        auth_generation: i64,
         active_privacy_list: Option<String>,
         connection_id: uuid::Uuid,
         recipient: String,
@@ -780,6 +782,7 @@ impl SessionPubSubEffectsHost for ServerNode {
             northstar_pubsub_xmpp::pubsub::pubsub_domain(self.as_ref()),
             outbound,
             recipient_id,
+            auth_generation,
             active_privacy_list,
             connection_id,
             recipient,

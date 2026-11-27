@@ -14,6 +14,26 @@ pub use self::persistence::*;
 
 const U32_MODULUS: i64 = 4_294_967_296;
 
+pub(crate) async fn sm_exact_owner_state(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: Uuid,
+    connection_id: Uuid,
+    user_id: Uuid,
+    auth_generation: i64,
+) -> Result<String> {
+    Ok(
+        sqlx::query_scalar("SELECT northstar_sm_exact_owner_state($1,$2,$3,$4)")
+            .bind(id)
+            .bind(connection_id)
+            .bind(user_id)
+            .bind(auth_generation)
+            .fetch_one(&mut **transaction)
+            .await?,
+    )
+}
+
+pub(crate) use persistence::update_snapshot as update_privacy_selection_snapshot;
+
 pub use northstar_session_core::SmMucMembership;
 
 #[derive(Clone, Debug)]
@@ -519,14 +539,14 @@ pub async fn suspend_activated_sm_resume_exact(
     validate_snapshot(snapshot, max_stanzas, max_bytes)?;
     let ttl = seconds_i64(ttl_seconds, "SM resume TTL")?;
     let mut transaction = pool.begin().await?;
-    let exact_owner: String =
-        sqlx::query_scalar("SELECT northstar_sm_exact_owner_state($1,$2,$3,$4)")
-            .bind(id)
-            .bind(connection_id)
-            .bind(user_id)
-            .bind(expected_auth_generation)
-            .fetch_one(&mut *transaction)
-            .await?;
+    let exact_owner = sm_exact_owner_state(
+        &mut transaction,
+        id,
+        connection_id,
+        user_id,
+        expected_auth_generation,
+    )
+    .await?;
     if exact_owner == "missing" {
         transaction.rollback().await?;
         return Ok(false);
@@ -553,13 +573,11 @@ pub async fn suspend_activated_sm_resume_exact(
         .await?,
         "exact SM suspension lost its deployment capacity lease"
     );
-    sqlx::query(
-        "DELETE FROM privacy_active_sessions
-          WHERE owner_id=$1 AND connection_id=$2",
+    northstar_roster_postgres::privacy::clear_active_privacy_session(
+        &mut *transaction,
+        user_id,
+        connection_id,
     )
-    .bind(user_id)
-    .bind(connection_id)
-    .execute(&mut *transaction)
     .await?;
     replace_queue(&mut transaction, id, &snapshot.unacked, &[]).await?;
     transaction.commit().await?;

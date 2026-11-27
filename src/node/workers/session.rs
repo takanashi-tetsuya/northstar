@@ -76,21 +76,22 @@ impl CapacityMaintenanceRepository for CapacityAndPrivacyLeases {
         connection_ids: &[Uuid],
         lease_seconds: u64,
     ) -> anyhow::Result<HashSet<Uuid>> {
-        let live = self
-            .capacity
-            .renew_live_connections(connection_ids, lease_seconds)
-            .await?;
-        if !live.is_empty() {
-            let live_ids = live.iter().copied().collect::<Vec<_>>();
-            northstar_roster_postgres::privacy::renew_active_privacy_selection(
-                &self.pool, &live_ids,
-            )
-            .await?;
-        }
-        Ok(live)
+        northstar_workflows::sm_repository::renew_capacity_and_privacy_leases(
+            &self.pool,
+            connection_ids,
+            lease_seconds,
+        )
+        .await
     }
 
     async fn try_reap_expired(&self, limit: i64) -> anyhow::Result<Option<u64>> {
-        self.capacity.try_reap_expired(limit).await
+        let capacity = self.capacity.try_reap_expired(limit).await?;
+        if capacity.is_some() {
+            northstar_roster_postgres::privacy::reap_expired_active_privacy_selections(
+                &self.pool, limit,
+            )
+            .await?;
+        }
+        Ok(capacity)
     }
 }

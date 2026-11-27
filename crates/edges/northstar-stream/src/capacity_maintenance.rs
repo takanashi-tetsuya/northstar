@@ -64,7 +64,11 @@ impl<R: CapacityMaintenanceRepository> CapacityLeaseRenewalContext<R> {
         let local = self
             .sessions
             .iter()
-            .filter(|session| session.routable.load(Ordering::Acquire))
+            .filter(|session| {
+                session.routable.load(Ordering::Acquire)
+                    && session.lifecycle.load(Ordering::Acquire) == 0
+                    && !session.disconnect.is_cancelled()
+            })
             .map(|session| (session.connection_id, session.disconnect.clone()))
             .collect::<Vec<_>>();
         // An idle node owns no lease to renew. The elected reaper handles
@@ -168,5 +172,7 @@ pub async fn serve_reaper<R: CapacityMaintenanceRepository>(
     }
 }
 
+#[cfg(test)]
+mod privacy_lease_tests;
 #[cfg(test)]
 pub(crate) mod tests;

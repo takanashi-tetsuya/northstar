@@ -133,10 +133,29 @@ pub async fn remove_privacy_list(
     let outcome = remove_list_in_transaction(&mut tx, owner_id, name).await?;
     if outcome == RemovePrivacyListOutcome::Conflict {
         tx.rollback().await?;
-    } else {
-        tx.commit().await?;
+        return Ok(outcome);
     }
-    Ok(outcome)
+    Ok(if commit_list_removal(tx).await? {
+        outcome
+    } else {
+        RemovePrivacyListOutcome::Conflict
+    })
+}
+
+/// A suspended SM session can still name the list through the deferred
+/// resume foreign key, which reports only at commit.
+pub(super) async fn commit_list_removal(tx: Transaction<'_, Postgres>) -> Result<bool> {
+    match tx.commit().await {
+        Ok(()) => Ok(true),
+        Err(error)
+            if error.as_database_error().is_some_and(|database| {
+                database.constraint() == Some("sm_resume_active_privacy_fk")
+            }) =>
+        {
+            Ok(false)
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 pub(super) async fn remove_list_in_transaction(
@@ -144,13 +163,22 @@ pub(super) async fn remove_list_in_transaction(
     owner_id: Uuid,
     name: &str,
 ) -> Result<RemovePrivacyListOutcome> {
-    sqlx::query("DELETE FROM privacy_active_sessions WHERE owner_id=$1 AND expires_at<=NOW()")
-        .bind(owner_id)
-        .execute(&mut **tx)
-        .await?;
+    sqlx::query(
+        "WITH expired AS MATERIALIZED (
+             SELECT connection_id FROM privacy_active_sessions
+              WHERE owner_id=$1 AND expires_at<=clock_timestamp()
+              ORDER BY connection_id FOR UPDATE
+         )
+         DELETE FROM privacy_active_sessions AS active USING expired
+          WHERE active.owner_id=$1 AND active.connection_id=expired.connection_id
+            AND active.expires_at<=clock_timestamp()",
+    )
+    .bind(owner_id)
+    .execute(&mut **tx)
+    .await?;
     let conflict: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM privacy_default_lists WHERE owner_id=$1 AND list_name=$2) \
-         OR EXISTS(SELECT 1 FROM privacy_active_sessions WHERE owner_id=$1 AND list_name=$2 AND expires_at>NOW()) \
+         OR EXISTS(SELECT 1 FROM privacy_active_sessions WHERE owner_id=$1 AND list_name=$2) \
          OR northstar_sm_privacy_list_in_use($1,$2)",
     )
     .bind(owner_id)

@@ -6,8 +6,9 @@ mod list_commands;
 mod query;
 
 pub use active_selection::{
-    clear_active_privacy_session, refresh_active_privacy_session, renew_active_privacy_selection,
-    set_active_privacy_list, set_active_privacy_list_in_transaction,
+    clear_active_privacy_session, reap_expired_active_privacy_selections,
+    refresh_active_privacy_session, renew_active_privacy_selection, set_active_privacy_list,
+    set_active_privacy_list_in_transaction,
 };
 pub use communication_policy::read_communication_policies;
 pub use decision::{

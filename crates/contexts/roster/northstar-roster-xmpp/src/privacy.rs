@@ -1,5 +1,6 @@
 //! XEP-0016 privacy lists.
 
+use crate::SessionIdentity;
 use anyhow::Result;
 use northstar_roster_application::privacy::commands::PolicyCommandRepository;
 use northstar_roster_application::privacy::{PrivacyRepository, PrivacyService};
@@ -16,6 +17,7 @@ mod queries;
 use codec::{element_children, valid_query_shell};
 use push::push_privacy_list_change;
 
+pub use active_selection::PrivacySelectionHost;
 pub use queries::privacy_get;
 
 const PRIVACY_NS: &str = northstar_xep_0016::NAMESPACE;
@@ -37,8 +39,6 @@ pub trait PrivacySession: crate::SessionIdentity {
     fn privacy_mark_requested(&self);
     /// The name of the session's active list.
     fn privacy_active_list(&self) -> Option<String>;
-    /// Replaces the name of the session's active list.
-    fn privacy_set_active_list(&self, name: Option<String>);
     /// How many resources of `account` are connected to this node.
     fn privacy_local_resources(&self, account: &str) -> usize;
     /// Whether a resource of `account` is connected to another node.
@@ -60,8 +60,8 @@ pub trait PrivacySession: crate::SessionIdentity {
 }
 
 /// Handles a privacy-list query IQ set request, returning the reply and an optional push.
-pub async fn privacy_set<S: PrivacySession>(
-    session: &S,
+pub async fn privacy_set<H: crate::RosterSessionHost + PrivacySelectionHost>(
+    session: &northstar_stream::protocol::ProtocolSession<H>,
     id: &str,
     root: Node<'_, '_>,
     query: Node<'_, '_>,
@@ -82,7 +82,7 @@ pub async fn privacy_set<S: PrivacySession>(
     let control = children[0];
     let mut changed_list = None;
     let result = match control.tag_name().name() {
-        "active" => active_selection::select_active(session, id, &user, control).await?,
+        "active" => active_selection::select_active(session, id, control).await?,
         "default" => list_commands::select_default(session, id, control).await?,
         "list" => list_commands::edit_list(session, id, control, &mut changed_list).await?,
         _ => return Ok((iq_error(id, "bad-request"), None)),

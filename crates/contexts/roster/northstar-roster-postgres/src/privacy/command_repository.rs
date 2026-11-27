@@ -1,6 +1,7 @@
 use super::list_commands::{
-    remove_list_in_transaction, replace_list_in_transaction, set_default_in_transaction,
-    validate_replacement, RemovePrivacyListOutcome, ReplacePrivacyListOutcome,
+    commit_list_removal, remove_list_in_transaction, replace_list_in_transaction,
+    set_default_in_transaction, validate_replacement, RemovePrivacyListOutcome,
+    ReplacePrivacyListOutcome,
 };
 use super::query::{read_privacy_list, read_privacy_overview, stored_list_name};
 use super::PostgresPrivacyRepository;
@@ -124,11 +125,14 @@ impl PolicyCommandRepository for PostgresPrivacyRepository {
         } else {
             remove_list_in_transaction(&mut tx, actor.account_id, name.as_str()).await?
         };
-        if outcome == RemovePrivacyListOutcome::Conflict {
+        let outcome = if outcome == RemovePrivacyListOutcome::Conflict {
             tx.rollback().await?;
+            outcome
+        } else if commit_list_removal(tx).await? {
+            outcome
         } else {
-            tx.commit().await?;
-        }
+            RemovePrivacyListOutcome::Conflict
+        };
         let outcome = match outcome {
             RemovePrivacyListOutcome::Conflict => PrivacyListMutationOutcome::Conflict,
             RemovePrivacyListOutcome::Removed => PrivacyListMutationOutcome::Removed,

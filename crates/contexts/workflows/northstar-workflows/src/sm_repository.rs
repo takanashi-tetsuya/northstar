@@ -11,6 +11,11 @@ use std::sync::Arc;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+mod privacy_selection;
+pub use privacy_selection::{
+    activate_privacy_selection, renew_capacity_and_privacy_leases, PrivacySelectionCheckpoint,
+};
+
 #[derive(Clone)]
 pub struct PostgresSmRepository {
     pool: PgPool,

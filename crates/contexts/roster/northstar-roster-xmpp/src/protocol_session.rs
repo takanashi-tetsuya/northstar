@@ -170,13 +170,6 @@ impl<H: SessionHost + RosterSessionHost> crate::privacy::PrivacySession for Prot
             .clone()
     }
 
-    fn privacy_set_active_list(&self, name: Option<String>) {
-        *self
-            .privacy_active
-            .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = name;
-    }
-
     fn privacy_local_resources(&self, account: &str) -> usize {
         self.host().local_resource_count(account)
     }
@@ -214,7 +207,9 @@ pub trait PrivacyHandlers {
     ) -> Result<Action>;
 }
 
-impl<H: SessionHost + RosterSessionHost> PrivacyHandlers for ProtocolSession<H> {
+impl<H: RosterSessionHost + crate::privacy::PrivacySelectionHost> PrivacyHandlers
+    for ProtocolSession<H>
+{
     async fn privacy_get(
         &self,
         id: &str,

@@ -144,7 +144,7 @@ pub async fn append_suspended_sm_stanza(
     Ok(true)
 }
 
-pub(super) async fn update_snapshot(
+pub(crate) async fn update_snapshot(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     id: Uuid,
     connection_id: Uuid,

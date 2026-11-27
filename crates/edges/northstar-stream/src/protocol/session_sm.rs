@@ -111,6 +111,13 @@ impl<H: SessionHost> ProtocolSession<H> {
         self.sm_snapshot_with_unacked(self.sm.unacked.iter().cloned().collect())
     }
 
+    /// Metadata for the exact SM selector transaction; it does not replace the durable queue.
+    pub fn sm_privacy_selection_snapshot(
+        &self,
+    ) -> northstar_session_application::sm::SmSessionSnapshot {
+        self.sm_snapshot_with_unacked(Vec::new())
+    }
+
     pub(super) fn sm_snapshot_with_unacked(
         &self,
         unacked: Vec<crate::outbound::SmUnackedStanza>,

@@ -24,6 +24,8 @@ use northstar_stream::transport::Action;
 use roxmltree::Node;
 use uuid::Uuid;
 
+mod privacy_selection;
+
 impl RosterSessionHost for ServerNode {
     fn avatar_presence_gate(&self) -> &northstar_roster_xmpp::AvatarPresenceGate {
         &self.avatar_presence_gate

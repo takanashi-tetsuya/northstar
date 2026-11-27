@@ -1253,8 +1253,8 @@ pub async fn release_live_session(pool: &PgPool, connection_id: Uuid) -> Result<
     )
 }
 
-pub async fn refresh_live_session_leases(
-    pool: &PgPool,
+pub async fn refresh_live_session_leases<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
     connection_ids: &[Uuid],
     lease_seconds: u64,
 ) -> Result<HashSet<Uuid>> {
@@ -1266,7 +1266,7 @@ pub async fn refresh_live_session_leases(
         sqlx::query_scalar("SELECT connection_id FROM northstar_session_refresh_live($1,$2)")
             .bind(connection_ids)
             .bind(lease_seconds)
-            .fetch_all(pool)
+            .fetch_all(executor)
             .await?;
     Ok(rows.into_iter().collect())
 }

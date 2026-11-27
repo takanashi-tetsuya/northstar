@@ -15,9 +15,16 @@ use northstar_xml_builder::rewrite::project_presence_avatar;
 use northstar_xmpp_types::jid::CanonicalJid;
 
 mod blocking;
+mod federated_inbound;
 mod validate;
 
 pub(super) use self::blocking::deliver_blocking_presence;
+#[cfg(test)]
+pub(crate) use self::federated_inbound::deliver_control as test_federated_presence_control;
+pub use self::federated_inbound::FederatedPresenceOwner;
+pub(super) use self::federated_inbound::{
+    handle_federated_presence, is_federated_presence_control,
+};
 pub(super) use self::validate::validate_stanza_presence;
 
 pub(super) fn delivery_scope(
@@ -207,6 +214,7 @@ pub(super) async fn handle_presence_probe<A: ClusterAdapters>(
                         &probe.requester,
                         full,
                         hash.as_ref().map(|hash| hash.as_deref()).ok(),
+                        "jabber:client",
                     ))
                 })
                 .flatten();
@@ -285,8 +293,9 @@ fn render(
     to: &str,
     availability_only: bool,
     hash: Option<Option<&str>>,
+    namespace: &'static str,
 ) -> String {
-    let initial = northstar_xml_builder::XmlElement::namespaced("presence", "jabber:client")
+    let initial = northstar_xml_builder::XmlElement::namespaced("presence", namespace)
         .attr("from", from)
         .attr("to", to);
     if availability_only {

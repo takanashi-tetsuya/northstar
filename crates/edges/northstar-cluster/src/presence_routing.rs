@@ -5,7 +5,9 @@ use crate::ClusterPresenceAuthority;
 use anyhow::Result;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+mod federated_inbound;
 mod probe;
+pub use federated_inbound::{FederatedPresenceOwner, FederatedPresenceRequest};
 pub(crate) use probe::CapturedPresenceProbe;
 
 /// Failure to replay current presence across a cluster route.

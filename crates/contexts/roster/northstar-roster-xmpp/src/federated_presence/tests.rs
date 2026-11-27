@@ -37,3 +37,5 @@ fn persisted_federated_subscription_keeps_extensions_and_uses_bare_jids() {
             && child.text() == Some("Alice")
     }));
 }
+
+mod owner;

@@ -137,6 +137,7 @@ fn cluster_listener_runtime(
         muc_delivery: state.muc_delivery_context(),
         mix_caps: state.cluster_listener_mix_caps(),
         blocking: state.cluster_listener_blocking(),
+        replay: state.session.replay_service().clone(),
         sm_muc_teardown: state.cluster_listener_sm_muc_teardown(),
         presence_sender: Arc::new(state.cluster.node_delivery()),
         security: Arc::new(state.cluster.listener_security()),

@@ -100,28 +100,36 @@ pub fn validate_exact_control(
                 .is_none_or(|revision| revision > 0),
         "exact control has an invalid blocklist revision"
     );
+    let federation_owner_request = control.remote_peer.is_some()
+        && matches!(control.kind, CurrentPresenceReplay | ProbeResponse);
     anyhow::ensure!(
-        control.remote_peer.is_some() == (control.kind == FederatedInboundPresence),
+        (control.kind != FederatedInboundPresence || control.remote_peer.is_some())
+            && (control.remote_peer.is_none()
+                || control.kind == FederatedInboundPresence
+                || federation_owner_request)
+            && (control.remote_peer.is_none() || control.source.is_none()),
         "exact control remote peer does not match its kind"
     );
     if let Some(peer) = &control.remote_peer {
         let jid = CanonicalJid::parse_bare(peer)?;
         anyhow::ensure!(
-            jid.localpart().is_none(),
+            jid.localpart().is_none() && jid.domainpart() == peer,
             "exact control remote peer is not a domain"
         );
     }
     let root = stanza.root_element();
-    if matches!(
-        control.kind,
-        AvailablePresence
-            | DirectedPresence
-            | UnavailablePresence
-            | CurrentPresenceReplay
-            | ProbeResponse
-            | TeardownUnavailable
-            | BlockingPresence
-    ) {
+    if !federation_owner_request
+        && matches!(
+            control.kind,
+            AvailablePresence
+                | DirectedPresence
+                | UnavailablePresence
+                | CurrentPresenceReplay
+                | ProbeResponse
+                | TeardownUnavailable
+                | BlockingPresence
+        )
+    {
         control
             .source
             .as_ref()
@@ -151,6 +159,12 @@ pub fn validate_exact_control(
         }
         PrivacyPush => iq_set_payload(root).is_some_and(is_privacy_push),
         SubscriptionPresence => is_presence_subscription_stanza(stanza),
+        CurrentPresenceReplay if federation_owner_request => {
+            is_presence && matches!(root.attribute("type"), None | Some("unavailable"))
+        }
+        ProbeResponse if federation_owner_request => {
+            is_presence && root.attribute("type") == Some("probe")
+        }
         AvailablePresence | CurrentPresenceReplay => {
             presence_delivery_stanza_matches(stanza, ClusterPresenceDelivery::CurrentReplay)
         }

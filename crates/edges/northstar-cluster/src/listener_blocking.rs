@@ -29,7 +29,7 @@ pub struct ClusterListenerBlocking<A: ClusterAdapters> {
     cluster: ClusterManager,
     local_domain: String,
     external_routes: Arc<dyn Fn(&str) -> bool + Send + Sync>,
-    federation: A::Federation,
+    pub(crate) federation: A::Federation,
     read_policies: Arc<ReadPolicies>,
     roster_grant: Arc<ReadRosterGrant>,
 }

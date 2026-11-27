@@ -88,6 +88,7 @@ pub struct InboundSubscriptionTransition {
     pub change: Option<RosterChange>,
     pub auto_reply: Option<northstar_roster_core::SubscriptionReply>,
     pub send_unavailable: bool,
+    pub pending_created_at_micros: Option<i64>,
 }
 
 /// The complete authority and stanza input for one local subscription

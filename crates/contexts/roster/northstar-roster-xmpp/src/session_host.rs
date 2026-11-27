@@ -23,6 +23,8 @@ use uuid::Uuid;
 use crate::presence_delivery::{DirectedPresenceHost, DirectedPresenceTransport};
 use crate::AvatarPresenceGate;
 
+pub(super) mod federated_presence;
+
 /// One post-commit delivery failure counter shared by roster, blocking and
 /// privacy pushes. Each caller retains its own recovery/disconnect decision.
 pub struct PostAcceptFailureTelemetry {

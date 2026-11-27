@@ -1,4 +1,4 @@
-use super::project_presence_avatar;
+use northstar_xml_builder::rewrite::project_presence_avatar;
 
 #[test]
 fn replay_renders_the_current_hash_and_omits_it_on_read_error() {

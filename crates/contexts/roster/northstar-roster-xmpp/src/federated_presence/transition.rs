@@ -1,7 +1,9 @@
 use super::render::subscription_reply;
 use super::replay::{send_current_presence_to_remote, send_unavailable_presence_to_remote};
-use super::SubscriptionRevocationRoute;
-use crate::FederatedPresenceHost;
+use crate::{
+    FederatedPresenceEffect, FederatedPresenceHandoff, FederatedPresenceHost,
+    FederatedPresenceOwnerHost,
+};
 use anyhow::Result;
 use northstar_federation_core::wire::s2s_stanza_error;
 use northstar_federation_core::FederationRoute;
@@ -9,31 +11,19 @@ use northstar_roster_application::presence::{
     InboundRemotePresenceEffect, InboundSubscriptionRequest, InboundSubscriptionTransition,
     PresenceAccount, PresenceMutation, SubscriptionOutboxAdmissionError,
 };
-use northstar_roster_application::privacy::PrivacyStanzaKind;
-use northstar_roster_application::{
-    CommunicationPolicyQuery, CommunicationPolicyReader, PolicyDirection, PolicySubject,
-};
+use northstar_roster_application::probe_decision::PresenceRoute;
 use northstar_roster_core::{SubscriptionAction, SubscriptionReply};
-use northstar_xml_builder::rewrite::set_to;
 use roxmltree::Node;
 use std::ops::ControlFlow;
-use std::sync::atomic::Ordering;
 
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn transition_inbound_subscription<
-    H: FederatedPresenceHost + SubscriptionRevocationRoute,
->(
-    state: &H,
+pub(super) async fn transition_inbound_subscription(
+    state: &(impl FederatedPresenceHost + FederatedPresenceOwnerHost),
     root: Node<'_, '_>,
-    from: &str,
     kind: &str,
     recipient: &PresenceAccount,
-    subscription_from: Option<&str>,
-    canonical_subscription: Option<&str>,
-    verified_peer: &str,
+    contact: &str,
+    handoff: FederatedPresenceHandoff<'_>,
 ) -> Result<ControlFlow<Option<String>>> {
-    let contact = subscription_from.expect("guarded above");
-    let persisted = canonical_subscription.expect("guarded above");
     let recipient_bare = format!("{}@{}", recipient.username, state.local_domain());
     let action = SubscriptionAction::parse(kind).expect("guarded above");
     let reply = |kind| subscription_reply(&recipient_bare, contact, kind, root.attribute("id"));
@@ -46,8 +36,8 @@ pub(super) async fn transition_inbound_subscription<
             local_domain: state.local_domain(),
             contact,
             action,
-            stanza: persisted,
-            verified_peer,
+            stanza: handoff.stanza,
+            verified_peer: handoff.remote_peer,
             subscribed_reply: &subscribed_reply,
             unsubscribed_reply: &unsubscribed_reply,
             outbox_policy: state.federation_outbox().outbox_policy(),
@@ -60,6 +50,10 @@ pub(super) async fn transition_inbound_subscription<
             | PresenceMutation::Missing
             | PresenceMutation::Unauthorized,
         ) => {
+            // The exact local UUID disappeared/was disabled, or its
+            // account-wide inbound policy denied the authenticated remote
+            // stanza. Inbound federation intentionally has no C2S
+            // generation authority of its own.
             return Ok(ControlFlow::Break(None));
         }
         Err(error) if error.is::<SubscriptionOutboxAdmissionError>() => {
@@ -74,74 +68,55 @@ pub(super) async fn transition_inbound_subscription<
     };
     let recipient = &transition.recipient;
     if transition.auto_reply.is_some() {
-        state.roster_wake_outbox(Some(verified_peer));
+        state.roster_wake_outbox(Some(handoff.remote_peer));
     }
-
-    // Subscription notifications precede the corresponding roster push
-    // (RFC 6121 sections 3.2/3.3).
-    if transition.effect == InboundRemotePresenceEffect::Forward {
-        let mut targets = state.session_entries_for(&recipient_bare);
-        targets.retain(|(_, target)| {
-            target.user_id == recipient.id
-                && target.auth_generation == recipient.auth_generation
-                && target.available.load(Ordering::Acquire)
-        });
-        for (target_jid, target) in targets {
-            let query = CommunicationPolicyQuery {
-                account_id: target.user_id,
-                expected_auth_generation: Some(target.auth_generation),
-                subject: PolicySubject::Connection {
-                    connection_id: target.connection_id,
-                    expects_active: target.privacy_active_snapshot().is_some(),
-                },
-                peer: from.to_owned(),
-                kind: PrivacyStanzaKind::PresenceIn,
-                direction: PolicyDirection::Inbound,
-                check_owner_block: true,
-                check_peer_block: false,
-            };
-            match state
-                .presence_service()
-                .communication_policy()
-                .read_communication_policy(&query)
-                .await
-            {
-                Ok(decision) if decision.allows() => {
-                    if let Some(current) =
-                        state.sessions_for(&target_jid).into_iter().find(|current| {
-                            current.connection_id == target.connection_id
-                                && current.user_id == target.user_id
-                                && current.auth_generation == target.auth_generation
-                                && current.available.load(Ordering::Acquire)
-                        })
-                    {
-                        let _ = current.sender.try_send(set_to(persisted, &target_jid));
-                    }
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    state.post_accept_failure_telemetry().record_failure();
-                    tracing::warn!(?error, %target_jid, %contact, "federated subscription delivery policy unavailable");
-                }
+    let forward = transition.effect == InboundRemotePresenceEffect::Forward;
+    let followup = followup_presence(&transition);
+    let routes = if forward || followup.is_some() {
+        match state
+            .capture_federated_presence(&recipient_bare, recipient)
+            .await
+        {
+            Ok(routes) => Some(routes),
+            Err(error) => {
+                state.post_accept_failure_telemetry().record_failure();
+                tracing::warn!(?error, %recipient_bare, %contact, "could not capture routes after federated subscription commit");
+                None
             }
         }
+    } else {
+        None
+    };
+
+    // Subscription notifications precede the corresponding roster push
+    // (RFC 6121 sections 3.2/3.3). Incoming subscribe requests are sent to
+    // available resources; the other state notifications go only to
+    // resources that requested the roster.
+    if let Some(routes) = routes.as_deref().filter(|_| forward) {
+        if let Err(error) = forward_committed_subscription(
+            state,
+            recipient,
+            handoff,
+            routes,
+            transition.pending_created_at_micros,
+        )
+        .await
+        {
+            state.post_accept_failure_telemetry().record_failure();
+            tracing::warn!(?error, %recipient_bare, %contact, %kind, "federated subscription forward failed after commit");
+        }
     }
 
-    match followup_presence(&transition) {
-        Some(FollowupPresence::Current) => {
-            send_current_presence_to_remote(state, &recipient_bare, contact).await;
+    // Follow-ups run on the owner nodes, which recheck the exact route and
+    // outbound policy before admitting them to the federation outbox.
+    match (followup, routes.as_deref()) {
+        (Some(FollowupPresence::Current), Some(routes)) => {
+            send_current_presence_to_remote(state, recipient, handoff, contact, routes).await;
         }
-        Some(FollowupPresence::Unavailable) => {
-            send_unavailable_presence_to_remote(
-                state,
-                recipient,
-                &recipient_bare,
-                contact,
-                verified_peer,
-            )
-            .await;
+        (Some(FollowupPresence::Unavailable), Some(routes)) => {
+            send_unavailable_presence_to_remote(state, recipient, handoff, contact, routes).await;
         }
-        None => {}
+        _ => {}
     }
 
     if let Some(change) = transition.change.as_ref() {
@@ -159,16 +134,32 @@ pub(super) async fn transition_inbound_subscription<
             tracing::warn!(?error, recipient_id = %recipient.id, contact = %contact, %kind, "federated roster transition was committed but roster push failed");
         }
     }
-    if kind == "subscribe"
-        && transition.effect == InboundRemotePresenceEffect::Forward
-        && state.sessions_for(&recipient_bare).is_empty()
-    {
+    if kind == "subscribe" && forward && routes.as_ref().is_some_and(Vec::is_empty) {
         if let Err(error) = state.dispatch_push_notification(recipient.id).await {
             state.post_accept_failure_telemetry().record_failure();
             tracing::warn!(?error, recipient_id = %recipient.id, contact = %contact, "federated subscription was committed but push notification failed");
         }
     }
     Ok(ControlFlow::Continue(()))
+}
+
+pub(super) async fn forward_committed_subscription(
+    state: &impl FederatedPresenceOwnerHost,
+    recipient: &PresenceAccount,
+    handoff: FederatedPresenceHandoff<'_>,
+    routes: &[PresenceRoute],
+    pending_created_at_micros: Option<i64>,
+) -> Result<()> {
+    let handoff = FederatedPresenceHandoff {
+        effect: FederatedPresenceEffect::Forward {
+            pending_created_at_micros,
+        },
+        ..handoff
+    };
+    state
+        .handoff_federated_presence(recipient, handoff, routes)
+        .await?;
+    Ok(())
 }
 
 #[derive(Debug, Eq, PartialEq)]

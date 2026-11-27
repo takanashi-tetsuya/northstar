@@ -428,6 +428,7 @@ pub struct ClusterListenerRuntime<A: ClusterAdapters> {
     pub muc_delivery: super::ClusterMucDelivery<A>,
     pub mix_caps: super::listener_mix_caps::ClusterListenerMixCaps,
     pub blocking: super::listener_blocking::ClusterListenerBlocking<A>,
+    pub replay: northstar_session_application::replay::ReplayService<A::Replay>,
     pub sm_muc_teardown: super::listener_sm_muc_teardown::ClusterListenerSmMucTeardown<A>,
     pub presence_sender: Arc<ClusterNodeDelivery>,
     pub security: Arc<ClusterListenerSecurity>,

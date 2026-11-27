@@ -1,30 +1,30 @@
 //! Handle federated presence, subscription transitions, probes and presence responses.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use northstar_federation_core::wire::s2s_stanza_error;
 use northstar_stream::protocol::caps::{observe_federated_caps, FederatedCapsObservationResult};
-use northstar_xmpp_types::jid::{canonical_session_key, CanonicalJid};
+use northstar_xmpp_types::jid::{canonical_session_key, prepare_domainpart, CanonicalJid};
 use roxmltree::Node;
 use std::ops::ControlFlow;
 use uuid::Uuid;
 
-use crate::FederatedPresenceHost;
+use crate::{
+    FederatedPresenceEffect, FederatedPresenceHandoff, FederatedPresenceHost,
+    FederatedPresenceOwnerHost,
+};
 
 mod ordinary;
 mod probe;
 mod render;
 mod replay;
 mod transition;
-mod volatile;
-
-pub use self::volatile::SubscriptionRevocationRoute;
 
 use self::ordinary::dispatch_ordinary_presence;
 use self::probe::route_inbound_presence_probe;
 use self::render::canonical_subscription_stanza;
 use self::transition::transition_inbound_subscription;
 
-pub async fn route_inbound_presence<H: FederatedPresenceHost + SubscriptionRevocationRoute>(
+pub async fn route_inbound_presence<H: FederatedPresenceHost + FederatedPresenceOwnerHost>(
     state: &H,
     root: Node<'_, '_>,
     raw: &str,
@@ -39,6 +39,11 @@ pub async fn route_inbound_presence<H: FederatedPresenceHost + SubscriptionRevoc
     let Some(recipient_name) = to_jid.localpart() else {
         return Ok(Some(s2s_stanza_error(root, "modify", "jid-malformed")));
     };
+    let sender = CanonicalJid::parse(from)?;
+    let remote_peer = prepare_domainpart(verified_peer)?;
+    if sender.domainpart() != remote_peer {
+        return Ok(None);
+    }
     let Some(recipient) = state
         .presence_service()
         .find_enabled_user(recipient_name)
@@ -47,6 +52,17 @@ pub async fn route_inbound_presence<H: FederatedPresenceHost + SubscriptionRevoc
         return Ok(None);
     };
     let recipient_bare = format!("{}@{}", recipient.username, state.local_domain());
+    let target = to_jid.to_string();
+    let canonical_sender = sender.to_string();
+    let mut handoff = FederatedPresenceHandoff {
+        target: &target,
+        sender: &canonical_sender,
+        remote_peer: &remote_peer,
+        stanza: raw,
+        effect: FederatedPresenceEffect::Forward {
+            pending_created_at_micros: None,
+        },
+    };
     let kind = root.attribute("type").unwrap_or("available");
     // Multiple authenticated streams for one remote domain can concurrently
     // carry presence for the same full JID. Choose one server-side order and
@@ -61,9 +77,6 @@ pub async fn route_inbound_presence<H: FederatedPresenceHost + SubscriptionRevoc
     } else {
         None
     };
-    if kind == "probe" {
-        return route_inbound_presence_probe(state, root, from, &to_jid, &recipient).await;
-    }
     let subscription_kind = matches!(
         kind,
         "subscribe" | "subscribed" | "unsubscribe" | "unsubscribed"
@@ -76,24 +89,21 @@ pub async fn route_inbound_presence<H: FederatedPresenceHost + SubscriptionRevoc
     {
         return Ok(None);
     }
+    if kind == "probe" {
+        handoff.effect = FederatedPresenceEffect::Probe;
+        return route_inbound_presence_probe(state, root, &recipient, &recipient_bare, handoff)
+            .await;
+    }
     if subscription_kind
         && to_jid.resourcepart().is_some()
         && kind != "subscribe"
-        && !state
-            .full_presence_target_routed(&to_jid.to_string(), &recipient)
-            .await
+        && state
+            .capture_federated_presence(&target, &recipient)
+            .await?
+            .is_empty()
     {
         return Ok(None);
     }
-    let subscription_from = subscription_kind
-        .then(|| CanonicalJid::parse(from))
-        .transpose()
-        .context("validated federated sender became malformed")?
-        .map(|jid| jid.bare());
-    let recipient_bare = format!("{}@{}", recipient.username, state.local_domain());
-    let canonical_subscription = subscription_from
-        .as_deref()
-        .map(|contact| canonical_subscription_stanza(raw, contact, to));
     if let Some(resource_epoch) = federated_presence_epoch.as_ref() {
         match observe_federated_caps(state, root, from, connection_id, resource_epoch).await {
             FederatedCapsObservationResult::Accepted => {}
@@ -106,31 +116,20 @@ pub async fn route_inbound_presence<H: FederatedPresenceHost + SubscriptionRevoc
         }
     }
     if subscription_kind {
-        if let ControlFlow::Break(reply) = transition_inbound_subscription(
-            state,
-            root,
-            from,
-            kind,
-            &recipient,
-            subscription_from.as_deref(),
-            canonical_subscription.as_deref(),
-            verified_peer,
-        )
-        .await?
+        let contact = sender.bare();
+        let persisted = canonical_subscription_stanza(raw, &contact, to);
+        handoff.target = &recipient_bare;
+        handoff.stanza = &persisted;
+        if let ControlFlow::Break(reply) =
+            transition_inbound_subscription(state, root, kind, &recipient, &contact, handoff)
+                .await?
         {
             return Ok(reply);
         }
         return Ok(None);
     }
-    dispatch_ordinary_presence(
-        state,
-        raw,
-        from,
-        to,
-        canonical_subscription,
-        &recipient_bare,
-    )
-    .await
+    dispatch_ordinary_presence(state, &recipient, handoff).await?;
+    Ok(None)
 }
 
 #[cfg(test)]

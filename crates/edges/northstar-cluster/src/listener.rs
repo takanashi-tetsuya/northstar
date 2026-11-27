@@ -12,6 +12,9 @@ mod session;
 
 use self::acknowledge::{acknowledge_listener_command, ListenerAckContext};
 use self::envelope::{ListenerCommand, ListenerCommandFlags, VerifiedListenerEnvelope};
+#[cfg(test)]
+pub(crate) use self::presence::test_federated_presence_control;
+pub use self::presence::FederatedPresenceOwner;
 use self::receive::{
     ListenerInput, ListenerInputContext, ListenerSubscription, ReceivedListenerInput,
 };
@@ -69,10 +72,20 @@ pub(super) async fn listen_once<A: ClusterAdapters>(
         muc_delivery,
         mix_caps,
         blocking,
+        replay,
         sm_muc_teardown,
         presence_sender,
         security,
     } = runtime;
+    let federated_presence = FederatedPresenceOwner::new(
+        northstar_stream::local_routes::session_table::LocalSessionTable::new(Arc::clone(
+            &dispatch.account_routes.sessions,
+        )),
+        &message_policy.presence,
+        &replay,
+        &blocking.federation,
+        &message_policy.local_domain,
+    );
     let client = transport
         .client
         .as_ref()
@@ -184,7 +197,13 @@ pub(super) async fn listen_once<A: ClusterAdapters>(
             is_presence_probe,
         } = flags;
 
-        if is_muc_operation_wake {
+        if presence::is_federated_presence_control(json) {
+            if envelope.kind != northstar_security::cluster_bus::ClusterCommandKind::DirectDelivery
+            {
+                continue;
+            }
+            presence::handle_federated_presence(&federated_presence, json, &mut turn).await;
+        } else if is_muc_operation_wake {
             muc::wake_muc_operation(&dispatch, json, target, &mut turn);
         } else if is_session_termination {
             session::terminate_session(&dispatch, json, target, &mut turn).await?;

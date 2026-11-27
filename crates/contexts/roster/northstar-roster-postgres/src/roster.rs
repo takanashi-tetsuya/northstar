@@ -185,6 +185,7 @@ pub struct InboundRemotePresenceTransition {
     /// Removing a real `from` subscription requires the contact's stale
     /// availability to be withdrawn from interested local resources.
     pub send_unavailable: bool,
+    pub pending_created_at_micros: Option<i64>,
 }
 
 #[cfg(any(test, feature = "test-support"))]

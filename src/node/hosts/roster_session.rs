@@ -14,7 +14,6 @@ use northstar_roster_core::{
     ClusterPresenceAuthority, ExactPresenceRoute, LocalRosterContact, PresenceAccount, RosterActor,
     RosterChange,
 };
-use northstar_roster_xmpp::federated_presence::SubscriptionRevocationRoute;
 use northstar_roster_xmpp::presence_delivery::{
     DirectedDelivery, DirectedDeliveryResult, DirectedEnqueue, DirectedPresenceHost,
     DirectedPresenceTransport,
@@ -33,6 +32,7 @@ use roxmltree::Node;
 use uuid::Uuid;
 
 mod exact_presence;
+mod federated_presence;
 mod privacy_selection;
 mod roster_journal;
 mod subscription_retry;
@@ -384,22 +384,6 @@ impl PresenceRouting for ServerNode {
         session
             .forward_presence_if_route_current(root, kind, from, raw)
             .await
-    }
-}
-
-impl SubscriptionRevocationRoute for ServerNode {
-    async fn send_volatile_subscription_revocation(
-        &self,
-        verified_peer: &str,
-        stanza: String,
-    ) -> bool {
-        northstar_s2s::outbound::send_volatile_on_authenticated_route(
-            self,
-            &self.config.domain,
-            verified_peer,
-            stanza,
-        )
-        .await
     }
 }
 

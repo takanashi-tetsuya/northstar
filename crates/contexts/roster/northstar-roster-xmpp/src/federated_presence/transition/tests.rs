@@ -24,6 +24,7 @@ fn revoke_followup_uses_old_grant_and_is_not_replayed_on_duplicate() {
             change: None,
             auto_reply: decision.auto_reply,
             send_unavailable: decision.send_unavailable,
+            pending_created_at_micros: None,
         };
         assert_eq!(followup_presence(&transition), expected);
     }

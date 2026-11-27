@@ -291,7 +291,10 @@ impl ClusterCorrelatedControlSender {
             .and_then(serde_json::Value::as_bool)
             == Some(true)
             && fields.contains_key("captured_presence_probe");
-        let protocol_version = if blocking_presence_change || exact_presence_probe {
+        let protocol_version = if blocking_presence_change
+            || exact_presence_probe
+            || fields.contains_key("exact_control")
+        {
             crate::EXACT_CONTROL_DELIVERY_VERSION
         } else {
             NODE_PROTOCOL_VERSION

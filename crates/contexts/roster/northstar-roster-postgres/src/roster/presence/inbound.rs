@@ -106,16 +106,23 @@ pub async fn transition_inbound_remote_presence_subscription<E: RosterTransactio
 
     let decision =
         inbound_subscription_transition(subscription_facts(existing.as_ref()), pending, action);
-    if decision.pending == PendingSubscriptionChange::Insert {
-        sqlx::query(
-            "INSERT INTO federated_presence_pending (recipient_id, from_jid, stanza) VALUES ($1, $2, $3) ON CONFLICT (recipient_id, from_jid) DO NOTHING",
+    let mut forward = decision.forward;
+    let pending_created_at_micros = if decision.pending == PendingSubscriptionChange::Insert {
+        let created_at = sqlx::query_scalar(
+            "INSERT INTO federated_presence_pending (recipient_id, from_jid, stanza) VALUES ($1, $2, $3) ON CONFLICT (recipient_id, from_jid) DO NOTHING RETURNING (EXTRACT(EPOCH FROM created_at) * 1000000)::bigint",
         )
         .bind(recipient_id)
         .bind(&from_jid)
         .bind(stamped_stanza)
-        .execute(&mut *transaction)
+        .fetch_optional(&mut *transaction)
         .await?;
-    }
+        if created_at.is_none() {
+            forward = false;
+        }
+        created_at
+    } else {
+        None
+    };
     if decision.pending == PendingSubscriptionChange::Delete {
         sqlx::query("DELETE FROM federated_presence_pending WHERE recipient_id=$1 AND from_jid=$2")
             .bind(recipient_id)
@@ -161,7 +168,7 @@ pub async fn transition_inbound_remote_presence_subscription<E: RosterTransactio
         Box::new(AuthorizedInboundRemotePresence {
             recipient,
             transition: InboundRemotePresenceTransition {
-                effect: if decision.forward {
+                effect: if forward {
                     InboundRemotePresenceEffect::Forward
                 } else {
                     InboundRemotePresenceEffect::Suppressed
@@ -170,6 +177,7 @@ pub async fn transition_inbound_remote_presence_subscription<E: RosterTransactio
                 change,
                 auto_reply: decision.auto_reply,
                 send_unavailable: decision.send_unavailable,
+                pending_created_at_micros,
             },
         }),
     ))

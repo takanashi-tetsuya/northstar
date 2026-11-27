@@ -21,6 +21,9 @@ pub use self::avatar_presence::AvatarPresenceGate;
 pub use self::protocol_session::PresenceHandlers;
 pub use self::protocol_session::{BlockingHandlers, PrivacyHandlers, RosterHandlers};
 pub use self::roster_journal::RosterJournalReader;
+pub use self::session_host::federated_presence::{
+    FederatedPresenceEffect, FederatedPresenceHandoff, FederatedPresenceOwnerHost,
+};
 pub use self::session_host::{
     FederatedPresenceHost, PostAcceptFailureTelemetry, PresenceDeliveryHost, PresenceRouting,
     RosterSessionHost,

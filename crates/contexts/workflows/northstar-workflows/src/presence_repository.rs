@@ -6,9 +6,9 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 mod communication_policy;
+mod decisions;
 mod service_messages;
 mod subscription_retry;
-mod decisions;
 
 #[derive(Clone)]
 pub struct PostgresPresenceRepository {
@@ -211,6 +211,7 @@ impl PresenceRepository for PostgresPresenceRepository {
                         change: transition.change,
                         auto_reply: transition.auto_reply,
                         send_unavailable: transition.send_unavailable,
+                        pending_created_at_micros: transition.pending_created_at_micros,
                     })
                 }
             },

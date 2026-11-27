@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use uuid::Uuid;
 
+mod gap_annotations;
+
 #[cfg(test)]
 mod blocking_match_tests;
 

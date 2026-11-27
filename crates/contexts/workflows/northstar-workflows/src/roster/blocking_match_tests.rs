@@ -943,7 +943,7 @@ async fn roster_versions_and_committed_snapshots_survive_concurrent_writes() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(after_b, vec![a_v4]);
+    assert_eq!(after_b, vec![read_projection(a_v4)]);
 
     sqlx::query("DELETE FROM roster_change_log WHERE owner_id=$1 AND version=$2")
         .bind(owner_id)
@@ -1385,10 +1385,7 @@ async fn roster_service_snapshot_authorization_and_account_identity_are_fenced()
         .unwrap();
     assert_eq!(delta.version, second.version);
     assert_eq!(delta.items[0].version, second.version);
-    assert_eq!(
-        delta.changes.as_ref().unwrap(),
-        std::slice::from_ref(&second)
-    );
+    assert_eq!(delta.changes.as_ref().unwrap(), &[read_projection(second)]);
 
     // Hold the owner lock, queue a stale-session mutation, then advance
     // the credential epoch before releasing it. The waiting mutation must
@@ -1490,4 +1487,10 @@ async fn roster_service_snapshot_authorization_and_account_identity_are_fenced()
         .await
         .unwrap();
     admin.close().await;
+}
+
+/// Journal reads never carry the commit-time owner authority.
+fn read_projection(mut change: RosterChange) -> RosterChange {
+    change.owner_authority = None;
+    change
 }

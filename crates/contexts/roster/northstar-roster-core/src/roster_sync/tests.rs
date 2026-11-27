@@ -9,11 +9,25 @@ fn synchronization_buffers_orders_and_atomically_exits() {
     assert!(requested.load(Ordering::Acquire));
     assert!(annotations.load(Ordering::Acquire));
     assert_eq!(
-        gate.route(&requested, &annotations, 13, "v13".to_owned(), None),
+        gate.route(
+            &requested,
+            &annotations,
+            13,
+            "v13".to_owned(),
+            None,
+            |_| unreachable!()
+        ),
         RosterPushDisposition::Buffered
     );
     assert_eq!(
-        gate.route(&requested, &annotations, 12, "v12".to_owned(), None),
+        gate.route(
+            &requested,
+            &annotations,
+            12,
+            "v12".to_owned(),
+            None,
+            |_| unreachable!()
+        ),
         RosterPushDisposition::Buffered
     );
     assert_eq!(
@@ -21,17 +35,37 @@ fn synchronization_buffers_orders_and_atomically_exits() {
         RosterFlushBatch::Batch(vec![(12, "v12".to_owned()), (13, "v13".to_owned())])
     );
     assert_eq!(
-        gate.route(&requested, &annotations, 14, "v14".to_owned(), None),
+        gate.route(
+            &requested,
+            &annotations,
+            14,
+            "v14".to_owned(),
+            None,
+            |_| unreachable!()
+        ),
         RosterPushDisposition::Buffered
     );
+    assert!(gate.accept_flushed(permit, 12));
+    assert!(gate.accept_flushed(permit, 13));
     assert_eq!(
         gate.next_flush_batch(permit),
         RosterFlushBatch::Batch(vec![(14, "v14".to_owned())])
     );
+    assert!(gate.accept_flushed(permit, 14));
     assert_eq!(gate.next_flush_batch(permit), RosterFlushBatch::Complete);
     assert_eq!(
-        gate.route(&requested, &annotations, 15, "v15".to_owned(), None),
-        RosterPushDisposition::Deliver("v15".to_owned())
+        gate.route(
+            &requested,
+            &annotations,
+            15,
+            "v15".to_owned(),
+            None,
+            |stanza| {
+                assert_eq!(stanza, "v15");
+                true
+            }
+        ),
+        RosterPushDisposition::Delivered
     );
 }
 
@@ -44,11 +78,25 @@ fn mutation_between_gate_entry_and_snapshot_is_delivered_exactly_once() {
     // Version 20 committed before the RR snapshot and is represented by
     // the result; version 21 committed after it and must be flushed.
     assert_eq!(
-        gate.route(&requested, &annotations, 20, "v20".to_owned(), None),
+        gate.route(
+            &requested,
+            &annotations,
+            20,
+            "v20".to_owned(),
+            None,
+            |_| unreachable!()
+        ),
         RosterPushDisposition::Buffered
     );
     assert_eq!(
-        gate.route(&requested, &annotations, 21, "v21".to_owned(), None),
+        gate.route(
+            &requested,
+            &annotations,
+            21,
+            "v21".to_owned(),
+            None,
+            |_| unreachable!()
+        ),
         RosterPushDisposition::Buffered
     );
     assert_eq!(
@@ -70,7 +118,8 @@ fn represented_versions_are_not_replayed_and_overflow_fails_closed() {
                 &annotations,
                 version,
                 format!("v{version}"),
-                None
+                None,
+                |_| unreachable!(),
             ),
             RosterPushDisposition::Buffered
         );
@@ -82,8 +131,9 @@ fn represented_versions_are_not_replayed_and_overflow_fails_closed() {
             10_000,
             "overflow".to_owned(),
             None,
+            |_| unreachable!(),
         ),
-        RosterPushDisposition::Overflow
+        RosterPushDisposition::Resync
     );
     assert_eq!(gate.start_flush(permit, 500), RosterFlushBatch::Failed);
     assert_eq!(
@@ -97,8 +147,9 @@ fn represented_versions_are_not_replayed_and_overflow_fails_closed() {
             10_001,
             "after-failure".to_owned(),
             None,
+            |_| unreachable!(),
         ),
-        RosterPushDisposition::Overflow
+        RosterPushDisposition::Failed
     );
 }
 
@@ -109,18 +160,32 @@ fn stale_flush_permits_preserve_idle_and_current_generations() {
     let annotations = AtomicBool::new(false);
 
     assert_eq!(
-        gate.start_flush(RosterSyncPermit { generation: 99 }, 0),
+        gate.start_flush(
+            RosterSyncPermit {
+                generation: 99,
+                cursor: None
+            },
+            0
+        ),
         RosterFlushBatch::Superseded
     );
     let permit = gate.begin(&requested, &annotations, false).unwrap();
     assert_eq!(
-        gate.route(&requested, &annotations, 4, "v4".to_owned(), None),
+        gate.route(
+            &requested,
+            &annotations,
+            4,
+            "v4".to_owned(),
+            None,
+            |_| unreachable!()
+        ),
         RosterPushDisposition::Buffered
     );
     assert_eq!(
         gate.start_flush(
             RosterSyncPermit {
                 generation: permit.generation + 1,
+                cursor: None,
             },
             3,
         ),
@@ -134,11 +199,13 @@ fn stale_flush_permits_preserve_idle_and_current_generations() {
         gate.start_flush(
             RosterSyncPermit {
                 generation: permit.generation + 1,
+                cursor: None,
             },
             4,
         ),
         RosterFlushBatch::Superseded
     );
+    assert!(gate.accept_flushed(permit, 4));
     assert_eq!(gate.next_flush_batch(permit), RosterFlushBatch::Complete);
     assert_eq!(gate.start_flush(permit, 4), RosterFlushBatch::Superseded);
     assert!(gate.begin(&requested, &annotations, false).is_ok());
@@ -180,6 +247,7 @@ fn annotation_selection_and_gate_entry_share_one_critical_section() {
             8,
             "plain".to_owned(),
             Some("annotated".to_owned()),
+            |_| unreachable!(),
         );
         route_done_tx.send(disposition).unwrap();
     });
@@ -230,8 +298,12 @@ fn two_resources_select_different_cluster_renderings() {
             4,
             "plain".to_owned(),
             Some("annotated".to_owned()),
+            |stanza| {
+                assert_eq!(stanza, "plain");
+                true
+            },
         ),
-        RosterPushDisposition::Deliver("plain".to_owned())
+        RosterPushDisposition::Delivered
     );
     assert_eq!(
         annotated_gate.route(
@@ -240,7 +312,11 @@ fn two_resources_select_different_cluster_renderings() {
             4,
             "plain".to_owned(),
             Some("annotated".to_owned()),
+            |stanza| {
+                assert_eq!(stanza, "annotated");
+                true
+            },
         ),
-        RosterPushDisposition::Deliver("annotated".to_owned())
+        RosterPushDisposition::Delivered
     );
 }

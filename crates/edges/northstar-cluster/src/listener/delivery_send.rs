@@ -1,6 +1,6 @@
 //! Send a direct stanza through the selected queue, receipt, or MIX handoff.
 
-use super::delivery::DirectDeliveryOptions;
+use super::delivery::{handoff_roster_push, DirectDeliveryOptions};
 use super::*;
 use crate::listener_dispatch::ClusterListenerDispatch;
 use northstar_message_application::messaging::ExactMessageRoute;
@@ -36,40 +36,18 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
     } = recipient;
     let DirectDeliveryOptions {
         roster_requested_only,
-        roster_version,
-        roster_annotated_stanza,
         transport_receipt_required,
         mix_request_id,
         ..
     } = *options;
-    let send_roster = |session: &OnlineSession| {
-        let version = roster_version.expect("cluster roster shape validated before session fanout");
-        let annotated = roster_annotated_stanza.map(|stanza| set_to(stanza, jid));
-        match session.roster_sync.route(
-            &session.roster_requested,
-            &session.mix_roster_annotations,
-            version,
-            delivery.clone(),
-            annotated,
-        ) {
-            northstar_roster_core::RosterPushDisposition::NotInterested => false,
-            northstar_roster_core::RosterPushDisposition::Buffered => true,
-            northstar_roster_core::RosterPushDisposition::Deliver(stanza) => {
-                if session.sender.try_send(stanza).is_ok() {
-                    true
-                } else {
-                    session.sender.disconnect_backpressured_transport();
-                    session.disconnect.cancel();
-                    false
-                }
-            }
-            northstar_roster_core::RosterPushDisposition::Overflow => {
-                session.sender.disconnect_backpressured_transport();
-                session.disconnect.cancel();
-                false
-            }
-        }
-    };
+    if roster_requested_only {
+        let accepted = dispatch
+            .account_routes
+            .sessions
+            .get(jid)
+            .is_some_and(|current| handoff_roster_push(options, current.value(), jid, delivery));
+        return DirectDeliverySend::Accepted(accepted);
+    }
     if options.expected_connections.is_some() || durable_delivery.is_some() {
         let route = ExactMessageRoute {
             full_jid: jid.to_owned(),
@@ -85,9 +63,6 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
             if !options.priority_matches(target, current) {
                 return false;
             }
-            if roster_requested_only && options.exact_control.is_some() {
-                return send_roster(current);
-            }
             if let Some(durable) = durable_delivery {
                 current
                     .sender
@@ -99,9 +74,7 @@ pub(super) async fn send_direct_delivery<A: ClusterAdapters>(
         });
         return DirectDeliverySend::Accepted(accepted == Some(true));
     }
-    let accepted = if roster_requested_only {
-        send_roster(session)
-    } else if let (Some(source), Some(request_id)) = (mix_delivery, mix_request_id) {
+    let accepted = if let (Some(source), Some(request_id)) = (mix_delivery, mix_request_id) {
         return handoff_mix_delivery(
             message_policy,
             dispatch,

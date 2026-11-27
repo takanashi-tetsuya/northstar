@@ -1,17 +1,31 @@
 use super::ClusterNodeDelivery;
-use crate::NodeDeliveryOptions;
+use crate::{ExactControl, ExactControlKind, NodeDeliveryOptions};
 use anyhow::Result;
+use northstar_roster_core::RosterVersion;
+use std::collections::BTreeMap;
+use uuid::Uuid;
 
 impl ClusterNodeDelivery {
     pub async fn send_roster_push(
         &self,
         node_id: &str,
         target_jid: &str,
-        expected_user_id: uuid::Uuid,
-        roster_version: i64,
-        stanza: &str,
-        annotated_stanza: Option<&str>,
+        (account_id, auth_generation): (Uuid, i64),
+        routes: &BTreeMap<String, Uuid>,
+        roster_version: RosterVersion,
+        (stanza, annotated_stanza): (&str, Option<&str>),
     ) -> Result<bool> {
+        let control = ExactControl {
+            kind: ExactControlKind::RosterPush,
+            account_id,
+            auth_generation,
+            expected_connections: routes.clone(),
+            roster_version: Some(roster_version.0),
+            blocklist_revision: None,
+            remote_peer: None,
+            source: None,
+            sequence: None,
+        };
         Ok(self
             .send_to_node_receipt(
                 node_id,
@@ -19,8 +33,7 @@ impl ClusterNodeDelivery {
                 stanza,
                 NodeDeliveryOptions {
                     roster_requested_only: true,
-                    expected_user_id: Some(expected_user_id),
-                    roster_version: Some(roster_version),
+                    exact_control: Some(&control),
                     roster_annotated_stanza: annotated_stanza,
                     ..NodeDeliveryOptions::default()
                 },

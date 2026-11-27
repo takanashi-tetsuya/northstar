@@ -26,6 +26,7 @@ use roxmltree::Node;
 use uuid::Uuid;
 
 mod privacy_selection;
+mod roster_journal;
 mod subscription_retry;
 
 impl RosterSessionHost for ServerNode {

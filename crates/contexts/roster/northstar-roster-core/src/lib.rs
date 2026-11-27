@@ -27,6 +27,9 @@ pub struct RosterChange {
     pub groups: Vec<String>,
     pub approved: bool,
     pub removed: bool,
+    /// Commit-time account UUID and credential generation; absent on read projections.
+    #[serde(skip)]
+    pub owner_authority: Option<(Uuid, i64)>,
 }
 
 /// One XEP-0237 response view, including optional XEP-0405 annotations.

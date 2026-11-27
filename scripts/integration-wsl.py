@@ -3836,22 +3836,42 @@ def run() -> None:
     bob.receive_until("jingle-reason-any-action")
     assert_api_session(bob_token, BOB, "after-jingle")
 
+    # A resource that already received pushes beyond the requested version
+    # gets the complete roster (RFC 6121 section 2.6.3 allows either form):
+    # its push cursor would drop a replay of the older pushes.
     alice.send(
+        "<iq xmlns='jabber:client' type='get' id='roster-catchup-live'>"
+        f"<query xmlns='jabber:iq:roster' ver='{roster_version.group(1)}'/></iq>"
+    )
+    live_catchup, _ = alice.receive_until("roster-catchup-live")
+    live_bob_item = re.search(rf"<item[^>]*jid='{BOB}@{DOMAIN}'[^>]*>", live_catchup)
+    check(
+        "type='result'" in live_catchup
+        and "jabber:iq:roster" in live_catchup
+        and live_bob_item is not None
+        and "subscription='to'" in live_bob_item.group(0),
+        f"versioned roster GET behind the push cursor did not return the complete roster: {live_catchup}",
+    )
+    # A fresh resource has no push cursor, so the journal answers the same
+    # version with an empty result followed by the final changed state.
+    catchup_client = XmppWebSocket(ALICE, PASSWORD, "alice-catchup", initial_presence=False)
+    catchup_client.send(
         "<iq xmlns='jabber:client' type='get' id='roster-catchup'>"
         f"<query xmlns='jabber:iq:roster' ver='{roster_version.group(1)}'/></iq>"
     )
-    catchup_result, _ = alice.receive_until("roster-catchup")
+    catchup_result, _ = catchup_client.receive_until("roster-catchup")
     check(
         "type='result'" in catchup_result and "jabber:iq:roster" not in catchup_result,
         "versioned roster catch-up did not begin with an empty IQ result",
     )
-    catchup_push, _ = alice.receive_until(f"jid='{BOB}@{DOMAIN}'")
+    catchup_push, _ = catchup_client.receive_until(f"jid='{BOB}@{DOMAIN}'")
     check(
         "type='set'" in catchup_push
         and "subscription='to'" in catchup_push
         and " ver='" in catchup_push,
         "roster journal did not return the contact's final changed state",
     )
+    catchup_client.close()
 
     alice.send("<inactive xmlns='urn:xmpp:csi:0'/>")
     alice.send(

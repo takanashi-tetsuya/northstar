@@ -112,9 +112,11 @@ pub async fn roster_get<S: RosterSession>(
             return Ok(RosterGetOutcome::Reply(iq_error(id, "resource-constraint")));
         }
     };
-    let requested_version = query
-        .attribute("ver")
-        .and_then(|version| version.parse::<i64>().ok());
+    let requested_version = permit.requested_version(
+        query
+            .attribute("ver")
+            .and_then(|version| version.parse::<i64>().ok()),
+    );
     let snapshot = match session
         .roster_service()
         .execute_roster_get(RosterGetCommand {
@@ -202,6 +204,9 @@ pub async fn roster_set<S: RosterSession>(
     let Some(user) = session.session_account() else {
         return Ok(iq_error(id, "not-authorized"));
     };
+    let Some(actor) = session.roster_actor() else {
+        return Ok(iq_error(id, "not-authorized"));
+    };
     if let Some(condition) = roster_target_error(
         iq.attribute("to"),
         &user.username,
@@ -264,8 +269,8 @@ pub async fn roster_set<S: RosterSession>(
         let removal = match session
             .roster_service()
             .execute_roster_remove(RosterRemoveCommand {
-                owner_id: user.id,
-                expected_auth_generation: user.auth_generation,
+                owner_id: actor.account_id,
+                expected_auth_generation: actor.auth_generation,
                 jid: &parsed.contact,
                 route,
             })
@@ -315,8 +320,8 @@ pub async fn roster_set<S: RosterSession>(
         let change = match session
             .roster_service()
             .execute_roster_upsert(RosterUpsertCommand {
-                owner_id: user.id,
-                expected_auth_generation: user.auth_generation,
+                owner_id: actor.account_id,
+                expected_auth_generation: actor.auth_generation,
                 jid: parsed.contact,
                 name: parsed.name,
                 groups: parsed.groups,
@@ -636,6 +641,7 @@ mod tests {
             groups: vec!["Friends".to_owned()],
             approved: true,
             removed: false,
+            owner_authority: None,
         };
         let item = roster_change_item_element(&change, None);
         let push = roster_push_xml(

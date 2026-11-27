@@ -14,6 +14,7 @@ mod policy;
 mod roster;
 
 use self::policy::{exact_iq_request, handoff_exact_iq, permits_direct_delivery};
+pub(super) use self::roster::handoff_roster_push;
 use self::roster::{roster_interest_missing, validate_roster_push, RosterPushOptions};
 
 pub(super) struct StanzaDelivery<'a> {
@@ -153,7 +154,6 @@ pub(super) struct DirectDeliveryOptions<'a> {
 pub(super) fn validate_direct_delivery<'a>(
     json: &'a serde_json::Value,
     target: &str,
-    stanza: &str,
     parsed_stanza: &Option<roxmltree::Document<'_>>,
     parsed_presence_authority: Option<ClusterPresenceAuthority>,
     stanza_delivery: &StanzaDelivery<'_>,
@@ -202,7 +202,6 @@ pub(super) fn validate_direct_delivery<'a>(
     )) = exact_control::validate_control_and_roster_push(
         json,
         target,
-        stanza,
         parsed_stanza.as_ref(),
         roster_requested_only,
         (expected_user_id, expected_auth_generation),
@@ -744,7 +743,7 @@ impl<A: ClusterAdapters> ClusterListenerDispatch<A> {
             panic!("test message must be resolved for dispatch");
         };
         let ListenerStep::Next(options) =
-            validate_direct_delivery(json, target, stanza, &parsed_stanza, None, &delivery)
+            validate_direct_delivery(json, target, &parsed_stanza, None, &delivery)
         else {
             panic!("test command must be valid for direct fan-out");
         };

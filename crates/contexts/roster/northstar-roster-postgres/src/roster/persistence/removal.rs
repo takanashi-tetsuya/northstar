@@ -288,8 +288,11 @@ pub async fn remove_roster_item_in_transaction<E: RosterTransactionEffects>(
         .bind(owner_id)
         .fetch_one(&mut *transaction)
         .await?;
-    let owner_change =
+    let mut owner_change =
         record_roster_change(&mut transaction, owner_id, version, &jid, true).await?;
+    if let Some(generation) = expected_auth_generation {
+        owner_change.owner_authority = Some((owner_id, generation));
+    }
     transaction.commit().await?;
     Ok(AuthorizedRosterRemoval::Removed(Box::new(
         RosterRemovalTransition {

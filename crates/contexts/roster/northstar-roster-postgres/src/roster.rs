@@ -215,6 +215,7 @@ pub async fn roster_snapshot(pool: &PgPool, owner_id: Uuid) -> Result<RosterSnap
                 groups: serde_json::from_value(row.get("groups"))?,
                 approved: row.get("approved"),
                 removed: false,
+                owner_authority: None,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -263,6 +264,7 @@ pub async fn roster_read_snapshot<E: RosterTransactionEffects>(
             groups: serde_json::from_value(row.try_get("groups")?)?,
             approved: row.try_get("approved")?,
             removed: false,
+            owner_authority: None,
         });
     }
 

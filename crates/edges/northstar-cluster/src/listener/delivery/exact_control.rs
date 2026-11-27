@@ -15,13 +15,12 @@ pub(super) fn is_exact_control_version(json: &Value) -> bool {
 pub(super) fn validate_control_and_roster_push<'a>(
     json: &'a Value,
     target: &str,
-    stanza: &str,
     document: Option<&Document<'_>>,
     roster_requested_only: bool,
     (expected_user_id, expected_auth_generation): (Option<Uuid>, Option<i64>),
 ) -> ListenerStep<(RosterPushOptions<'a>, Option<ExactControl>)> {
     if !is_exact_control_version(json) {
-        return match validate_roster_push(json, stanza, roster_requested_only, expected_user_id) {
+        return match validate_roster_push(json, document, roster_requested_only) {
             ListenerStep::Next(roster) => ListenerStep::Next((roster, None)),
             ListenerStep::Continue => ListenerStep::Continue,
         };
@@ -132,7 +131,7 @@ impl<A: crate::ClusterAdapters> crate::listener_dispatch::ClusterListenerDispatc
             return None;
         };
         let ListenerStep::Next(options) =
-            validate_direct_delivery(json, target, stanza, &parsed_stanza, authority, &delivery)
+            validate_direct_delivery(json, target, &parsed_stanza, authority, &delivery)
         else {
             return None;
         };

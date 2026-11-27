@@ -4,10 +4,13 @@ use crate::roster::{roster_change_item_element, roster_push_xml};
 use anyhow::Result;
 use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_roster_application::RosterPushDisposition;
-use northstar_roster_core::{ClusterPresenceAuthority, RosterChange, RosterEventSource};
+use northstar_roster_core::{
+    ClusterPresenceAuthority, ExactPresenceRoute, RosterChange, RosterEventSource, RosterVersion,
+};
 use northstar_stream::local_routes::session::OnlineSession;
 use northstar_xml_builder::rewrite::set_to;
 use std::{
+    collections::BTreeMap,
     future::Future,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -16,20 +19,22 @@ use std::{
 };
 use uuid::Uuid;
 
+mod routes;
+pub use self::routes::RosterPushRoutes;
+
 /// Node-owned session and cluster delivery capabilities for committed roster pushes.
-pub trait RosterPushDeliveryPorts: Send + Sync + 'static {
+pub trait RosterPushDeliveryPorts: RosterPushRoutes + Send + Sync + 'static {
     type LocalSession;
 
     fn local_sessions(&self, jid: &str) -> Vec<(String, Self::LocalSession)>;
-    fn remote_nodes(&self, account: &str) -> impl Future<Output = Result<Vec<String>>> + Send;
     fn send_roster_push(
         &self,
         node_id: &str,
         account: &str,
-        owner_id: Uuid,
-        version: i64,
-        push: &str,
-        annotated_push: Option<&str>,
+        owner: (Uuid, i64),
+        routes: &BTreeMap<String, Uuid>,
+        version: RosterVersion,
+        pushes: (&str, Option<&str>),
     ) -> impl Future<Output = Result<bool>> + Send;
 }
 
@@ -62,27 +67,35 @@ impl<P: RosterPushDeliveryPorts> RosterPushDelivery<P> {
         &self.domain
     }
 
-    pub fn local_sessions(&self, jid: &str) -> Vec<(String, P::LocalSession)> {
-        self.ports.local_sessions(jid)
-    }
-
     pub fn record_failure(&self) {
         self.post_accept_failures.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub async fn route_remote_push(
+    async fn route_remote_push(
         &self,
         account: &str,
-        owner_id: Uuid,
-        version: i64,
-        push: &str,
-        annotated_push: Option<&str>,
-    ) -> Result<Vec<RemoteRosterPushFailure>> {
+        owner: (Uuid, i64),
+        captured: Vec<ExactPresenceRoute>,
+        version: RosterVersion,
+        pushes: (&str, Option<&str>),
+    ) -> Vec<RemoteRosterPushFailure> {
         let mut failures = Vec::new();
-        for node_id in self.ports.remote_nodes(account).await? {
+        let mut by_node = BTreeMap::<_, BTreeMap<_, _>>::new();
+        for route in captured {
+            if let Some(node_id) = route
+                .node_id
+                .filter(|_| (route.account_id, route.auth_generation) == owner)
+            {
+                by_node
+                    .entry(node_id)
+                    .or_default()
+                    .insert(route.full_jid, route.connection_id);
+            }
+        }
+        for (node_id, routes) in by_node {
             match self
                 .ports
-                .send_roster_push(&node_id, account, owner_id, version, push, annotated_push)
+                .send_roster_push(&node_id, account, owner, &routes, version, pushes)
                 .await
             {
                 Ok(true) => {}
@@ -95,7 +108,7 @@ impl<P: RosterPushDeliveryPorts> RosterPushDelivery<P> {
                 }
             }
         }
-        Ok(failures)
+        failures
     }
 }
 
@@ -110,14 +123,35 @@ pub async fn deliver_committed_roster_change<P>(
 where
     P: RosterPushDeliveryPorts<LocalSession = OnlineSession>,
 {
+    let Some(authority @ (committed_owner, generation)) = change.owner_authority else {
+        delivery.record_failure();
+        tracing::warn!(%owner_id, version = change.version, "roster push lacks commit-time account authority");
+        return Ok(());
+    };
+    if owner_id != committed_owner {
+        delivery.record_failure();
+        return Ok(());
+    }
     let item = roster_change_item_element(change, None);
     let annotated = participant_id
         .map(|participant_id| roster_change_item_element(change, Some(participant_id)));
     let owner_jid = format!("{}@{}", owner, delivery.local_domain());
-    for (target_jid, target) in delivery.local_sessions(&owner_jid) {
-        if target.user_id != owner_id {
-            continue;
-        }
+    let local = delivery
+        .ports
+        .local_sessions(&owner_jid)
+        .into_iter()
+        .filter(|(_, session)| {
+            session.user_id == owner_id
+                && session.auth_generation == generation
+                && session.roster_requested.load(Ordering::Acquire)
+        })
+        .map(|(jid, session)| (jid, session.connection_id))
+        .collect::<Vec<_>>();
+    let remote = delivery
+        .ports
+        .capture_remote_roster_routes(&owner_jid, authority)
+        .await;
+    for (target_jid, connection_id) in local {
         let plain_push = roster_push_xml(
             &owner_jid,
             &target_jid,
@@ -134,29 +168,27 @@ where
                 events.new_protocol_id(),
             )
         });
-        match target.roster_sync.route(
-            &target.roster_requested,
-            &target.mix_roster_annotations,
-            change.version,
-            plain_push,
-            annotated_push,
-        ) {
-            RosterPushDisposition::NotInterested | RosterPushDisposition::Buffered => {}
-            RosterPushDisposition::Deliver(push) => {
-                if let Err(error) = target.sender.try_send(push) {
-                    target.sender.disconnect_backpressured_transport();
-                    target.disconnect.cancel();
-                    delivery.record_failure();
-                    tracing::warn!(owner = %owner_jid, target = %target_jid, version = change.version, ?error, "committed roster push did not enter the local resource queue; forcing a full resync");
-                }
+        let _ = delivery.ports.with_local_roster_session(&target_jid, |target| {
+            if target.user_id != owner_id || target.auth_generation != generation
+                || target.connection_id != connection_id || !target.routable.load(Ordering::Acquire)
+                || target.disconnect.is_cancelled()
+            {
+                return;
             }
-            RosterPushDisposition::Overflow => {
+            if target.roster_sync.route(
+                &target.roster_requested,
+                &target.mix_roster_annotations,
+                change.version,
+                plain_push,
+                annotated_push,
+                |stanza| !target.disconnect.is_cancelled() && target.sender.try_send(stanza).is_ok(),
+            ) == RosterPushDisposition::Resync {
                 target.sender.disconnect_backpressured_transport();
                 target.disconnect.cancel();
                 delivery.record_failure();
-                tracing::warn!(owner = %owner_jid, target = %target_jid, version = change.version, "roster synchronization buffer overflowed; forcing a full resync");
+                tracing::warn!(owner = %owner_jid, target = %target_jid, version = change.version, "committed roster push could not be admitted in order; forcing a full resync");
             }
-        }
+        });
     }
     // The immutable journal snapshot and exact committed version cross node
     // boundaries together; remote resources add their exact full-JID target.
@@ -176,17 +208,17 @@ where
             events.new_protocol_id(),
         )
     });
-    match delivery
-        .route_remote_push(
-            &owner_jid,
-            owner_id,
-            change.version,
-            &push,
-            annotated_push.as_deref(),
-        )
-        .await
-    {
-        Ok(failures) => {
+    match remote {
+        Ok(routes) => {
+            let failures = delivery
+                .route_remote_push(
+                    &owner_jid,
+                    authority,
+                    routes,
+                    RosterVersion(change.version),
+                    (&push, annotated_push.as_deref()),
+                )
+                .await;
             for failure in failures {
                 delivery.record_failure();
                 match failure {
@@ -300,6 +332,8 @@ mod tests {
         sessions: Vec<(String, OnlineSession)>,
         nodes: Vec<String>,
         sent_nodes: Mutex<Vec<String>>,
+        capture_pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+        replacement: Arc<Mutex<Option<(String, OnlineSession)>>>,
     }
 
     impl RosterPushDeliveryPorts for PushPorts {
@@ -310,26 +344,22 @@ mod tests {
             self.sessions.clone()
         }
 
-        async fn remote_nodes(&self, account: &str) -> Result<Vec<String>> {
-            assert_eq!(account, "alice@example.test");
-            if self.lookup_error {
-                anyhow::bail!("lookup failed");
-            }
-            Ok(self.nodes.clone())
-        }
-
         async fn send_roster_push(
             &self,
             node_id: &str,
             account: &str,
-            owner_id: Uuid,
-            version: i64,
-            push: &str,
-            annotated_push: Option<&str>,
+            owner: (Uuid, i64),
+            routes: &BTreeMap<String, Uuid>,
+            version: RosterVersion,
+            (push, annotated_push): (&str, Option<&str>),
         ) -> Result<bool> {
             assert_eq!(account, "alice@example.test");
-            assert_eq!(owner_id, Uuid::from_u128(1));
-            assert_eq!(version, 42);
+            assert_eq!(owner, (Uuid::from_u128(1), 7));
+            assert_eq!(version, RosterVersion(42));
+            assert_eq!(
+                routes,
+                &BTreeMap::from([(format!("{account}/{node_id}"), Uuid::from_u128(19),)])
+            );
             for (stanza, annotated) in [(push, false), (annotated_push.unwrap(), true)] {
                 let document = roxmltree::Document::parse(stanza).unwrap();
                 let iq = document.root_element();
@@ -379,6 +409,7 @@ mod tests {
                 groups: Vec::new(),
                 approved: false,
                 removed: false,
+                owner_authority: Some((Uuid::from_u128(1), 7)),
             };
             for (lookup_error, expected_failures) in [(false, 2), (true, 1)] {
                 let failures = Arc::new(AtomicU64::new(0));
@@ -405,7 +436,7 @@ mod tests {
                 let expected_nodes: Vec<String> = if lookup_error {
                     Vec::new()
                 } else {
-                    vec!["rejected".into(), "failed".into(), "accepted".into()]
+                    vec!["accepted".into(), "failed".into(), "rejected".into()]
                 };
                 assert_eq!(*delivery.ports.sent_nodes.lock().unwrap(), expected_nodes);
             }
@@ -534,7 +565,23 @@ mod tests {
             groups: Vec::new(),
             approved: false,
             removed: false,
+            owner_authority: Some((Uuid::from_u128(1), 7)),
         }
+    }
+
+    fn roster_ready(session: &OnlineSession, annotated: bool) {
+        let permit = session
+            .roster_sync
+            .begin(
+                &session.roster_requested,
+                &session.mix_roster_annotations,
+                annotated,
+            )
+            .unwrap();
+        assert_eq!(
+            session.roster_sync.start_flush(permit, 41),
+            northstar_roster_core::RosterFlushBatch::Complete
+        );
     }
 
     #[test]
@@ -550,9 +597,9 @@ mod tests {
             ] {
                 let (session, receiver) =
                     test_online_session(user_id, 7, Uuid::new_v4(), resource, 1);
-                session
-                    .roster_requested
-                    .store(interested, Ordering::Release);
+                if interested {
+                    roster_ready(&session, false);
+                }
                 let target = format!("alice@example.test/{resource}");
                 ports.sessions.push((target.clone(), session.clone()));
                 receivers.push((target, session, receiver));
@@ -597,10 +644,7 @@ mod tests {
             for (resource, annotated) in [("plain", false), ("annotated", true)] {
                 let (session, receiver) =
                     test_online_session(owner_id, 7, Uuid::new_v4(), resource, 1);
-                session.roster_requested.store(true, Ordering::Release);
-                session
-                    .mix_roster_annotations
-                    .store(annotated, Ordering::Release);
+                roster_ready(&session, annotated);
                 let target = format!("alice@example.test/{resource}");
                 ports.sessions.push((target.clone(), session));
                 receivers.push((target, annotated, receiver));
@@ -643,7 +687,7 @@ mod tests {
                 let owner_id = Uuid::from_u128(1);
                 let (session, receiver) =
                     test_online_session(owner_id, 7, Uuid::new_v4(), "full", 1);
-                session.roster_requested.store(true, Ordering::Release);
+                roster_ready(&session, false);
                 let mut receiver = if closed {
                     drop(receiver);
                     None
@@ -744,4 +788,6 @@ mod tests {
             );
         });
     }
+
+    mod exact;
 }

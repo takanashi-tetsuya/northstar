@@ -38,6 +38,7 @@ async fn preference_reply_and_push_use_committed_facts_without_account_lookup() 
                 groups: Vec::new(),
                 approved: false,
                 removed: false,
+                owner_authority: None,
             },
             Some(MixParticipantId::Local(participant.clone())),
         )

@@ -288,7 +288,6 @@ pub(super) async fn listen_once<A: ClusterAdapters>(
                 let ListenerStep::Next(options) = delivery::validate_direct_delivery(
                     json,
                     target,
-                    stanza,
                     &parsed_stanza,
                     parsed_presence_authority,
                     &stanza_delivery,

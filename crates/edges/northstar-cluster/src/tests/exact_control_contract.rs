@@ -1,5 +1,6 @@
 use super::*;
 use crate::node_delivery::build_node_delivery_payload;
+use northstar_roster_core::{RosterFlushBatch, RosterVersion};
 use roxmltree::Document;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -310,7 +311,18 @@ fn add_roster_session(
 ) -> mpsc::Receiver<OutboundItem> {
     let (_, resource) = jid.split_once('/').unwrap();
     let (session, output) = test_online_session(ORIGINAL, 1, connection_id, resource, 4);
-    session.roster_requested.store(true, Ordering::Release);
+    let permit = session
+        .roster_sync
+        .begin(
+            &session.roster_requested,
+            &session.mix_roster_annotations,
+            false,
+        )
+        .unwrap();
+    assert_eq!(
+        session.roster_sync.start_flush(permit, 41),
+        RosterFlushBatch::Complete
+    );
     assert!(fixture
         .mix_caps
         .sessions
@@ -393,13 +405,110 @@ async fn listener_rejects_malformed_v15_and_fences_roster_delivery_by_connection
             ..NodeDeliveryOptions::default()
         },
     );
-    assert_eq!(deliver(&fixture, &legacy).await.unwrap().0, 2);
-    captured.try_recv().unwrap();
-    other.try_recv().unwrap();
+    assert_eq!(legacy["protocol_version"], "13");
+    assert_eq!(deliver(&fixture, &legacy).await, None);
+    let unmarked = payload(TARGET, ROSTER, NodeDeliveryOptions::default());
+    assert_eq!(deliver(&fixture, &unmarked).await, None);
+    assert!(captured.try_recv().is_err());
+    assert!(other.try_recv().is_err());
 
     fixture.mix_caps.sessions.remove(ORIGINAL_JID).unwrap();
     let mut replacement = add_roster_session(&fixture, ORIGINAL_JID, OTHER);
     assert_eq!(deliver(&fixture, &json).await, Some((0, None)));
     assert!(replacement.try_recv().is_err());
     assert!(other.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn exact_roster_packets_reorder_or_require_proof_after_loss() {
+    for lost in [false, true] {
+        let fixture = DirectDeliveryFixture::new();
+        let (session, mut output) = test_online_session(ORIGINAL, 1, CAPTURED, "Phone", 4);
+        let sync = session
+            .roster_sync
+            .begin(
+                &session.roster_requested,
+                &session.mix_roster_annotations,
+                false,
+            )
+            .unwrap();
+        let (scheduled, mut repair) = mpsc::unbounded_channel();
+        session
+            .roster_sync
+            .set_repair_scheduler(sync, move |permit| scheduled.send(permit).unwrap());
+        assert_eq!(
+            session.roster_sync.start_flush(sync, 41),
+            RosterFlushBatch::Complete
+        );
+        fixture
+            .mix_caps
+            .sessions
+            .insert(ORIGINAL_JID.to_owned(), session.clone());
+        let later = ROSTER.replace("ver='42'", "ver='43'");
+        let mut control = exact_control(ExactControlKind::RosterPush);
+        control.roster_version = Some(43);
+        let later = payload(
+            TARGET,
+            &later,
+            NodeDeliveryOptions {
+                exact_control: Some(&control),
+                ..NodeDeliveryOptions::default()
+            },
+        );
+        control.roster_version = Some(42);
+        let earlier = payload(
+            TARGET,
+            ROSTER,
+            NodeDeliveryOptions {
+                exact_control: Some(&control),
+                ..NodeDeliveryOptions::default()
+            },
+        );
+        assert_eq!(
+            deliver(&fixture, &later).await,
+            Some((1, Some(ORIGINAL_JID.to_owned())))
+        );
+        let permit = repair.try_recv().unwrap();
+        assert!(output.try_recv().is_err());
+        if lost {
+            let RosterFlushBatch::Repair(gap) = session.roster_sync.next_flush_batch(permit) else {
+                panic!("a missing packet requires journal proof");
+            };
+            assert_eq!(
+                (gap.after, gap.through),
+                (RosterVersion(41), RosterVersion(43))
+            );
+            assert!(session
+                .roster_sync
+                .repair_batch(permit, gap, None)
+                .is_none());
+            assert!(session.roster_sync.fail(permit));
+            assert_eq!(deliver(&fixture, &earlier).await, Some((0, None)));
+            assert!(output.try_recv().is_err());
+        } else {
+            assert_eq!(deliver(&fixture, &earlier).await.unwrap().0, 1);
+            let RosterFlushBatch::Batch(batch) = session.roster_sync.next_flush_batch(permit)
+            else {
+                panic!("both packets must now be contiguous");
+            };
+            for (expected, (version, stanza)) in [42, 43].into_iter().zip(batch) {
+                assert_eq!(version, expected);
+                assert_eq!(cluster_roster_push_version(&stanza), Some(expected));
+                session.sender.try_send(stanza).unwrap();
+                assert!(session.roster_sync.accept_flushed(permit, version));
+            }
+            assert_eq!(
+                session.roster_sync.next_flush_batch(permit),
+                RosterFlushBatch::Complete
+            );
+            assert_eq!(deliver(&fixture, &earlier).await.unwrap().0, 1);
+            for expected in [42, 43] {
+                assert_eq!(
+                    cluster_roster_push_version(&output.try_recv().unwrap().stanza),
+                    Some(expected)
+                );
+            }
+            assert!(output.try_recv().is_err());
+        }
+    }
 }

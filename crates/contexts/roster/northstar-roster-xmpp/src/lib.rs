@@ -12,6 +12,7 @@ pub mod presence_delivery;
 pub mod privacy;
 mod protocol_session;
 pub mod roster;
+mod roster_journal;
 pub mod roster_push;
 mod session_host;
 mod subscription_retry;
@@ -19,6 +20,7 @@ mod subscription_retry;
 pub use self::avatar_presence::AvatarPresenceGate;
 pub use self::protocol_session::PresenceHandlers;
 pub use self::protocol_session::{BlockingHandlers, PrivacyHandlers, RosterHandlers};
+pub use self::roster_journal::RosterJournalReader;
 pub use self::session_host::{
     FederatedPresenceHost, PostAcceptFailureTelemetry, PresenceDeliveryHost, PresenceRouting,
     RosterSessionHost,

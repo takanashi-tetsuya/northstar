@@ -208,9 +208,12 @@ async fn share_presence_waits_before_ordinary_roster_set_touches_the_same_item()
             roster::get_roster_version(&fixture.pool, user).await?,
             delta.version
         );
+        // Journal reads never carry the commit-time owner authority.
+        let mut stored = delta.change.clone();
+        stored.owner_authority = None;
         assert_eq!(
             roster::latest_roster_change_for_contact(&fixture.pool, user, CHANNEL).await?,
-            Some(delta.change.clone())
+            Some(stored)
         );
         Ok(())
     }

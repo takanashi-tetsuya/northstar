@@ -6,8 +6,8 @@ mod journal;
 mod removal;
 
 pub use self::journal::{
-    latest_roster_change_for_contact, record_roster_change, roster_change_from_row,
-    roster_changes_since_in_transaction,
+    latest_roster_change_for_contact, read_roster_gap, record_roster_change,
+    roster_change_from_row, roster_changes_since_in_transaction, RosterGapAnnotationProof,
 };
 pub use self::removal::{remove_roster_item_authorized, remove_roster_item_in_transaction};
 
@@ -112,9 +112,10 @@ pub async fn upsert_roster_authorized<E: RosterTransactionEffects>(
     else {
         return Ok(None);
     };
-    let change =
+    let mut change =
         upsert_roster_in_transaction(effects, &mut transaction, owner_id, jid, name, groups)
             .await?;
+    change.owner_authority = Some((owner_id, expected_auth_generation));
     transaction.commit().await?;
     Ok(Some(change))
 }

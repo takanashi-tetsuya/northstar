@@ -1,7 +1,9 @@
 use super::*;
 use northstar_room_application::mix_service::MixAccount;
 use northstar_room_core::mix::MixParticipantId;
-use northstar_roster_core::{RosterChange, RosterPushDisposition, RosterSyncGate};
+use northstar_roster_core::{
+    RosterChange, RosterFlushBatch, RosterPushDisposition, RosterSyncGate,
+};
 use std::sync::atomic::AtomicBool;
 
 #[test]
@@ -19,6 +21,7 @@ fn exact_roster_transitions_keep_annotation_with_their_own_version() {
         groups: Vec::new(),
         approved: false,
         removed,
+        owner_authority: None,
     };
     let first = CommittedMixRosterDelta::new(
         account.clone(),
@@ -47,6 +50,13 @@ fn exact_roster_transitions_keep_annotation_with_their_own_version() {
             let gate = RosterSyncGate::default();
             let requested = AtomicBool::new(true);
             let annotated = AtomicBool::new(wants_annotations);
+            let permit = gate
+                .begin(&requested, &annotated, wants_annotations)
+                .unwrap();
+            assert_eq!(
+                gate.start_flush(permit, version - 1),
+                RosterFlushBatch::Complete
+            );
             let plain = format!("version={version}");
             let annotated_push =
                 committed_annotation(&delta).map(|id| format!("{plain};participant={id}"));
@@ -56,8 +66,18 @@ fn exact_roster_transitions_keep_annotation_with_their_own_version() {
                 plain.clone()
             };
             assert_eq!(
-                gate.route(&requested, &annotated, delta.version, plain, annotated_push),
-                RosterPushDisposition::Deliver(expected)
+                gate.route(
+                    &requested,
+                    &annotated,
+                    delta.version,
+                    plain,
+                    annotated_push,
+                    |stanza| {
+                        assert_eq!(stanza, expected);
+                        true
+                    }
+                ),
+                RosterPushDisposition::Delivered
             );
         }
     }

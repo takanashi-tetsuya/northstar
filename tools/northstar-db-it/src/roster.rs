@@ -8,5 +8,6 @@ mod privacy_commands;
 mod privacy_decision;
 mod privacy_lease;
 mod privacy_service;
+mod roster_push_order;
 mod snapshot_conformance;
 mod visibility_gates;

@@ -1,4 +1,6 @@
 use super::*;
+use northstar_roster_core::RosterVersion;
+use std::collections::BTreeMap;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -67,16 +69,18 @@ async fn roster_push_keeps_original_user_version_and_annotation() {
     let plain = "<iq xmlns='jabber:client' type='set' id='original'><query xmlns='jabber:iq:roster' ver='42'><item jid='room@mix.example.test'/></query></iq>";
     let annotated = "<iq xmlns='jabber:client' type='set' id='original'><query xmlns='jabber:iq:roster' ver='42'><item jid='room@mix.example.test'><channel xmlns='urn:xmpp:mix:roster:0' participant-id='original-participant'/></item></query></iq>";
     let sender = first.node_delivery();
+    let connection = Uuid::from_u128(45);
+    let routes = BTreeMap::from([("alice@example.test/Phone".to_owned(), connection)]);
     let (finished, finish) = oneshot::channel();
     let send = async {
         let result = sender
             .send_roster_push(
                 &second.node_id,
                 "alice@example.test",
-                expected_user,
-                42,
-                plain,
-                Some(annotated),
+                (expected_user, 7),
+                &routes,
+                RosterVersion(42),
+                (plain, Some(annotated)),
             )
             .await;
         finished.send(()).unwrap();
@@ -127,6 +131,10 @@ async fn roster_push_keeps_original_user_version_and_annotation() {
                         "a recreated account cannot replace the original recipient"
                     );
                     assert_eq!(payload["roster_version"], 42);
+                    assert_eq!(payload["protocol_version"], "15");
+                    assert_eq!(payload["expected_auth_generation"], 7);
+                    assert_eq!(payload["exact_control"]["kind"], "roster_push");
+                    assert_eq!(payload["expected_connections"], serde_json::json!(routes));
                     assert_eq!(payload["roster_requested_only"], true);
                     assert_eq!(payload["target"], "alice@example.test");
                     assert_eq!(payload["stanza"], plain);

@@ -33,7 +33,7 @@ mod presence_staging;
 mod roster_sync;
 
 use self::presence_staging::{stage_availability, stage_show_and_priority, StagedAvailability};
-use self::roster_sync::{flush_roster_sync, RosterSyncFlush};
+use self::roster_sync::prepare_roster_sync;
 
 // From src/xmpp/protocol/roster_identity.rs.
 impl<H: SessionHost> crate::SessionIdentity for ProtocolSession<H> {
@@ -563,22 +563,11 @@ impl<H: SessionHost + RosterSessionHost> RosterHandlers for ProtocolSession<H> {
                     initial_delta,
                     target,
                 } => {
-                    let failure_telemetry = self.host().post_accept_failure_telemetry();
-                    let outbound = self.outbound.clone();
-                    let gate = Arc::clone(&self.roster_sync);
-                    let disconnect = self.disconnect.clone();
+                    let drain = prepare_roster_sync(self, permit, target)?;
                     self.defer_after_transport("roster-initial-sync", async move {
-                        flush_roster_sync(RosterSyncFlush {
-                            failure_telemetry,
-                            outbound,
-                            gate,
-                            disconnect,
-                            permit,
-                            snapshot_version,
-                            initial_delta,
-                            target,
-                        })
-                        .await;
+                        drain
+                            .flush_roster_sync(permit, snapshot_version, initial_delta)
+                            .await;
                     })?;
                     Action::Send(response)
                 }

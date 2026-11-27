@@ -11,18 +11,21 @@ use dashmap::DashMap;
 use northstar_auth_xmpp::account_deletion::{
     AccountDeletionRecoveryContext, AccountDeletionRecoveryPorts,
 };
-use northstar_cluster::{ClusterListenerPresenceRoutes, ClusterNodeDelivery};
+use northstar_cluster::{ClusterListenerPresenceRoutes, ClusterManager, ClusterNodeDelivery};
 use northstar_federation_application::effective_policy::EffectiveFederationPolicy;
-use northstar_roster_core::RosterChange;
+use northstar_roster_core::{RosterChange, RosterVersion};
 use northstar_roster_xmpp::roster_push::{RosterPushDelivery, RosterPushDeliveryPorts};
 use northstar_stream::local_routes::session_table::try_send_to_entries_in;
 use northstar_workflows::account_repository::WorkflowAccountRepository;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
+mod roster_routes;
+
 pub(crate) struct RosterPushDeliveryAdapters {
     sessions: Arc<DashMap<String, OnlineSession>>,
-    routes: ClusterListenerPresenceRoutes,
+    cluster: ClusterManager,
     sender: ClusterNodeDelivery,
 }
 
@@ -33,21 +36,17 @@ impl RosterPushDeliveryPorts for RosterPushDeliveryAdapters {
         session_entries_for_in(&self.sessions, jid)
     }
 
-    async fn remote_nodes(&self, account: &str) -> Result<Vec<String>> {
-        self.routes.remote_nodes(account).await
-    }
-
     async fn send_roster_push(
         &self,
         node_id: &str,
         account: &str,
-        owner_id: Uuid,
-        version: i64,
-        push: &str,
-        annotated_push: Option<&str>,
+        owner: (Uuid, i64),
+        routes: &BTreeMap<String, Uuid>,
+        version: RosterVersion,
+        pushes: (&str, Option<&str>),
     ) -> Result<bool> {
         self.sender
-            .send_roster_push(node_id, account, owner_id, version, push, annotated_push)
+            .send_roster_push(node_id, account, owner, routes, version, pushes)
             .await
     }
 }
@@ -68,7 +67,7 @@ impl ServerNode {
         RosterPushDelivery::new(
             RosterPushDeliveryAdapters {
                 sessions: Arc::clone(self.session.live().sessions()),
-                routes: self.cluster.listener_presence_routes(),
+                cluster: self.cluster.clone(),
                 sender: self.cluster.node_delivery(),
             },
             Arc::clone(&self.metrics.post_accept_side_effect_failures_total),

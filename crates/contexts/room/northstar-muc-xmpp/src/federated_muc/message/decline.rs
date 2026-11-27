@@ -119,18 +119,6 @@ pub(super) async fn handle_invitation_decline<S: MucHost>(
                     "item-not-found",
                 )));
             };
-            let target_bare = target.bare();
-            if state
-                .muc_service()
-                .is_blocked_for_account(recipient.id, &target_bare, room_jid)
-                .await?
-                || state
-                    .muc_service()
-                    .is_blocked_for_account(recipient.id, &target_bare, actor_full_jid)
-                    .await?
-            {
-                return Ok(MessageStep::Done(None));
-            }
             let mut targets = state.session_entries_for(&target_raw);
             if target.resourcepart().is_none() {
                 targets.retain(|(_, session)| session.is_available() && session.priority() >= 0);
@@ -141,16 +129,29 @@ pub(super) async fn handle_invitation_decline<S: MucHost>(
                         .then_with(|| left_jid.cmp(right_jid))
                 });
             }
-            let mut delivered = targets
+            let Some(eligible) = addressed::allowed_decline_sessions(
+                state,
+                targets,
+                recipient.id,
+                &target_raw,
+                room_jid,
+                actor_full_jid,
+            )
+            .await?
+            else {
+                return Ok(MessageStep::Done(None));
+            };
+            let mut delivered = eligible
+                .sessions
                 .into_iter()
-                .any(|(_, session)| session.sender().try_send(forwarded.clone()).is_ok());
+                .any(|session| session.sender().try_send(forwarded.clone()).is_ok());
             if !delivered {
                 delivered = state
                     .route_federated_muc_account_message_remote(&target_raw, &forwarded, None)
                     .await
                     .is_some();
             }
-            if !delivered && request.temporary_storage {
+            if !delivered && request.temporary_storage && eligible.offline_allowed {
                 let delayed = offline_delay(&forwarded, room_jid, address.facts);
                 let outcome = state
                     .muc_service()

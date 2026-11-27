@@ -1232,3 +1232,4 @@ pub async fn ingress_contracts() {
 
 #[cfg(test)]
 mod publication_identity;
+mod room_policy;

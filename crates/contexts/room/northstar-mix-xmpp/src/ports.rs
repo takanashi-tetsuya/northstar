@@ -14,6 +14,9 @@ use northstar_room_application::mix_service::{
     foreground, MixAccount, MixChannel, MixPamProjectionRepository, MixRepository, MixService,
     PamMembership, PresenceOutcome, RecoveryEpoch, RecoveryPresenceSource, RecoveryProgress,
 };
+use northstar_room_application::room_delivery_policy::{
+    MixRelayPolicyReader, RoomPolicyLiveSession,
+};
 use northstar_room_core::mix::{MixChannelAddress, MixChannelId, MixSessionCapability};
 use northstar_room_core::mix_iq_relay::{MixIqRelayIndex, PendingMixIqRelay, RelayReturnRoute};
 use northstar_roster_core::RosterChange;
@@ -31,6 +34,9 @@ use tokio::sync::{
 };
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+mod room_policy;
+pub use self::room_policy::MixChannelPolicyReader;
 
 /// Keep remote nodes in authority order, including duplicate routes.
 pub fn remote_nodes_in_order(nodes: Vec<String>, local_node: &str) -> Vec<String> {
@@ -123,7 +129,7 @@ pub trait MixOutbound: Clone + Send + Sync + 'static {
 }
 
 /// One live local route.
-pub trait MixLocalSession: Clone + Send + Sync + 'static {
+pub trait MixLocalSession: RoomPolicyLiveSession + Clone + Send + Sync + 'static {
     type Outbound: MixOutbound;
 
     fn sender(&self) -> &Self::Outbound;
@@ -163,7 +169,7 @@ pub trait MixIqRelayExpiryPort: Send + Sync + 'static {
 }
 
 /// The durable MIX delivery lanes' view of routing.
-pub trait MixOutboxPort: Send + Sync + 'static {
+pub trait MixOutboxPort: MixChannelPolicyReader + 'static {
     type Repository: MixRepository + MixPamProjectionRepository + 'static;
     type Session: MixLocalSession;
     type Federation: FederationRoute;
@@ -282,7 +288,7 @@ pub trait MixPresenceRecoveryPort: Send + Sync + 'static {
 }
 
 /// Server-wide capabilities the MIX handlers use.
-pub trait MixHost: Send + Sync + 'static {
+pub trait MixHost: MixRelayPolicyReader + 'static {
     type Repository: MixRepository + MixPamProjectionRepository + 'static;
     type Session: MixLocalSession;
     type Federation: FederationRoute;

@@ -5445,10 +5445,17 @@ def run() -> None:
     )
     unregister_result, _ = bob.receive_until("muc-unregister")
     check("type='result'" in unregister_result, "MUC unregister command failed")
-    bob_visitor, _ = bob.receive_until(f"from='{controls_room}/ReservedBob'")
+    # The room outbox delivers the join event at least once, so the joined
+    # user may receive its self-presence again, with the join's event ID,
+    # after the unregister result.
+    join_echo = re.match(r"<presence\b[^>]*\sid='[^']+'", registered_join)
+    while True:
+        bob_visitor, _ = bob.receive_until(f"from='{controls_room}/ReservedBob'")
+        if join_echo is None or not bob_visitor.startswith(join_echo.group(0)):
+            break
     check(
         "affiliation='none'" in bob_visitor and "role='visitor'" in bob_visitor,
-        "unregistering did not demote the joined user in the moderated room",
+        f"unregistering did not demote the joined user in the moderated room: {bob_visitor}",
     )
     alice_visitor, _ = alice.receive_until(f"from='{controls_room}/ReservedBob'")
     check(

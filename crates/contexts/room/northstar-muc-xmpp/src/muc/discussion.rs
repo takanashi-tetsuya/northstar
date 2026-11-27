@@ -206,7 +206,7 @@ impl<S: MucSession> MucFanoutPort for MucMessageFanout<'_, S> {
         tracing::debug!(room = self.room_jid, to = %recipient.full_jid, "MUC routing stanza");
         self.session
             .host()
-            .deliver_to_muc_occupant_unchecked(&recipient, delivery)
+            .deliver_muc_from(&recipient, delivery, None, self.sender)
             .await
     }
 

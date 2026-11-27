@@ -6,6 +6,8 @@ use northstar_room_application::cluster_muc_receipt_claim::ClusterMucReceiptClai
 use northstar_workflows::muc_delivery_repository::PostgresMucDeliveryRepository;
 use std::sync::Arc;
 
+mod room_policy;
+
 pub(crate) type MucDeliveryContext = northstar_stream::muc_delivery::MucDeliveryContext<
     northstar_workflows::muc_delivery_repository::PostgresMucDeliveryRepository,
     northstar_room_postgres::cluster_muc_receipt_claim_repository::PostgresClusterMucReceiptClaimRepository,

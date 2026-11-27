@@ -1,4 +1,5 @@
 use super::*;
+mod room_policy;
 use northstar_archive_core::{
     FederatedMamAdmissionOutcome, FederatedMamMetadataCommand, FederatedMamStreamPage,
     FederatedMamStreamRequest, MamMetadataResult, MamRoomAccessOutcome, MamRoomReadAuthority,

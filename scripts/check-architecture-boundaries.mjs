@@ -799,6 +799,14 @@ const mixOutboxDbMethods = new Map([
   ['outbox_find_enabled_user', 'find_enabled_user'],
   ['outbox_claimed_recipient_account', 'claimed_recipient_account'],
   ['outbox_is_blocked', 'is_blocked'],
+  [
+    'outbox_room_delivery_policies',
+    {
+      description: 'read-only room delivery policy turn',
+      callPattern: /\breader\s*\.\s*read_room_delivery_policies\s*\(\s*queries\s*\)\s*\.\s*await\b/,
+      awaitPattern: /\breader\s*\.\s*read_room_delivery_policies\s*\(\s*queries\s*\)/,
+    },
+  ],
   ['outbox_archive_mix_message_once', 'archive_mix_message_once'],
   ['outbox_archive_mix_message_once_observed', 'archive_mix_message_once_observed'],
   [

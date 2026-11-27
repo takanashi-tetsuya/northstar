@@ -187,7 +187,12 @@ pub(super) async fn change_muc_role<A: ClusterAdapters>(
                 );
                 *delivered += usize::from(
                     muc_delivery
-                        .deliver_to_muc_occupant(&session, presence)
+                        .deliver_to_muc_occupant_from(
+                            &session,
+                            presence,
+                            None,
+                            Some(&occupant.full_jid),
+                        )
                         .await,
                 );
             }
@@ -230,7 +235,12 @@ pub(super) async fn change_muc_nickname<A: ClusterAdapters>(
                 );
                 *delivered += usize::from(
                     muc_delivery
-                        .deliver_to_muc_occupant(&session, unavailable)
+                        .deliver_to_muc_occupant_from(
+                            &session,
+                            unavailable,
+                            None,
+                            Some(&old_occupant.full_jid),
+                        )
                         .await,
                 );
                 let available = northstar_room_core::stanza::muc_presence_stanza(
@@ -246,7 +256,12 @@ pub(super) async fn change_muc_nickname<A: ClusterAdapters>(
                 );
                 *delivered += usize::from(
                     muc_delivery
-                        .deliver_to_muc_occupant(&session, available)
+                        .deliver_to_muc_occupant_from(
+                            &session,
+                            available,
+                            None,
+                            Some(&new_occupant.full_jid),
+                        )
                         .await,
                 );
             }
@@ -291,7 +306,12 @@ pub(super) async fn fan_out_muc_presence<A: ClusterAdapters>(
             );
             *delivered += usize::from(
                 muc_delivery
-                    .deliver_to_muc_occupant(&session, presence)
+                    .deliver_to_muc_occupant_from(
+                        &session,
+                        presence,
+                        None,
+                        Some(&occupant.full_jid),
+                    )
                     .await,
             );
         }
@@ -313,14 +333,6 @@ pub(super) async fn deliver_muc_private_stanza<A: ClusterAdapters>(
     let Some(session) = address.recipient(muc_endpoints, target) else {
         return;
     };
-    let blocked = muc_delivery
-        .blocked_muc_recipient_accounts(std::slice::from_ref(&session), muc_senders)
-        .await;
-    if northstar_xmpp_types::jid::canonical_bare_key(&session.full_jid)
-        .is_ok_and(|owner| blocked.contains(&owner))
-    {
-        return;
-    }
     if let Some(route) = address.required_moderator() {
         let Ok(room) = northstar_xmpp_types::jid::CanonicalJid::parse_bare(target) else {
             return;
@@ -349,7 +361,12 @@ pub(super) async fn deliver_muc_private_stanza<A: ClusterAdapters>(
     let delivery = set_to(stanza, &session.full_jid);
     turn.delivered += usize::from(
         muc_delivery
-            .deliver_to_muc_occupant_unchecked(&session, delivery)
+            .deliver_to_muc_occupant_from(
+                &session,
+                delivery,
+                None,
+                muc_senders.get(1).map(String::as_str),
+            )
             .await,
     );
 }
@@ -372,15 +389,7 @@ pub(super) async fn broadcast_muc_stanza<A: ClusterAdapters>(
         }
     };
     let sessions = broadcast_recipients(muc_endpoints, target, audience.as_deref());
-    let blocked = muc_delivery
-        .blocked_muc_recipient_accounts(&sessions, muc_senders)
-        .await;
     for session in sessions {
-        if northstar_xmpp_types::jid::canonical_bare_key(&session.full_jid)
-            .is_ok_and(|owner| blocked.contains(&owner))
-        {
-            continue;
-        }
         let session = if audience.is_some() {
             use northstar_room_core::occupancy::LocalMucOccupantIdentity;
             use northstar_stream::local_routes::muc_table::with_local_muc_occupant_exact;
@@ -404,7 +413,12 @@ pub(super) async fn broadcast_muc_stanza<A: ClusterAdapters>(
         let delivery = set_to(stanza, &session.full_jid);
         *delivered += usize::from(
             muc_delivery
-                .deliver_to_muc_occupant_unchecked(&session, delivery)
+                .deliver_to_muc_occupant_from(
+                    &session,
+                    delivery,
+                    None,
+                    muc_senders.get(1).map(String::as_str),
+                )
                 .await,
         );
     }

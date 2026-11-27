@@ -1,6 +1,10 @@
 use super::*;
 use crate::relay::handle_channel_relay_request_for;
-use northstar_room_core::mix::{MixChannelAddress, MixPamState};
+use northstar_room_application::room_delivery_policy::{
+    MixRelayPolicyReader, PrivacyStanzaKind, RoomDeliveryPolicyQuery, RoomDeliveryPolicyReader,
+    RoomPolicyLiveSession, RoomPolicySubject,
+};
+use northstar_room_core::mix::MixChannelAddress;
 use northstar_room_core::mix_iq_relay::{RelayReturnAuthority, RelayReturnRoute};
 
 pub async fn try_mix_iq_relay(session: &impl MixSession, raw: &str) -> Result<Option<MixAction>> {
@@ -53,7 +57,50 @@ pub async fn try_mix_iq_relay(session: &impl MixSession, raw: &str) -> Result<Op
         auth_generation: user.auth_generation,
         connection: session.connection_id(),
     };
+    let forbidden = || {
+        Some(MixAction::Send(relay_error(
+            &request.id,
+            &request.to,
+            full_jid,
+            "auth",
+            "forbidden",
+        )))
+    };
+    let live_route = || {
+        session
+            .host()
+            .session_entries_for(full_jid)
+            .into_iter()
+            .find_map(|(_, target)| {
+                let route = RoomPolicyLiveSession::room_policy_route(&target);
+                (route.account_id == user.id
+                    && route.auth_generation == Some(user.auth_generation)
+                    && matches!(route.subject, RoomPolicySubject::Connection { id, .. }
+                    if id == session.connection_id()))
+                .then_some(route)
+            })
+    };
+    let Some(route) = live_route() else {
+        return Ok(forbidden());
+    };
+    let policy = RoomDeliveryPolicyQuery {
+        route,
+        visible_peer: &request.to,
+        real_peer: Some(&channel_jid),
+        kind: Some(PrivacyStanzaKind::Iq),
+        recipient_jid: full_jid,
+    };
     if channel_domain == mix_domain(session) {
+        let decisions = RoomDeliveryPolicyReader::read_room_delivery_policies(
+            session.host().as_ref(),
+            &[policy],
+        )
+        .await?;
+        if !matches!(decisions.as_slice(), [decision] if decision.allows())
+            || live_route() != Some(route)
+        {
+            return Ok(forbidden());
+        }
         let response =
             handle_channel_relay_request_for(session.host(), &request, exact_route).await?;
         return Ok(Some(if response.is_empty() {
@@ -62,28 +109,20 @@ pub async fn try_mix_iq_relay(session: &impl MixSession, raw: &str) -> Result<Op
             MixAction::Send(response)
         }));
     }
-    let membership = session
-        .host()
-        .mix_service()
-        .pam_membership(user.id, &channel_jid)
-        .await?;
-    let membership =
-        membership.filter(|membership| membership.state == MixPamState::Joined.as_str());
-    if membership.is_none()
-        || session
-            .host()
-            .mix_service()
-            .is_blocked(user.id, &channel_jid)
-            .await?
-        || !session.host().federation_domain_allowed(channel_domain)
-    {
-        return Ok(Some(MixAction::Send(relay_error(
-            &request.id,
-            &request.to,
-            full_jid,
-            "auth",
-            "forbidden",
-        ))));
+    if !session.host().federation_domain_allowed(channel_domain) {
+        return Ok(forbidden());
+    }
+    let Some(pam_incarnation) = MixRelayPolicyReader::read_remote_mix_relay(
+        session.host().as_ref(),
+        &policy,
+        &channel_address,
+    )
+    .await?
+    else {
+        return Ok(forbidden());
+    };
+    if live_route() != Some(route) {
+        return Ok(forbidden());
     }
     let relay_id = Uuid::new_v4().to_string();
     if !register_mix_iq_relay(
@@ -99,10 +138,7 @@ pub async fn try_mix_iq_relay(session: &impl MixSession, raw: &str) -> Result<Op
             exact_route,
             channel: channel_address.clone(),
             channel_incarnation: None,
-            pam_incarnation: membership
-                .as_ref()
-                .map(PamMembership::relay_incarnation)
-                .transpose()?,
+            pam_incarnation: Some(pam_incarnation),
         },
     ) {
         return Ok(Some(MixAction::Send(relay_error(

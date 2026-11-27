@@ -103,19 +103,6 @@ pub async fn handle_muc_invitation_decline(
                 "item-not-found",
             )));
         };
-        if session
-            .host()
-            .muc_service()
-            .is_blocked_for_account(recipient.id, &target.bare(), &room_jid)
-            .await?
-            || session
-                .host()
-                .muc_service()
-                .is_blocked_for_account(recipient.id, &target.bare(), from)
-                .await?
-        {
-            return Ok(MucAction::None);
-        }
         let mut sessions = session.host().session_entries_for(&target_raw);
         if target.resourcepart().is_none() {
             sessions.retain(|(_, session)| session.is_available() && session.priority() >= 0);
@@ -126,9 +113,22 @@ pub async fn handle_muc_invitation_decline(
                     .then_with(|| left_jid.cmp(right_jid))
             });
         }
-        let mut delivered = sessions
+        let Some(eligible) = addressed::allowed_decline_sessions(
+            session.host(),
+            sessions,
+            recipient.id,
+            &target_raw,
+            &room_jid,
+            from,
+        )
+        .await?
+        else {
+            return Ok(MucAction::None);
+        };
+        let mut delivered = eligible
+            .sessions
             .into_iter()
-            .any(|(_, session)| session.sender().try_send(forwarded.clone()).is_ok());
+            .any(|session| session.sender().try_send(forwarded.clone()).is_ok());
         if !delivered {
             delivered = session
                 .host()
@@ -136,7 +136,7 @@ pub async fn handle_muc_invitation_decline(
                 .await
                 .is_some();
         }
-        if !delivered && temporary_storage {
+        if !delivered && temporary_storage && eligible.offline_allowed {
             let delayed = offline_delay(&forwarded, &room_jid, facts);
             let outcome = session
                 .host()

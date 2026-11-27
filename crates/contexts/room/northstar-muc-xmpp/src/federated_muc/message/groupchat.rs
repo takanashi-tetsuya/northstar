@@ -627,7 +627,7 @@ pub(super) async fn fan_out_groupchat<S: MucHost>(
         };
         let delivery = set_to(reflected, &occupant.full_jid);
         if !state
-            .deliver_to_muc_occupant_unchecked(&occupant, delivery)
+            .deliver_muc_from(&occupant, delivery, None, actor_full_jid)
             .await
         {
             record_federated_muc_post_commit_failure(

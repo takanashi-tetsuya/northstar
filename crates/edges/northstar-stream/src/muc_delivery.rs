@@ -14,9 +14,16 @@ use northstar_federation_core::FederationRoute;
 use northstar_room_application::cluster_muc_receipt_claim::ClusterMucReceiptClaimRepository;
 use northstar_room_application::cluster_muc_receipt_claim::ClusterMucReceiptClaimService;
 use northstar_room_application::muc_delivery::MucDeliveryRepository;
+use northstar_room_application::room_delivery_policy::{
+    PrivacyStanzaKind, RoomDeliveryPolicyQuery, RoomPolicyLiveSession, RoomPolicyRoute,
+    RoomPolicySubject,
+};
 use northstar_room_core::ClusterMucOutboxDelivery;
 use northstar_session_core::JoinedMucMembership;
 use std::{sync::Arc, time::Duration};
+
+mod room_policy;
+use self::room_policy::stanza_policy_facts;
 
 pub struct MucDeliveryContext<R, C, F> {
     pub repository: R,
@@ -37,35 +44,6 @@ where
     C: ClusterMucReceiptClaimRepository<Delivery = ClusterMucOutboxDelivery>,
     F: FederationRoute,
 {
-    fn sessions_for(&self, jid: &str) -> Vec<OnlineSession> {
-        session_entries_for_in(&self.sessions, jid)
-            .into_iter()
-            .map(|(_, session)| session)
-            .collect()
-    }
-
-    async fn privacy_allows_session(
-        &self,
-        session: &OnlineSession,
-        peer: &str,
-        kind: northstar_xep_0016::PrivacyStanzaKind,
-    ) -> anyhow::Result<bool> {
-        let active = session
-            .privacy_active
-            .read()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        self.repository
-            .privacy_allows_session(
-                session.user_id,
-                session.connection_id,
-                active.as_deref(),
-                peer,
-                kind,
-            )
-            .await
-    }
-
     fn validated_local_muc_occupant(
         &self,
         full_jid: &str,
@@ -96,12 +74,13 @@ where
         &self,
         occupant: &MucOccupant,
         stanza: String,
+        real_peer: Option<&str>,
         delivery: &ClusterMucOutboxDelivery,
     ) -> anyhow::Result<bool> {
         let (receipt, mut received) = tokio::sync::mpsc::unbounded_channel();
         let accepted = self
-            .deliver_to_muc_occupant_inner(occupant, stanza, Some(receipt), None)
-            .await;
+            .deliver_with_policy(occupant, stanza, (None, real_peer), Some(receipt), None)
+            .await?;
         if !accepted {
             return Ok(false);
         }
@@ -124,52 +103,28 @@ where
         receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
         write_receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     ) -> bool {
-        let senders = roxmltree::Document::parse(&stanza)
-            .ok()
-            .map(|document| {
-                let root = document.root_element();
-                let mut senders = root
-                    .attribute("from")
-                    .and_then(|sender| northstar_xmpp_types::jid::canonicalize(sender).ok())
-                    .into_iter()
-                    .collect::<Vec<_>>();
-                if root.tag_name().name() == "presence" {
-                    senders.extend(root.descendants().filter_map(|node| {
-                        (node.is_element()
-                            && node.tag_name().name() == "item"
-                            && node.tag_name().namespace()
-                                == Some("http://jabber.org/protocol/muc#user"))
-                        .then(|| node.attribute("jid"))
-                        .flatten()
-                        .and_then(|jid| northstar_xmpp_types::jid::canonicalize(jid).ok())
-                    }));
-                }
-                senders.sort_unstable();
-                senders.dedup();
-                senders
+        self.deliver_with_policy(occupant, stanza, (None, None), receipt, write_receipt)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(?error, "failed to deliver a MUC stanza");
+                false
             })
-            .unwrap_or_default();
-        if !senders.is_empty() {
-            let blocked = self
-                .blocked_muc_recipient_accounts(std::slice::from_ref(occupant), &senders)
-                .await;
-            if northstar_xmpp_types::jid::canonical_bare_key(&occupant.full_jid)
-                .is_ok_and(|owner| blocked.contains(&owner))
-            {
-                return false;
-            }
-        }
-        self.deliver_to_muc_occupant_unchecked_result_with_receipt(
-            occupant,
-            stanza,
-            receipt,
-            write_receipt,
-        )
-        .await
-        .unwrap_or_else(|error| {
-            tracing::warn!(?error, "failed to deliver a MUC stanza");
-            false
-        })
+    }
+
+    /// Carry the server-known sender alongside the stanza without exposing it on the wire.
+    pub async fn deliver_to_muc_occupant_from(
+        &self,
+        occupant: &MucOccupant,
+        stanza: String,
+        visible_peer: Option<&str>,
+        real_peer: Option<&str>,
+    ) -> bool {
+        self.deliver_with_policy(occupant, stanza, (visible_peer, real_peer), None, None)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(?error, "failed to deliver a MUC stanza");
+                false
+            })
     }
 
     /// Batch XEP-0191 filter for MUC fan-out. Database failure is fail-closed
@@ -206,8 +161,7 @@ where
         }
     }
 
-    /// Use only after `blocked_muc_recipient_accounts` covered the exact
-    /// visible and real senders for this fan-out batch.
+    /// Compatibility entry point for callers that already supplied their block candidates.
     pub async fn deliver_to_muc_occupant_unchecked(
         &self,
         occupant: &MucOccupant,
@@ -226,14 +180,15 @@ where
         occupant: &MucOccupant,
         stanza: String,
     ) -> anyhow::Result<bool> {
-        self.deliver_to_muc_occupant_unchecked_result_with_receipt(occupant, stanza, None, None)
+        self.deliver_with_policy(occupant, stanza, (None, None), None, None)
             .await
     }
 
-    async fn deliver_to_muc_occupant_unchecked_result_with_receipt(
+    async fn deliver_with_policy(
         &self,
         occupant: &MucOccupant,
         stanza: String,
+        peers: (Option<&str>, Option<&str>),
         receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
         write_receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     ) -> anyhow::Result<bool> {
@@ -265,62 +220,66 @@ where
         } else {
             None
         };
-        let privacy_peer_kind = roxmltree::Document::parse(&stanza)
-            .ok()
-            .and_then(|document| {
-                let root = document.root_element();
-                let kind = match root.tag_name().name() {
-                    "message" => northstar_xep_0016::PrivacyStanzaKind::Message,
-                    "iq" => northstar_xep_0016::PrivacyStanzaKind::Iq,
-                    "presence" => northstar_xep_0016::PrivacyStanzaKind::PresenceIn,
-                    _ => return None,
+        let facts = stanza_policy_facts(&stanza);
+        let mut policy_route = None;
+        if let Some(facts) = &facts {
+            if !matches!(&occupant.endpoint, MucOccupantEndpoint::Federated { .. }) {
+                let live = session_entries_for_in(&self.sessions, &occupant.full_jid)
+                    .into_iter()
+                    .find(|(_, session)| session.connection_id == occupant.connection_id)
+                    .map(|(_, session)| session);
+                let suspended = session_gate.as_ref().or(match &occupant.endpoint {
+                    MucOccupantEndpoint::Suspended(endpoint) => Some(endpoint),
+                    _ => None,
+                });
+                let sm_id = suspended.and_then(|endpoint| {
+                    let route = endpoint
+                        .route
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    (!matches!(&*route, SuspendedMucRoute::Live(_)))
+                        .then_some(endpoint.sm_session_id)
+                });
+                let route = if let Some(id) = sm_id {
+                    RoomPolicyRoute {
+                        account_id: live
+                            .as_ref()
+                            .map_or(uuid::Uuid::nil(), |session| session.user_id),
+                        auth_generation: live.as_ref().map(|session| session.auth_generation),
+                        subject: RoomPolicySubject::Suspended { id },
+                    }
+                } else if let Some(session) = &live {
+                    session.room_policy_route()
+                } else {
+                    return Ok(false);
                 };
-                let peer = root
-                    .attribute("from")
-                    .and_then(|from| northstar_xmpp_types::jid::canonicalize(from).ok())?;
-                Some((peer, kind))
-            });
-        if let Some((peer, kind)) = privacy_peer_kind.as_ref() {
-            if let Some(suspended) = &session_gate {
-                if self
+                let decisions = self
                     .repository
-                    .suspended_privacy_denies(suspended.sm_session_id, peer, *kind)
-                    .await?
-                    .unwrap_or(true)
+                    .read_room_delivery_policies(&[RoomDeliveryPolicyQuery {
+                        route,
+                        visible_peer: peers.0.unwrap_or(&facts.visible_peer),
+                        real_peer: peers.1.or(facts.real_peer.as_deref()),
+                        kind: Some(facts.kind),
+                        recipient_jid: &occupant.full_jid,
+                    }])
+                    .await?;
+                if !matches!(decisions.as_slice(), [decision] if decision.allows()) {
+                    return Ok(false);
+                }
+                if suspended.is_none()
+                    && !self.live_policy_route_is_current(&occupant.full_jid, route)
                 {
                     return Ok(false);
                 }
-            } else {
-                match &occupant.endpoint {
-                    MucOccupantEndpoint::Local(_) => {
-                        let Some(session) =
-                            self.sessions_for(&occupant.full_jid).into_iter().next()
-                        else {
-                            return Ok(false);
-                        };
-                        if !self.privacy_allows_session(&session, peer, *kind).await? {
-                            return Ok(false);
-                        }
-                    }
-                    MucOccupantEndpoint::Suspended(suspended) => {
-                        if self
-                            .repository
-                            .suspended_privacy_denies(suspended.sm_session_id, peer, *kind)
-                            .await?
-                            .unwrap_or(true)
-                        {
-                            return Ok(false);
-                        }
-                    }
-                    MucOccupantEndpoint::Federated { .. } => {}
-                }
+                policy_route = Some((occupant.full_jid.as_str(), route));
             }
         }
         let stanza = if receipt.is_none()
             && write_receipt.is_none()
-            && privacy_peer_kind
-                .as_ref()
-                .is_some_and(|(_, kind)| *kind == northstar_xep_0016::PrivacyStanzaKind::Iq)
+            && (peers.0.is_some()
+                || facts
+                    .as_ref()
+                    .is_some_and(|facts| facts.kind == PrivacyStanzaKind::Iq))
         {
             let mut pending = Some(stanza);
             let exact = with_local_muc_occupant_exact(
@@ -329,7 +288,7 @@ where
                 |current| match (&current.endpoint, session_gate.is_some()) {
                     (MucOccupantEndpoint::Local(sender), false) => Some(try_send_muc(
                         sender,
-                        pending.take().expect("IQ not yet queued"),
+                        pending.take().expect("MUC stanza not yet queued"),
                     )),
                     _ => None,
                 },
@@ -343,7 +302,7 @@ where
                 {
                     return Ok(false);
                 }
-                Some(None) => pending.expect("IQ not yet queued"),
+                Some(None) => pending.expect("MUC stanza not yet queued"),
             }
         } else {
             stanza
@@ -367,7 +326,13 @@ where
         }
         if let Some(suspended) = session_gate {
             return self
-                .deliver_to_suspended_muc_endpoint(&suspended, stanza, receipt, write_receipt)
+                .deliver_to_suspended_muc_endpoint(
+                    &suspended,
+                    stanza,
+                    receipt,
+                    write_receipt,
+                    policy_route,
+                )
                 .await;
         }
         match &occupant.endpoint {
@@ -392,8 +357,14 @@ where
                 None => try_send_muc(sender, stanza),
             },
             MucOccupantEndpoint::Suspended(suspended) => {
-                self.deliver_to_suspended_muc_endpoint(suspended, stanza, receipt, None)
-                    .await
+                self.deliver_to_suspended_muc_endpoint(
+                    suspended,
+                    stanza,
+                    receipt,
+                    None,
+                    policy_route,
+                )
+                .await
             }
             MucOccupantEndpoint::Federated {
                 authenticated_domain,
@@ -413,12 +384,20 @@ where
         }
     }
 
+    fn live_policy_route_is_current(&self, full_jid: &str, sampled: RoomPolicyRoute) -> bool {
+        self.sessions.get(full_jid).is_some_and(|current| {
+            current.routable.load(std::sync::atomic::Ordering::Acquire)
+                && current.room_policy_route() == sampled
+        })
+    }
+
     async fn deliver_to_suspended_muc_endpoint(
         &self,
         suspended: &Arc<SuspendedMucEndpoint>,
         stanza: String,
         receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
         write_receipt: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+        policy_route: Option<(&str, RoomPolicyRoute)>,
     ) -> anyhow::Result<bool> {
         if let Some(receipt) = write_receipt {
             return suspended.try_send_live_write_notification(stanza, receipt);
@@ -435,6 +414,21 @@ where
                     .route
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some((jid, sampled)) = policy_route {
+                    let current = match (&*route, sampled.subject) {
+                        (SuspendedMucRoute::Live(_), RoomPolicySubject::Connection { .. }) => {
+                            self.live_policy_route_is_current(jid, sampled)
+                        }
+                        (
+                            SuspendedMucRoute::Transitioning | SuspendedMucRoute::Suspended,
+                            RoomPolicySubject::Suspended { id },
+                        ) => id == suspended.sm_session_id,
+                        _ => false,
+                    };
+                    if !current {
+                        return Ok(false);
+                    }
+                }
                 match &*route {
                     SuspendedMucRoute::Live(sender) => {
                         let stanza = stanza.take().expect("MUC delivery owns one stanza");

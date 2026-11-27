@@ -858,3 +858,4 @@ mod pam_projection_repository;
 #[cfg(test)]
 mod presence_recovery;
 mod relay_return;
+mod room_policy;

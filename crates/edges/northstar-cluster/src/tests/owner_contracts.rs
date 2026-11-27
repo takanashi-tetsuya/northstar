@@ -16,6 +16,7 @@ use northstar_telemetry::metrics::Metrics;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
+mod room_policy;
 mod unused_ports;
 use authority::AuthorityPorts;
 use unused_ports::{MessagePorts, UnusedPorts};

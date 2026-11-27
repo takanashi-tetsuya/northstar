@@ -2,6 +2,10 @@
 
 use super::*;
 use northstar_room_application::mix_service::MixDeliveryRecipientAuthority;
+use northstar_room_application::room_delivery_policy::{
+    PrivacyStanzaKind, RoomDeliveryDecision, RoomDeliveryPolicyQuery, RoomPolicyLiveSession,
+    RoomPolicyRoute, RoomPolicySubject,
+};
 use northstar_room_core::mix::MixRealJid;
 
 mod recipient_authority;
@@ -251,20 +255,26 @@ pub async fn deliver_channel_stanza_inner(
         if let Some(delivery_id) = durable_delivery_id {
             tracing::debug!(delivery_id = %delivery_id, "MIX durable delivery evaluating recipient block policy");
         }
-        let blocked = match database_lane {
-            ChannelStanzaDatabaseLane::LiveIngress => {
-                context.service().is_blocked(user.id, channel_jid).await
-            }
-            ChannelStanzaDatabaseLane::DurableOutbox => {
-                context
-                    .service()
-                    .outbox_is_blocked(user.id, channel_jid)
-                    .await
-            }
+        let archive_policy = RoomDeliveryPolicyQuery {
+            route: RoomPolicyRoute {
+                account_id: user.id,
+                auth_generation: None,
+                subject: RoomPolicySubject::AccountDefault,
+            },
+            visible_peer: channel_jid,
+            real_peer: None,
+            kind: None,
+            recipient_jid: &recipient.jid,
         };
-        let blocked = match blocked {
-            Ok(blocked) => blocked,
-            Err(error) => {
+        let decision = match context
+            .read_channel_delivery_policies(&[archive_policy], database_lane)
+            .await
+        {
+            Ok(decisions) if decisions.len() == 1 => decisions[0],
+            result => {
+                let error = result
+                    .err()
+                    .unwrap_or_else(|| anyhow::anyhow!("incomplete MIX account policy"));
                 record_mix_post_commit_failure(
                     context,
                     channel_jid,
@@ -278,12 +288,20 @@ pub async fn deliver_channel_stanza_inner(
                 return Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker);
             }
         };
-        if blocked {
+        if !decision.allows() {
             if durable {
-                return Err(permanent_mix_delivery_error(
-                    "policy-cancelled",
-                    "recipient currently blocks this MIX channel",
-                ));
+                let (code, detail) = if decision == RoomDeliveryDecision::StaleRoute {
+                    (
+                        "account-unavailable",
+                        "local MIX recipient no longer exists or is disabled",
+                    )
+                } else {
+                    (
+                        "policy-cancelled",
+                        "recipient currently blocks this MIX channel",
+                    )
+                };
+                return Err(permanent_mix_delivery_error(code, detail));
             }
             return Ok(ChannelStanzaDeliveryOutcome::CompletedByClaimingWorker);
         }
@@ -360,15 +378,62 @@ pub async fn deliver_channel_stanza_inner(
                 }
             }
         }
-        let mut local_targets = context.session_entries_for(&recipient.jid);
-        local_targets.retain(|(_, session)| {
-            check_route_account(authority.as_ref(), session.user_id()).is_ok()
-        });
+        let local_targets = context.session_entries_for(&recipient.jid);
+        let mut local_targets = local_targets
+            .into_iter()
+            .filter_map(|(jid, session)| {
+                let route = RoomPolicyLiveSession::room_policy_route(&session);
+                (route.account_id == user.id
+                    && check_route_account(authority.as_ref(), route.account_id).is_ok())
+                .then_some((jid, session, route))
+            })
+            .collect::<Vec<_>>();
+        if let Some((visible_peer, kind)) = channel_stanza_policy(&stanza) {
+            let queries = local_targets
+                .iter()
+                .map(|(_, _, route)| RoomDeliveryPolicyQuery {
+                    route: *route,
+                    visible_peer: &visible_peer,
+                    real_peer: Some(channel_jid),
+                    kind: Some(kind),
+                    recipient_jid: &recipient.jid,
+                })
+                .collect::<Vec<_>>();
+            match context
+                .read_channel_delivery_policies(&queries, database_lane)
+                .await
+            {
+                Ok(decisions) if decisions.len() == queries.len() => {
+                    drop(queries);
+                    local_targets = local_targets
+                        .into_iter()
+                        .zip(decisions)
+                        .filter_map(|(target, decision)| decision.allows().then_some(target))
+                        .collect();
+                }
+                result => {
+                    let error = result
+                        .err()
+                        .unwrap_or_else(|| anyhow::anyhow!("incomplete MIX delivery policy"));
+                    record_mix_post_commit_failure(
+                        context,
+                        channel_jid,
+                        &recipient.jid,
+                        "room delivery policy",
+                        &error,
+                    );
+                    if durable {
+                        return Err(error);
+                    }
+                    local_targets.clear();
+                }
+            }
+        }
         // One leased recipient row may cross exactly one local transport.
         // Sorting makes the choice deterministic across the hash-map-backed
         // live-route registry; a source transferred to SM/BOSH or written to
         // a socket must never also be queued to a second resource.
-        local_targets.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        local_targets.sort_unstable_by(|(left, _, _), (right, _, _)| left.cmp(right));
         if let Some(delivery_id) = durable_delivery_id {
             tracing::debug!(delivery_id = %delivery_id, target_count = local_targets.len(), "MIX durable delivery evaluating local sessions");
         }
@@ -378,7 +443,10 @@ pub async fn deliver_channel_stanza_inner(
         let mut cluster_delivery_failed = false;
         let mut accepted = false;
         let mut transferred_to_recoverable_transport = false;
-        for (jid, session) in &local_targets {
+        for (jid, session, sampled) in &local_targets {
+            if !context.channel_policy_route_is_current(jid, *sampled) {
+                continue;
+            }
             match context.session_mix_capability(jid) {
                 MixSessionCapability::Supported => {
                     had_deliverable_target = true;
@@ -599,4 +667,17 @@ pub fn addressed_mix_delivery(template: &str, recipient: &str) -> Result<String>
         "durable MIX stanza could not be addressed"
     );
     Ok(stanza)
+}
+
+fn channel_stanza_policy(stanza: &str) -> Option<(String, PrivacyStanzaKind)> {
+    let document = Document::parse(stanza).ok()?;
+    let root = document.root_element();
+    let kind = match root.tag_name().name() {
+        "message" => PrivacyStanzaKind::Message,
+        "presence" => PrivacyStanzaKind::PresenceIn,
+        "iq" => PrivacyStanzaKind::Iq,
+        _ => return None,
+    };
+    let peer = CanonicalJid::parse(root.attribute("from")?).ok()?;
+    Some((peer.to_string(), kind))
 }

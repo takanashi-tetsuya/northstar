@@ -798,7 +798,15 @@ pub(super) async fn deliver_cluster_muc_event<A: ClusterAdapters>(
         anyhow::ensure!(
             worker
                 .delivery
-                .deliver_reserved_muc_item_with_receipt(&recipient, stanza, delivery)
+                .deliver_reserved_muc_item_with_receipt(
+                    &recipient,
+                    stanza,
+                    context
+                        .target
+                        .as_ref()
+                        .map(|target| target.full_jid.as_str()),
+                    delivery,
+                )
                 .await?,
             "exact MUC audience transport did not reach a durable ownership/write boundary"
         );

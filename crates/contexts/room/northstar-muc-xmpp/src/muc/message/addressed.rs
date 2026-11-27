@@ -2,6 +2,9 @@ use super::*;
 use northstar_room_application::muc_service::{MucAddressedActor, MucAddressedOutcome};
 use northstar_room_core::occupancy::MucOccupantRoute;
 
+mod decline_policy;
+pub(crate) use decline_policy::allowed_decline_sessions;
+
 pub(super) fn local_actor<'a>(
     session: &impl MucSession,
     room: &str,
@@ -40,33 +43,18 @@ pub(crate) async fn send_addressed(
     federated: bool,
 ) -> Result<()> {
     if let Some(recipient) = host.local_muc_occupant_exact(route.identity(room)) {
-        let senders = match kind {
+        let visible_peer = match kind {
             AddressedDeliveryKind::Private { sender_nick } => {
-                vec![format!("{room}/{sender_nick}"), real_sender.to_owned()]
+                format!("{room}/{sender_nick}")
             }
-            AddressedDeliveryKind::Decline => vec![room.to_owned()],
+            AddressedDeliveryKind::Decline => room.to_owned(),
         };
-        let blocked = host
-            .blocked_muc_recipient_accounts(std::slice::from_ref(&recipient), &senders)
+        let _ = host
+            .deliver_muc_from(&recipient, stanza, Some(&visible_peer), real_sender)
             .await;
-        if !is_blocked(route, &blocked) {
-            if let Some(current) = host.local_muc_occupant_exact(route.identity(room)) {
-                let _ = host
-                    .deliver_to_muc_occupant_unchecked(&current, stanza)
-                    .await;
-            }
-        }
         return Ok(());
     }
     publish(host, room, route, &stanza, real_sender, false, federated).await
-}
-
-pub(super) fn is_blocked(
-    route: &MucOccupantRoute,
-    blocked: &std::collections::HashSet<String>,
-) -> bool {
-    northstar_xmpp_types::jid::canonical_bare_key(&route.full_jid)
-        .is_ok_and(|owner| blocked.contains(&owner))
 }
 
 pub(super) async fn publish(

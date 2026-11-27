@@ -5,7 +5,7 @@ use northstar_xep_0016::PrivacyStanzaKind;
 use std::{collections::HashSet, future::Future};
 use uuid::Uuid;
 
-pub trait MucDeliveryRepository: Send + Sync {
+pub trait MucDeliveryRepository: crate::room_delivery_policy::RoomDeliveryPolicyReader {
     fn current_muc_moderators(
         &self,
         room_localpart: &str,
@@ -19,8 +19,7 @@ pub trait MucDeliveryRepository: Send + Sync {
         stanza_senders: &[String],
     ) -> impl Future<Output = Result<HashSet<String>>> + Send;
 
-    /// Whether one session's privacy lists let `peer` reach it with a stanza of `kind`. With an active list the
-    /// session's active-list lease is refreshed first.
+    /// Read one session's privacy policy for this peer and stanza kind.
     fn privacy_allows_session(
         &self,
         user_id: Uuid,

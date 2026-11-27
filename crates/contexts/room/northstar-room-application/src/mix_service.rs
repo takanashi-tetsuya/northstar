@@ -30,6 +30,7 @@ mod payloads;
 mod presence_recovery_repository;
 mod publication_repository;
 mod relay_return_repository;
+mod room_delivery_policy;
 mod wake;
 
 pub use self::pam_projection_repository::{

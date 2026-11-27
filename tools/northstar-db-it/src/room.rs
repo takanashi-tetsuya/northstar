@@ -36,5 +36,6 @@ mod muc_time_sources;
 mod pam_conformance;
 mod producer_conformance;
 mod relay_profile_snapshot;
+mod room_delivery_policy;
 mod transport_receipts;
 mod worker_conformance;

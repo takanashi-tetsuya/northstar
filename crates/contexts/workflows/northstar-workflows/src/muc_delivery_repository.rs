@@ -7,6 +7,10 @@ use sqlx::PgPool;
 use std::collections::HashSet;
 use uuid::Uuid;
 
+mod room_delivery_policy;
+pub(crate) use room_delivery_policy::read_policies as read_room_delivery_policies_on;
+pub use room_delivery_policy::PostgresRoomDeliveryPolicy;
+
 #[derive(Clone)]
 pub struct PostgresMucDeliveryRepository {
     pool: PgPool,
@@ -55,18 +59,11 @@ impl MucDeliveryRepository for PostgresMucDeliveryRepository {
         peer: &str,
         kind: northstar_xep_0016::PrivacyStanzaKind,
     ) -> Result<bool> {
-        if active_privacy_list.is_some() {
-            northstar_roster_postgres::privacy::refresh_active_privacy_session(
-                &self.pool,
-                user_id,
-                connection_id,
-            )
-            .await?;
-        }
-        Ok(!northstar_roster_postgres::privacy::privacy_denies(
+        Ok(!northstar_roster_postgres::privacy::session_privacy_denies(
             &self.pool,
             user_id,
-            active_privacy_list,
+            Some(connection_id),
+            active_privacy_list.is_some(),
             peer,
             kind,
         )

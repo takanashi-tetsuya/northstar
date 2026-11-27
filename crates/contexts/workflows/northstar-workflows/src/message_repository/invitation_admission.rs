@@ -18,6 +18,7 @@ use northstar_room_postgres::{
         FederatedMucInviteAffiliationOutcome,
     },
 };
+use northstar_roster_application::{CommunicationPolicyQuery, PolicyDirection, PolicySubject};
 use northstar_xep_0016::PrivacyStanzaKind;
 use northstar_xmpp_types::jid::CanonicalJid;
 use sqlx::{Postgres, Transaction};
@@ -35,6 +36,11 @@ impl DirectInvitationRepository for PostgresMessageRepository {
             actor.resourcepart().is_some(),
             "a direct inviter needs an authenticated full JID"
         );
+        if invitation.actor.is_some_and(|authority| {
+            authority.account_id != invitation.actor_id || authority.full_jid != actor
+        }) {
+            return Ok(Outcome::Refused(Refusal::Unavailable));
+        }
         let invitee = CanonicalJid::parse(invitation.invitee_jid)?;
         let addresses = InvitationAddresses {
             invitation,
@@ -106,14 +112,29 @@ impl InvitationAddresses<'_> {
 
     async fn privacy_denies(&self, tx: &mut Transaction<'_, Postgres>) -> Result<bool> {
         let request = self.invitation;
-        northstar_roster_postgres::privacy::privacy_denies_in_snapshot(
-            tx,
-            request.actor_id,
-            request.active_privacy,
-            request.invitee_jid,
-            PrivacyStanzaKind::Message,
-        )
-        .await
+        let subject = match request.actor {
+            Some(actor) => PolicySubject::Connection {
+                connection_id: actor.connection_id,
+                expects_active: request.active_privacy.is_some(),
+            },
+            None if request.active_privacy.is_some() => return Ok(true),
+            None => PolicySubject::AccountDefault,
+        };
+        let policy = CommunicationPolicyQuery {
+            account_id: request.actor_id,
+            expected_auth_generation: request.actor.map(|actor| actor.auth_generation),
+            subject,
+            peer: request.invitee_jid.to_owned(),
+            kind: PrivacyStanzaKind::Message,
+            direction: PolicyDirection::Outbound,
+            // The locked room-mode read already checks both block directions.
+            check_owner_block: false,
+            check_peer_block: false,
+        };
+        let decisions =
+            northstar_roster_postgres::privacy::read_communication_policies(&mut **tx, &[policy])
+                .await?;
+        Ok(!matches!(decisions.as_slice(), [decision] if decision.allows()))
     }
 }
 

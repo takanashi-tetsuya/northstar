@@ -18,6 +18,8 @@ fn mix_domain(session: &impl MixSession) -> String {
 }
 
 /// Intercept MIX/PAM IQs before ordinary entity and PubSub routing.
+/// The participant relay applies resource policy. PAM and channel service
+/// administration below use their operation-specific authorization.
 pub async fn try_mix_iq(session: &impl MixSession, raw: &str) -> Result<Option<MixAction>> {
     if let Some(action) = try_mix_iq_relay(session, raw).await? {
         return Ok(Some(action));

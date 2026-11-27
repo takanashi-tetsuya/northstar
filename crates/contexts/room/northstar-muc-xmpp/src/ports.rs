@@ -16,6 +16,9 @@ use northstar_message_core::{DirectPostCommitMode, OfflineDeliveryLimits};
 use northstar_room_application::discussion;
 use northstar_room_application::mix_service::{MixRepository, MixService};
 use northstar_room_application::muc_service::{MucRepository, MucService};
+use northstar_room_application::room_delivery_policy::{
+    RoomDeliveryPolicyReader, RoomPolicyLiveSession,
+};
 use northstar_room_core::occupancy::{
     FederatedMucAccountRoute, LocalMucJoinPublication, LocalMucNicknameMove,
     LocalMucOccupantIdentity, MucJoinCacheAttempt, MucOccupant, MucOccupantRoute,
@@ -28,6 +31,9 @@ use northstar_stream::transport::Action;
 use std::{collections::HashMap, future::Future};
 use tokio::sync::mpsc::error::TrySendError;
 use uuid::Uuid;
+
+mod room_policy;
+pub use self::room_policy::MucOccupantPolicyDelivery;
 
 /// What one MUC stanza asks the session to write.
 #[derive(Debug)]
@@ -70,7 +76,7 @@ pub trait MucOutbound: Clone + Send + Sync + 'static {
 }
 
 /// One live local route.
-pub trait MucLocalSession: Send + Sync + 'static {
+pub trait MucLocalSession: RoomPolicyLiveSession + Send + Sync + 'static {
     type Outbound: MucOutbound;
 
     fn sender(&self) -> &Self::Outbound;
@@ -82,7 +88,11 @@ pub trait MucLocalSession: Send + Sync + 'static {
 pub type Occupant<H> = MucOccupant<<H as MucHost>::Outbound, <H as MucHost>::SuspendedEndpoint>;
 
 /// The node's view for the MUC handlers.
-pub trait MucHost: Send + Sync + 'static {
+pub trait MucHost:
+    RoomDeliveryPolicyReader
+    + MucOccupantPolicyDelivery<Self::Outbound, Self::SuspendedEndpoint>
+    + 'static
+{
     type Repository: MucRepository + 'static;
     type MixRepository: MixRepository + 'static;
     type Outbound: MucOutbound;

@@ -100,22 +100,10 @@ pub(super) async fn deliver_occupant_iq(
         return Ok(federated_error(stanza, from, "cancel", "item-not-found"));
     };
     let sender_address = format!("{room_jid}/{}", sender.nick);
-    let blocked = state
-        .blocked_muc_recipient_accounts(
-            std::slice::from_ref(&target),
-            &[sender_address.clone(), actor.full_jid.to_owned()],
-        )
+    let forwarded = set_to(&set_from(&stanza.raw, &sender_address), &route.full_jid);
+    let _ = state
+        .deliver_muc_from(&target, forwarded, Some(&sender_address), actor.full_jid)
         .await;
-    if !northstar_xmpp_types::jid::canonical_bare_key(&route.full_jid)
-        .is_ok_and(|owner| blocked.contains(&owner))
-    {
-        let forwarded = set_to(&set_from(&stanza.raw, &sender_address), &route.full_jid);
-        if let Some(exact) = state.local_muc_occupant_exact(route.identity(room_jid)) {
-            let _ = state
-                .deliver_to_muc_occupant_unchecked(&exact, forwarded)
-                .await;
-        }
-    }
     Ok(None)
 }
 

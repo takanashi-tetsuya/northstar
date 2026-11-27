@@ -11,6 +11,7 @@ pub struct DirectInvitation<'a> {
     pub invitee_jid: &'a str,
     pub local_recipient_name: Option<&'a str>,
     pub active_privacy: Option<&'a str>,
+    pub actor: Option<&'a northstar_message_core::AuthenticatedMessageActor>,
 }
 
 pub struct DirectInvitationGrant<'a> {

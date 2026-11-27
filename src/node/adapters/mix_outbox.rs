@@ -17,6 +17,8 @@ use northstar_workflows::room_effects::PostgresMixRepository;
 use std::sync::{atomic::AtomicU64, Arc};
 use uuid::Uuid;
 
+mod room_policy;
+
 pub struct MixOutboxContext {
     service: MixService<PostgresMixRepository>,
     sessions: Arc<DashMap<String, OnlineSession>>,
@@ -29,6 +31,7 @@ pub struct MixOutboxContext {
     policy: EffectiveFederationPolicy,
     delivery_failures: Arc<AtomicU64>,
     post_accept_failures: Arc<AtomicU64>,
+    room_policy: northstar_workflows::muc_delivery_repository::PostgresRoomDeliveryPolicy,
 }
 
 impl ServerNode {
@@ -45,6 +48,10 @@ impl ServerNode {
             policy: self.federation.effective_policy.clone(),
             delivery_failures: Arc::clone(&self.metrics.mix_post_commit_delivery_failures_total),
             post_accept_failures: Arc::clone(&self.metrics.post_accept_side_effect_failures_total),
+            room_policy:
+                northstar_workflows::muc_delivery_repository::PostgresRoomDeliveryPolicy::new(
+                    self.pool.clone(),
+                ),
         }
     }
 }

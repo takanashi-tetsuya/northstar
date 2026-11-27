@@ -17,6 +17,7 @@ pub mod mix_service;
 pub mod muc_delivery;
 pub mod muc_service;
 pub mod operation_muc_wake;
+pub mod room_delivery_policy;
 pub mod sm_teardown_muc;
 
 use northstar_room_core::{

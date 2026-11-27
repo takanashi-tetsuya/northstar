@@ -13,6 +13,8 @@ use northstar_roster_core::RosterChange;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
+mod relay_policy;
+
 #[derive(Clone, Copy, Default)]
 pub struct WorkflowRoomEffects;
 

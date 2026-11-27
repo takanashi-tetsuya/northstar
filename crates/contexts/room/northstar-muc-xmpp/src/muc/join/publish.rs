@@ -4,6 +4,9 @@ use super::*;
 use std::convert::Infallible;
 use tokio::sync::OwnedMutexGuard;
 
+mod replay_policy;
+pub(super) use replay_policy::ReplayPolicy;
+
 pub(super) async fn publish_join<S: MucSession>(
     session: &S,
     request: &JoinRequest<'_, '_>,
@@ -88,8 +91,7 @@ pub(super) async fn publish_join<S: MucSession>(
     } else {
         std::collections::HashMap::new()
     };
-    let owner_bare = bare_jid(full_jid);
-    let blocked_patterns = session.host().muc_service().blocked_jids(user.id).await?;
+    let mut replay = ReplayPolicy::default();
     let legacy_roster;
     let roster = if let Some(projection) = projection {
         projection.roster.as_slice()
@@ -100,16 +102,11 @@ pub(super) async fn publish_join<S: MucSession>(
             .collect::<Vec<_>>();
         &legacy_roster
     };
-    let mut replies = Vec::with_capacity(roster.len() + 24);
-    let mut roster_nicks = std::collections::HashSet::new();
-    for present in roster {
-        let visible_sender = format!("{room_jid}/{}", present.nick);
-        let real_sender = room.non_anonymous.then_some(present.full_jid.as_str());
-        if present.nick != nick
-            && !muc_sender_is_blocked(&blocked_patterns, owner_bare, &visible_sender, real_sender)
-            && roster_nicks.insert(present.nick.clone())
-        {
-            replies.push(muc_presence_stanza(
+    for present in roster.iter().filter(|present| present.nick != nick) {
+        replay.presence(
+            room_jid,
+            present,
+            muc_presence_stanza(
                 present,
                 full_jid,
                 false,
@@ -117,24 +114,26 @@ pub(super) async fn publish_join<S: MucSession>(
                 false,
                 None,
                 room.non_anonymous || occupant.role == "moderator",
-            ));
-        }
+            ),
+        );
     }
     for (_, target) in &local_existing {
-        let visible_sender = format!("{room_jid}/{}", target.nick);
-        let real_sender = room.non_anonymous.then_some(target.full_jid.as_str());
-        if !muc_sender_is_blocked(&blocked_patterns, owner_bare, &visible_sender, real_sender)
-            && roster_nicks.insert(target.nick.clone())
-        {
-            replies.push(muc_presence_stanza(
-                &northstar_room_application::muc_service::SerializableMucOccupant::from(target),
-                full_jid,
-                false,
-                false,
-                false,
-                None,
-                room.non_anonymous || occupant.role == "moderator",
-            ));
+        if target.nick != nick {
+            let target =
+                northstar_room_application::muc_service::SerializableMucOccupant::from(target);
+            replay.presence(
+                room_jid,
+                &target,
+                muc_presence_stanza(
+                    &target,
+                    full_jid,
+                    false,
+                    false,
+                    false,
+                    None,
+                    room.non_anonymous || occupant.role == "moderator",
+                ),
+            );
         }
         if cluster_event_id.is_none() {
             let joined = muc_presence_stanza(
@@ -146,7 +145,10 @@ pub(super) async fn publish_join<S: MucSession>(
                 None,
                 room.non_anonymous || target.role == "moderator",
             );
-            let _ = session.host().deliver_to_muc_occupant(target, joined).await;
+            let _ = session
+                .host()
+                .deliver_muc_from(target, joined, None, full_jid)
+                .await;
         }
     }
     let mut self_join = muc_presence_stanza(
@@ -161,7 +163,6 @@ pub(super) async fn publish_join<S: MucSession>(
     if room.logging_enabled {
         self_join = add_muc_user_status(&self_join, 170);
     }
-    replies.push(self_join);
     tracing::info!(
         room = %room_jid, user = %user.username,
         "MUC join: success"
@@ -170,7 +171,6 @@ pub(super) async fn publish_join<S: MucSession>(
     // XEP-0045 requires initial room presence first, then all selected
     // history, and only then the current subject.  Subject-only archive
     // records remain available through MAM but are not join history.
-    let mut history_stanzas = Vec::new();
     let legacy_history;
     let history_candidates: &[_] = if let Some(projection) = projection {
         projection.history.as_slice()
@@ -185,18 +185,6 @@ pub(super) async fn publish_join<S: MucSession>(
         &legacy_history
     };
     for message in history_candidates {
-        let visible_sender = roxmltree::Document::parse(&message.stanza)
-            .ok()
-            .and_then(|document| document.root_element().attribute("from").map(str::to_owned))
-            .unwrap_or_else(|| room_jid.clone());
-        if muc_sender_is_blocked(
-            &blocked_patterns,
-            owner_bare,
-            &visible_sender,
-            room.non_anonymous.then_some(message.sender_jid.as_str()),
-        ) {
-            continue;
-        }
         let occupant_id = muc_occupant_id(&room.occupant_id_secret, &message.sender_jid);
         let authoritative = set_muc_occupant_id(&message.stanza, &occupant_id);
         let history = if room.non_anonymous {
@@ -204,12 +192,25 @@ pub(super) async fn publish_join<S: MucSession>(
         } else {
             authoritative
         };
-        history_stanzas.push(set_to(
-            &add_delay_from(&history, message.created_at, Some(room_jid)),
-            full_jid,
-        ));
+        replay.history(
+            room_jid,
+            &message.stanza,
+            &message.sender_jid,
+            set_to(
+                &add_delay_from(&history, message.created_at, Some(room_jid)),
+                full_jid,
+            ),
+        );
     }
-    replies.extend(apply_muc_history_bounds(history_stanzas, history_request));
-    replies.push(current_muc_subject_stanza(room, room_jid, full_jid));
+    let replies = replay
+        .replies(
+            session,
+            user.id,
+            full_jid,
+            self_join,
+            history_request,
+            current_muc_subject_stanza(room, room_jid, full_jid),
+        )
+        .await;
     Ok(JoinStep::Done(MucAction::SendMany(replies)))
 }

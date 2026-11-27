@@ -663,6 +663,7 @@ async fn direct_invitation_mode_follows_the_locked_room_revision() {
         invitee_jid: "open-direct-target@local.test",
         local_recipient_name: Some("open-direct-target"),
         active_privacy: None,
+        actor: None,
     };
     let open_delivery_id = Uuid::new_v4();
     assert!(matches!(
@@ -737,6 +738,7 @@ async fn direct_invitation_mode_follows_the_locked_room_revision() {
         invitee_jid: "open-direct-target@local.test",
         local_recipient_name: Some("open-direct-target"),
         active_privacy: None,
+        actor: None,
     };
     assert!(matches!(
         repository

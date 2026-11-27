@@ -157,6 +157,7 @@ pub async fn message<S: MessageSession>(
         invitee_jid: to,
         local_recipient_name: target_jid.localpart().filter(|_| local_invitee),
         active_privacy: active_privacy.as_deref(),
+        actor: message_actor.as_ref(),
     });
     let invitation_outcome = match invitation_admission::check(state, root, &invitation).await? {
         ControlFlow::Continue(outcome) => outcome,

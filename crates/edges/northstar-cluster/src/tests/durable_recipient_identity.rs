@@ -245,5 +245,8 @@ mod cluster_live_handoff;
 #[path = "carbon_audience.rs"]
 mod carbon_audience;
 
+#[path = "exact_iq_visibility.rs"]
+mod exact_iq_visibility;
+
 #[path = "exact_control_contract.rs"]
 mod exact_control_contract;

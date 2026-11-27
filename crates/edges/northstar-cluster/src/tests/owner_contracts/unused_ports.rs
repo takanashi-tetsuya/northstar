@@ -19,6 +19,7 @@ mod hosted_disco;
 mod pam_delivery_repository;
 mod publication_stub;
 mod service_messages;
+mod resource_policy;
 
 mod invitation_stub;
 

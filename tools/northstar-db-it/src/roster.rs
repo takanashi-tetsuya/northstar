@@ -7,3 +7,4 @@ mod privacy_commands;
 mod privacy_decision;
 mod privacy_service;
 mod snapshot_conformance;
+mod visibility_gates;

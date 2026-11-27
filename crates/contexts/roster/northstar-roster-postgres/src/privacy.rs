@@ -56,6 +56,7 @@ mod application_repository {
     use northstar_roster_application::privacy::*;
     use northstar_roster_application::{
         CommunicationDecision, CommunicationPolicyQuery, CommunicationPolicyReader,
+        ResourceCommunicationPolicyReader,
     };
     use sqlx::PgPool;
     use uuid::Uuid;
@@ -156,6 +157,23 @@ mod application_repository {
             queries: &[CommunicationPolicyQuery],
         ) -> Result<Vec<CommunicationDecision>> {
             super::read_communication_policies(&self.pool, queries).await
+        }
+    }
+
+    impl ResourceCommunicationPolicyReader for PostgresPrivacyRepository {
+        async fn read_resource_policy(
+            &self,
+            query: &CommunicationPolicyQuery,
+            owner: (Option<&str>, &str),
+            require_subscription: bool,
+        ) -> Result<CommunicationDecision> {
+            super::communication_policy::read_resource_policy(
+                &self.pool,
+                query,
+                owner,
+                require_subscription,
+            )
+            .await
         }
     }
 }

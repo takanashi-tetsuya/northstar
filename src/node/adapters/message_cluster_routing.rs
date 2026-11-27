@@ -4,12 +4,12 @@ use crate::node::{OnlineSession, ServerNode};
 use anyhow::Result;
 use northstar_message_application::messaging::{
     DirectMessageRoutePort, ExactMessageRoute, ExactMessageRoutePort, FullJidFallbackPort,
-    OnlineRoutePort, OnlineRouteResult,
+    OnlineRoutePort, OnlineRouteResult, ResourceStanzaPolicy,
 };
 use northstar_message_core::route_item::QueueRefusal;
 use northstar_message_xmpp::ports::MessageHost;
-use northstar_roster_application::privacy::PrivacyStanzaKind;
 use northstar_stream::outbound::DurableDelivery;
+use northstar_xep_0016::PrivacyStanzaKind;
 use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
@@ -72,8 +72,24 @@ impl FullJidFallbackPort for ServerNode {
     }
 
     async fn privacy_allows_fallback(&self, session: &Self::Session, sender: &str) -> Result<bool> {
-        self.privacy_allows_session(session, sender, PrivacyStanzaKind::Message)
-            .await
+        let active = session.privacy_active_snapshot();
+        let allowed = self
+            .message
+            .message_service()
+            .allows_resource_stanza(
+                ResourceStanzaPolicy {
+                    account: None,
+                    account_id: session.user_id,
+                    auth_generation: Some(session.auth_generation),
+                    connection_id: session.connection_id,
+                    expects_active: active.is_some(),
+                    peer: sender,
+                    kind: PrivacyStanzaKind::Message,
+                },
+                false,
+            )
+            .await?;
+        Ok(allowed && session.privacy_active_snapshot() == active)
     }
 
     fn post_accept_failed(&self) {

@@ -3,7 +3,7 @@ use crate::protocol::SessionHost;
 use crate::protocol::{Action, ProtocolSession};
 use anyhow::Result;
 use northstar_federation_core::FederationRoute as _;
-use northstar_roster_application::privacy::PrivacyStanzaKind;
+use northstar_roster_application::CommunicationDecision;
 use northstar_xml_builder::rewrite::{
     root_resets_default_namespace, set_from, set_root_attribute, set_to,
 };
@@ -14,9 +14,8 @@ use northstar_xml_builder::stanza::{
 use northstar_xml_builder::stream::stream_error;
 use northstar_xmpp_types::jid_text::bare_jid;
 use roxmltree::{Document, Node};
-use std::ops::ControlFlow;
 
-mod full_jid_iq;
+pub(super) mod full_jid_iq;
 
 use self::full_jid_iq::missing_full_jid_iq_needs_error;
 
@@ -335,8 +334,19 @@ impl<H: SessionHost> ProtocolSession<H> {
         if matches!(kind, "result" | "error") && self.handle_push_response(id, kind, root).await? {
             return Ok(Action::None);
         }
-        if let Some(action) = H::dispatch_mix_iq(self, raw).await? {
-            return Ok(action);
+        // Correlated returns above and MIX administration are consumed by
+        // their owning handlers. MIX participant relay has its own admission.
+        // An IQ addressed to a local full JID is user-resource traffic.
+        let request = missing_full_jid_iq_needs_error(kind);
+        let local_full_jid = root.attribute("to").is_some_and(|to| {
+            northstar_xmpp_types::jid::CanonicalJid::parse(to).is_ok_and(|target| {
+                target.domainpart() == self.host.local_domain() && target.resourcepart().is_some()
+            })
+        });
+        if request && !local_full_jid {
+            if let Some(action) = H::dispatch_mix_iq(self, raw).await? {
+                return Ok(action);
+            }
         }
         if let (Some(user), Some(from), Some(to)) = (
             self.authenticated.as_ref(),
@@ -345,43 +355,27 @@ impl<H: SessionHost> ProtocolSession<H> {
         ) {
             let target = northstar_xmpp_types::jid::CanonicalJid::parse(to)
                 .expect("validated client stanza target must be canonicalizable");
-            let target_domain = target.domainpart();
-            let owner = format!("{}@{}", user.username, self.host.local_domain());
-            if self
-                .host
-                .presence_service()
-                .is_blocked_for_account(user.id, &owner, to)
-                .await?
-            {
-                return if matches!(kind, "get" | "set") {
-                    Ok(Action::Send(blocked_stanza_error(root)))
-                } else {
-                    Ok(Action::None)
-                };
+            let server_owned = target.domainpart() == self.host.local_domain()
+                && target.localpart().is_none()
+                && target.resourcepart().is_none();
+            if !server_owned {
+                let decision = self
+                    .authorize_outbound_user_iq(user, from, to, &target)
+                    .await?;
+                if !decision.allows() {
+                    return Ok(if !request {
+                        Action::None
+                    } else if decision == CommunicationDecision::OwnerBlocks {
+                        Action::Send(blocked_stanza_error(root))
+                    } else {
+                        Action::Send(iq_error(id, "service-unavailable"))
+                    });
+                }
             }
-            let active_privacy = self
-                .privacy_active
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .clone();
-            if self
-                .host
-                .privacy_service()
-                .denies(
-                    user.id,
-                    active_privacy.as_deref(),
-                    to,
-                    PrivacyStanzaKind::Iq,
-                )
-                .await?
+            if !local_full_jid
+                && target.domainpart() == self.host.local_domain()
+                && target.localpart().is_some()
             {
-                return if matches!(kind, "get" | "set") {
-                    Ok(Action::Send(iq_error(id, "service-unavailable")))
-                } else {
-                    Ok(Action::None)
-                };
-            }
-            if target_domain == self.host.local_domain() && target.localpart().is_some() {
                 if let Some(recipient) = self
                     .host
                     .presence_service()
@@ -396,31 +390,31 @@ impl<H: SessionHost> ProtocolSession<H> {
                         .is_blocked_for_account(recipient.id, &recipient_bare, from)
                         .await?
                     {
-                        return if matches!(kind, "get" | "set") {
-                            Ok(Action::Send(iq_error(id, "service-unavailable")))
+                        return Ok(if request {
+                            Action::Send(iq_error(id, "service-unavailable"))
                         } else {
-                            Ok(Action::None)
-                        };
+                            Action::None
+                        });
                     }
                 }
             }
         }
         let child = root.children().find(|node| node.is_element());
-        if kind == "set"
-            && child.is_some_and(|child| {
-                child.tag_name().name() == "jingle"
-                    && child.tag_name().namespace()
-                        == Some(northstar_message_core::jingle::JINGLE_NS)
-            })
-        {
-            let Some(full_jid) = self.full_jid.as_deref() else {
-                return Ok(Action::Send(iq_error(id, "not-authorized")));
-            };
-            if let Err(condition) = northstar_message_core::jingle::validate_jingle_iq(
-                root,
-                child.expect("checked above"),
-                Some(full_jid),
-            ) {
+        let jingle = child.filter(|child| {
+            kind == "set"
+                && child.tag_name().name() == "jingle"
+                && child.tag_name().namespace() == Some(northstar_message_core::jingle::JINGLE_NS)
+        });
+        let jingle_error = jingle.and_then(|payload| {
+            self.full_jid
+                .as_deref()
+                .map_or(Some("not-authorized"), |from| {
+                    northstar_message_core::jingle::validate_jingle_iq(root, payload, Some(from))
+                        .err()
+                })
+        });
+        if !local_full_jid {
+            if let Some(condition) = jingle_error {
                 return Ok(Action::Send(iq_error(id, condition)));
             }
         }
@@ -433,6 +427,7 @@ impl<H: SessionHost> ProtocolSession<H> {
                 let domain = target_jid.domainpart();
                 if domain == self.host.local_domain()
                     && target_jid.localpart().is_some()
+                    && !local_full_jid
                     && self
                         .host
                         .presence_service()
@@ -455,21 +450,9 @@ impl<H: SessionHost> ProtocolSession<H> {
                     };
                 }
                 if domain == self.host.local_domain() && target_jid.resourcepart().is_some() {
-                    if let ControlFlow::Break(action) = self
-                        .route_full_jid_iq(
-                            root,
-                            raw,
-                            to,
-                            &target_jid,
-                            kind,
-                            id,
-                            child,
-                            caps_disco_get,
-                        )
-                        .await?
-                    {
-                        return Ok(action);
-                    }
+                    return self
+                        .route_full_jid_iq(root, raw, to, caps_disco_get, jingle_error)
+                        .await;
                 } else if domain == muc_domain && target_jid.resourcepart().is_some() {
                     let to_jid = target_jid;
                     let room_jid = to_jid.bare();
@@ -587,10 +570,18 @@ impl<H: SessionHost> ProtocolSession<H> {
         });
         if let Some(domain) = remote_iq_domain.as_deref() {
             let Some(from) = self.full_jid.as_deref() else {
-                return Ok(Action::Send(iq_error(id, "not-authorized")));
+                return Ok(if request {
+                    Action::Send(iq_error(id, "not-authorized"))
+                } else {
+                    Action::None
+                });
             };
             if !self.host.xmpp_external_route_domain_allowed(domain) {
-                return Ok(Action::Send(iq_error(id, "remote-server-not-found")));
+                return Ok(if request {
+                    Action::Send(iq_error(id, "remote-server-not-found"))
+                } else {
+                    Action::None
+                });
             }
             if !self
                 .host
@@ -598,7 +589,11 @@ impl<H: SessionHost> ProtocolSession<H> {
                 .send(domain, set_from(raw, from), Some(from.to_owned()))
                 .await
             {
-                return Ok(Action::Send(iq_error(id, "remote-server-timeout")));
+                return Ok(if request {
+                    Action::Send(iq_error(id, "remote-server-timeout"))
+                } else {
+                    Action::None
+                });
             }
             return Ok(Action::None);
         }

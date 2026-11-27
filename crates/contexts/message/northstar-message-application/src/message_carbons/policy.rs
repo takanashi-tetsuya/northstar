@@ -1,7 +1,9 @@
-use crate::messaging::{LocalRecipientDecision, MessageRepository, MessageService};
+use crate::messaging::{
+    ExactMessageRoute, MessageRepository, MessageService, ResourceStanzaPolicy,
+};
 use anyhow::Result;
 use northstar_xep_0016::PrivacyStanzaKind;
-use northstar_xmpp_types::jid::CanonicalJid;
+use northstar_xmpp_types::jid_text::bare_jid;
 use uuid::Uuid;
 
 impl<R: MessageRepository> MessageService<R> {
@@ -13,22 +15,38 @@ impl<R: MessageRepository> MessageService<R> {
         active_list: Option<&str>,
         peer: &str,
     ) -> Result<bool> {
-        let account = CanonicalJid::parse_bare(account)?;
-        let Some(username) = account.localpart() else {
-            return Ok(false);
-        };
-        if !matches!(
-            self.resolve_local_recipient(username, account.domainpart(), peer).await?,
-            LocalRecipientDecision::Deliver(recipient) if recipient.id == account_id
-        ) {
-            return Ok(false);
-        }
-        self.privacy_allows_session(
-            account_id,
-            connection_id,
-            active_list,
-            peer,
-            PrivacyStanzaKind::Message,
+        self.allows_resource_stanza(
+            ResourceStanzaPolicy {
+                account: Some(account),
+                account_id,
+                auth_generation: None,
+                connection_id,
+                expects_active: active_list.is_some(),
+                peer,
+                kind: PrivacyStanzaKind::Message,
+            },
+            false,
+        )
+        .await
+    }
+
+    pub async fn allows_carbon_on_route(
+        &self,
+        route: &ExactMessageRoute,
+        active_list: Option<&str>,
+        peer: &str,
+    ) -> Result<bool> {
+        self.allows_resource_stanza(
+            ResourceStanzaPolicy {
+                account: Some(bare_jid(&route.full_jid)),
+                account_id: route.account_id,
+                auth_generation: Some(route.auth_generation),
+                connection_id: route.connection_id,
+                expects_active: active_list.is_some(),
+                peer,
+                kind: PrivacyStanzaKind::Message,
+            },
+            false,
         )
         .await
     }

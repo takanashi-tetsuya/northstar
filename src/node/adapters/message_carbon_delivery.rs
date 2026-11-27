@@ -79,8 +79,8 @@ impl CarbonDeliveryPort for ServerNode {
                 current.privacy_active_snapshot() == active_list
             }) == Some(true)
         }, async {
-            match self.message.message_service().allows_carbon(
-                request.bare, route.account_id, route.connection_id, active_list.as_deref(), peer,
+            match self.message.message_service().allows_carbon_on_route(
+                route, active_list.as_deref(), peer,
             ).await {
                 Ok(allowed) => allowed,
                 Err(error) => {

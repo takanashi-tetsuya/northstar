@@ -623,6 +623,8 @@ pub struct LocalMucInviteAdmission<'a> {
 pub mod invitation_admission;
 mod prepared_history;
 pub use prepared_history::{MessageHistoryPreparation, PreparedMessageHistory};
+mod resource_policy;
+pub use resource_policy::{ResourcePolicyRepository, ResourceStanzaPolicy};
 
 /// Each admission commits all requested history, delivery and affiliation
 /// changes atomically. An error after requesting COMMIT can leave its outcome
@@ -632,6 +634,7 @@ pub trait MessageRepository:
     + DirectCommitRepository<Error = anyhow::Error>
     + invitation_admission::DirectInvitationRepository
     + MessageHistoryPreparation
+    + ResourcePolicyRepository
     + Clone
     + Send
     + Sync

@@ -130,6 +130,9 @@ pub(super) struct NodeDeliveryOptions<'a> {
     pub(super) expected_user_id: Option<uuid::Uuid>,
     pub(super) expected_auth_generation: Option<i64>,
     pub(super) exact_message_routes: Option<&'a std::collections::BTreeMap<String, uuid::Uuid>>,
+    /// Exact IQ uses the connection map and correlated acknowledgement, with
+    /// an admission-only mode for server replies that stand in for a resource.
+    pub(super) exact_iq_check_only: Option<bool>,
     /// Immutable roster journal version used by the recipient's initial-sync
     /// gate. Present whenever `roster_requested_only` is true.
     pub(super) roster_version: Option<i64>,

@@ -1379,3 +1379,4 @@ async fn prepared_live_routes_only_the_original_envelope_and_committed_source() 
 #[path = "tests/exact_route_port.rs"]
 mod exact_route_port;
 mod prepared_history;
+mod resource_policy;

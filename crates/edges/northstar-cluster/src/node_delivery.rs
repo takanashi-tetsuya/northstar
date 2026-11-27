@@ -748,6 +748,9 @@ pub(super) fn build_node_delivery_payload(
             serde_json::json!(control.kind == ExactControlKind::SubscriptionPresence);
     } else if let Some(routes) = options.exact_message_routes {
         payload["expected_connections"] = serde_json::json!(routes);
+        if let Some(check_only) = options.exact_iq_check_only {
+            payload["exact_iq_check_only"] = serde_json::json!(check_only);
+        }
     }
     payload
 }

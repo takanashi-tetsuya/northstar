@@ -8,6 +8,11 @@ use northstar_message_application::PersonalMessageCommitRepository;
 use northstar_message_core::{DirectPostCommitMode, DirectSpoolEligibility};
 use northstar_message_postgres::direct_cluster::DirectCommitCluster;
 use northstar_room_application::muc_service::DurableMucInviteOutcome;
+use northstar_roster_application::{
+    CommunicationDecision, CommunicationPolicyQuery, CommunicationPolicyReader, PolicyDirection,
+    PolicySubject, ResourceCommunicationPolicyReader,
+};
+use northstar_roster_postgres::privacy::PostgresPrivacyRepository;
 use northstar_xep_0016::PrivacyStanzaKind;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -333,29 +338,34 @@ impl MessageRepository for PostgresMessageRepository {
         active_privacy_list: Option<&str>,
         target: &str,
     ) -> Result<OutboundPolicyDecision> {
-        if northstar_roster_postgres::roster::is_blocked_for_account(
-            &self.pool,
-            owner_id,
-            owner_bare_jid,
-            target,
-        )
-        .await?
-        {
-            return Ok(OutboundPolicyDecision::Blocked);
-        }
-        if northstar_roster_postgres::privacy::session_privacy_denies(
-            &self.pool,
-            owner_id,
-            connection_id,
-            active_privacy_list.is_some(),
-            target,
-            PrivacyStanzaKind::Message,
-        )
-        .await?
-        {
-            return Ok(OutboundPolicyDecision::PrivacyDenied);
-        }
-        Ok(OutboundPolicyDecision::Allowed)
+        let owner = northstar_xmpp_types::jid::CanonicalJid::parse_bare(owner_bare_jid)?;
+        let peer = northstar_xmpp_types::jid::CanonicalJid::parse(target)?;
+        let decision = PostgresPrivacyRepository::new(self.pool.clone())
+            .read_communication_policy(&CommunicationPolicyQuery {
+                account_id: owner_id,
+                expected_auth_generation: None,
+                subject: connection_id.map_or(PolicySubject::AccountDefault, |connection_id| {
+                    PolicySubject::Connection {
+                        connection_id,
+                        expects_active: active_privacy_list.is_some(),
+                    }
+                }),
+                peer: target.to_owned(),
+                kind: PrivacyStanzaKind::Message,
+                direction: PolicyDirection::Outbound,
+                check_owner_block: peer.bare() != owner.bare(),
+                check_peer_block: false,
+            })
+            .await?;
+        Ok(match decision {
+            CommunicationDecision::Allow => OutboundPolicyDecision::Allowed,
+            CommunicationDecision::OwnerBlocks | CommunicationDecision::PeerBlocks => {
+                OutboundPolicyDecision::Blocked
+            }
+            CommunicationDecision::PrivacyDenies | CommunicationDecision::StaleAccount => {
+                OutboundPolicyDecision::PrivacyDenied
+            }
+        })
     }
 
     /// Resolve a local target and apply its account-scoped block rule as one
@@ -395,15 +405,22 @@ impl MessageRepository for PostgresMessageRepository {
         recipient_id: Uuid,
         sender_jid: &str,
     ) -> Result<bool> {
-        northstar_roster_postgres::privacy::session_privacy_denies(
-            &self.pool,
-            recipient_id,
-            None,
-            false,
-            sender_jid,
-            PrivacyStanzaKind::Message,
-        )
-        .await
+        Ok(!self
+            .read_recipient_policy(
+                CommunicationPolicyQuery {
+                    account_id: recipient_id,
+                    expected_auth_generation: None,
+                    subject: PolicySubject::AccountDefault,
+                    peer: sender_jid.to_owned(),
+                    kind: PrivacyStanzaKind::Message,
+                    direction: PolicyDirection::Inbound,
+                    check_owner_block: true,
+                    check_peer_block: false,
+                },
+                None,
+                false,
+            )
+            .await?)
     }
 
     async fn privacy_allows_session(
@@ -729,6 +746,60 @@ impl MessageRepository for PostgresMessageRepository {
                 Ok(OfflineAdmissionOutcome::RecipientUnavailable)
             }
         }
+    }
+}
+
+impl ResourcePolicyRepository for PostgresMessageRepository {
+    async fn allows_resource_stanza(
+        &self,
+        request: ResourceStanzaPolicy<'_>,
+        require_subscription: bool,
+    ) -> Result<bool> {
+        let account = request
+            .account
+            .map(northstar_xmpp_types::jid::CanonicalJid::parse_bare)
+            .transpose()?;
+        if account.as_ref().is_some_and(|account| {
+            account.localpart().is_none() || account.domainpart() != self.configured_domain
+        }) {
+            return Ok(false);
+        }
+        self.read_recipient_policy(
+            CommunicationPolicyQuery {
+                account_id: request.account_id,
+                expected_auth_generation: request.auth_generation,
+                subject: PolicySubject::Connection {
+                    connection_id: request.connection_id,
+                    expects_active: request.expects_active,
+                },
+                peer: request.peer.to_owned(),
+                kind: request.kind,
+                direction: PolicyDirection::Inbound,
+                check_owner_block: true,
+                check_peer_block: false,
+            },
+            account.as_ref().and_then(|account| account.localpart()),
+            require_subscription,
+        )
+        .await
+    }
+}
+
+impl PostgresMessageRepository {
+    async fn read_recipient_policy(
+        &self,
+        query: CommunicationPolicyQuery,
+        expected_name: Option<&str>,
+        require_subscription: bool,
+    ) -> Result<bool> {
+        Ok(PostgresPrivacyRepository::new(self.pool.clone())
+            .read_resource_policy(
+                &query,
+                (expected_name, &self.configured_domain),
+                require_subscription,
+            )
+            .await?
+            .allows())
     }
 }
 

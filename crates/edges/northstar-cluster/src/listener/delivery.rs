@@ -13,7 +13,7 @@ mod notification;
 mod policy;
 mod roster;
 
-use self::policy::permits_direct_delivery;
+use self::policy::{exact_iq_request, handoff_exact_iq, permits_direct_delivery};
 use self::roster::{roster_interest_missing, validate_roster_push, RosterPushOptions};
 
 pub(super) struct StanzaDelivery<'a> {
@@ -40,11 +40,19 @@ pub(super) async fn resolve_stanza_delivery<'a, A: ClusterAdapters>(
         .as_ref()
         .is_some_and(|document| document.root_element().tag_name().name() == "message");
     let exact_control_version = exact_control::is_exact_control_version(json);
+    let exact_iq = json.get("exact_iq_check_only").is_some();
+    if exact_iq
+        && (is_muc
+            || is_muc_private
+            || exact_iq_request(json, target, parsed_stanza.as_ref()).is_none())
+    {
+        return ListenerStep::Continue;
+    }
     if exact_control_version && (is_muc || is_muc_private) {
         return ListenerStep::Continue;
     }
     let (resolved_message_delivery, direct_delivery_contract_valid) =
-        if !is_muc && !is_muc_private && !exact_control_version {
+        if !is_muc && !is_muc_private && !exact_control_version && !exact_iq {
             match requested_node_message_delivery(json, is_message_stanza) {
                 Ok(Some(request)) => {
                     match resolve_node_message_delivery(
@@ -139,6 +147,7 @@ pub(super) struct DirectDeliveryOptions<'a> {
     available_nonnegative_only: bool,
     pub(super) mix_request_id: Option<uuid::Uuid>,
     pub(super) exact_control: Option<ExactControl>,
+    exact_iq_request: Option<(bool, bool)>,
 }
 
 pub(super) fn validate_direct_delivery<'a>(
@@ -316,6 +325,12 @@ pub(super) fn validate_direct_delivery<'a>(
     } else {
         None
     };
+    let exact_iq_request = exact_iq_request(json, target, parsed_stanza.as_ref());
+    if exact_iq_request.is_some()
+        && (exact_control.is_some() || carbons_only || json.get("expected_connections").is_none())
+    {
+        return ListenerStep::Continue;
+    }
     let expected_connections = match (json.get("expected_connections"), &exact_control) {
         (_, Some(control)) => Some(control.expected_connections.clone()),
         (None, None) => None,
@@ -329,7 +344,7 @@ pub(super) fn validate_direct_delivery<'a>(
                 return ListenerStep::Continue;
             };
             if json["protocol_version"].as_str() != Some(EXACT_MESSAGE_DELIVERY_VERSION)
-                || !is_message_stanza
+                || (!is_message_stanza && exact_iq_request.is_none())
                 || expected_user_id.is_none_or(|id| id.is_nil())
                 || expected_auth_generation.is_none()
                 || routes.is_empty()
@@ -380,6 +395,7 @@ pub(super) fn validate_direct_delivery<'a>(
         available_nonnegative_only,
         mix_request_id,
         exact_control,
+        exact_iq_request,
     })
 }
 
@@ -519,13 +535,7 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
             };
             match message_policy
                 .message
-                .allows_carbon(
-                    northstar_xmpp_types::jid_text::bare_jid(&jid),
-                    route.account_id,
-                    route.connection_id,
-                    active_list.as_deref(),
-                    peer,
-                )
+                .allows_carbon_on_route(&route, active_list.as_deref(), peer)
                 .await
             {
                 Ok(true) => {}
@@ -566,16 +576,36 @@ pub(super) async fn fan_out_direct_delivery<A: ClusterAdapters>(
             }
             continue;
         }
-        if !permits_direct_delivery(
-            message_policy,
-            &session,
-            &jid,
-            privacy_peer_kind,
-            blocklist_requested_only,
-            roster_requested_only,
-            privacy_requested_only,
-        )
-        .await
+        if let Some((request, check_only)) = options.exact_iq_request {
+            let Some((peer, _)) = privacy_peer_kind else {
+                continue;
+            };
+            let table = LocalSessionTable::new(Arc::clone(&dispatch.account_routes.sessions));
+            if handoff_exact_iq(
+                &message_policy.message,
+                &table,
+                (&jid, &session, peer),
+                request,
+                (!check_only).then_some(stanza),
+            )
+            .await
+            {
+                *delivered += 1;
+                accepted_full_jid.get_or_insert(jid);
+            }
+            break;
+        }
+        // The validated transport receipt identifies server return-control.
+        if !options.transport_receipt_required
+            && !permits_direct_delivery(
+                message_policy,
+                &session,
+                &jid,
+                privacy_peer_kind,
+                blocklist_requested_only || roster_requested_only || privacy_requested_only,
+                mix_capable_only,
+            )
+            .await
         {
             continue;
         }

@@ -27,7 +27,9 @@ pub struct InboundPepRequest<'a, 'input> {
 
 /// Narrow bindings supplied by the composition root. Authorization and dispatch order live in
 /// `inbound`; context adapters and persistence implementations stay behind these operations.
-pub trait InboundHost: Send + Sync + 'static {
+pub trait InboundHost:
+    northstar_stream::protocol::iq_visibility::IqVisibilityHost + Send + Sync + 'static
+{
     fn local_domain(&self) -> &str;
     fn island_mode_enabled(&self) -> bool;
     fn federation_entity_allowed(&self, entity: &str) -> bool;

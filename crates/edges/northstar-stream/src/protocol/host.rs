@@ -43,6 +43,8 @@ pub trait SessionHost:
     + SessionDispatchHost
     + SessionLifecycleHost
     + SessionTelemetryHost
+    + super::iq_visibility::IqVisibilityHost
+    + northstar_roster_application::CommunicationPolicyReader
     + Sized
     + Send
     + Sync
@@ -64,6 +66,8 @@ impl<T> SessionHost for T where
         + SessionDispatchHost
         + SessionLifecycleHost
         + SessionTelemetryHost
+        + super::iq_visibility::IqVisibilityHost
+        + northstar_roster_application::CommunicationPolicyReader
         + Sized
         + Send
         + Sync

@@ -13,6 +13,32 @@ pub async fn read_communication_policies<'e>(
     executor: impl sqlx::Executor<'e, Database = Postgres>,
     queries: &[CommunicationPolicyQuery],
 ) -> Result<Vec<CommunicationDecision>> {
+    read_policies(executor, queries, None, false).await
+}
+
+/// Fence recipient names and optionally require a roster grant in the same snapshot.
+pub(super) async fn read_resource_policy<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    query: &CommunicationPolicyQuery,
+    owner: (Option<&str>, &str),
+    require_subscription: bool,
+) -> Result<CommunicationDecision> {
+    let decisions = read_policies(
+        executor,
+        std::slice::from_ref(query),
+        Some(owner),
+        require_subscription,
+    )
+    .await?;
+    Ok(decisions[0])
+}
+
+async fn read_policies<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    queries: &[CommunicationPolicyQuery],
+    resource_owner: Option<(Option<&str>, &str)>,
+    require_subscription: bool,
+) -> Result<Vec<CommunicationDecision>> {
     if queries.is_empty() {
         return Ok(Vec::new());
     }
@@ -25,25 +51,31 @@ pub async fn read_communication_policies<'e>(
         .iter()
         .zip(&peers)
         .enumerate()
-        .map(|(position, (query, peer))| request_row(position, query, peer))
+        .map(|(position, (query, peer))| request_row(position, query, peer, resource_owner))
         .collect();
 
     // For a local peer, the owner shares the peer's domain. The projection of
     // the peer's bare JID supplies the shared domain key and the exact-account
     // key, whose localpart is replaced using the owner row in this snapshot.
+    // The leading comment keeps both relations inside the first 1 KiB of
+    // pg_stat_activity.query, where the snapshot test looks for them.
     let statement = format!(
-        "WITH requested AS (
+        "/* joint blocked_jids and privacy_list_items snapshot */
+         WITH requested AS (
              SELECT * FROM jsonb_to_recordset($1::jsonb) AS input(
                  position bigint, owner_id uuid, expected_auth_generation bigint,
                  connection_id uuid, expects_active bool, peer_bare text, peer_domain text,
-                 local_peer_name text, owner_block_keys jsonb, peer_block_keys jsonb)
+                 local_peer_name text, owner_block_keys jsonb, peer_block_keys jsonb,
+                 expected_name text, owner_domain text)
          ), account_policy AS MATERIALIZED (
              SELECT requested.position,
                     account.id IS NOT NULL AND NOT account.is_disabled
+                      AND (requested.expected_name IS NULL OR account.username = requested.expected_name)
                       AND (requested.expected_auth_generation IS NULL
                            OR account.auth_generation = requested.expected_auth_generation)
                       AS current_account,
-                    EXISTS (
+                    NOT COALESCE((account.username || '@' || requested.owner_domain)
+                                 = requested.peer_bare, FALSE) AND EXISTS (
                         SELECT 1 FROM blocked_jids b
                          WHERE b.owner_id = account.id
                            AND b.blocked_jid = ANY(ARRAY(
@@ -79,7 +111,7 @@ pub async fn read_communication_policies<'e>(
             left.get::<i64, _>("privacy_position") == right.get::<i64, _>("privacy_position")
         })
         .zip(queries.iter().zip(&peers))
-        .map(|(rows, (query, peer))| read_decision(rows, query, peer))
+        .map(|(rows, (query, peer))| read_decision(rows, query, peer, require_subscription))
         .collect::<Result<Vec<_>>>()?;
     anyhow::ensure!(
         decisions.len() == queries.len(),
@@ -88,7 +120,12 @@ pub async fn read_communication_policies<'e>(
     Ok(decisions)
 }
 
-fn request_row(position: usize, query: &CommunicationPolicyQuery, peer: &CanonicalJid) -> Value {
+fn request_row(
+    position: usize,
+    query: &CommunicationPolicyQuery,
+    peer: &CanonicalJid,
+    resource_owner: Option<(Option<&str>, &str)>,
+) -> Value {
     let (connection_id, expects_active) = match query.subject {
         PolicySubject::Connection {
             connection_id,
@@ -128,6 +165,8 @@ fn request_row(position: usize, query: &CommunicationPolicyQuery, peer: &Canonic
         "local_peer_name": local_peer_name,
         "owner_block_keys": owner_block_keys,
         "peer_block_keys": peer_block_keys,
+        "expected_name": resource_owner.and_then(|(name, _)| name),
+        "owner_domain": resource_owner.map(|(_, domain)| domain),
     })
 }
 
@@ -135,6 +174,7 @@ fn read_decision(
     rows: &[PgRow],
     query: &CommunicationPolicyQuery,
     peer: &CanonicalJid,
+    require_subscription: bool,
 ) -> Result<CommunicationDecision> {
     use CommunicationDecision::*;
 
@@ -155,7 +195,13 @@ fn read_decision(
         return Ok(denial);
     }
     Ok(
-        if privacy_denies_from_facts(rows, &peer.to_string(), query.kind)? {
+        if (require_subscription
+            && !matches!(
+                first.try_get::<Option<&str>, _>("subscription")?,
+                Some("from" | "both")
+            ))
+            || privacy_denies_from_facts(rows, &peer.to_string(), query.kind)?
+        {
             PrivacyDenies
         } else {
             Allow

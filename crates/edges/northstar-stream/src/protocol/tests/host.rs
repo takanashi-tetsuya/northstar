@@ -826,14 +826,16 @@ mod host_ports {
         where
             Self: SessionHost,
         {
-            panic!("unexpected host call: dispatch_mix_iq")
+            Ok(None)
         }
         #[allow(clippy::too_many_arguments)]
         fn iq_routes() -> &'static IqRouter<ClientIqRoute<Self>>
         where
             Self: SessionHost,
         {
-            panic!("unexpected host call: iq_routes")
+            static ROUTES: std::sync::LazyLock<IqRouter<ClientIqRoute<TestHost>>> =
+                std::sync::LazyLock::new(IqRouter::new);
+            &ROUTES
         }
     }
 
@@ -1142,4 +1144,5 @@ impl crate::session_cleanup::SessionCleanup for TestCleanup {
 }
 
 mod caps_events;
+mod iq_visibility;
 mod occupant_iq;

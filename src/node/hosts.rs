@@ -6,6 +6,7 @@ pub(in crate::node) mod c2s;
 pub(in crate::node) mod discovery;
 pub(crate) mod http;
 pub(in crate::node) mod iq_route;
+mod iq_visibility;
 pub(in crate::node) mod message;
 pub(in crate::node) mod mix;
 pub(in crate::node) mod muc;

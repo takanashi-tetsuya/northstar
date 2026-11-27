@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::inbound_host::{InboundPepRequest, PubSubReply};
+use northstar_stream::protocol::iq_visibility::LocalIqAdmission;
 
 pub(super) fn is_xep0357_notification_publish(pubsub: roxmltree::Node<'_, '_>) -> bool {
     pubsub.children().any(|operation| {
@@ -38,158 +39,154 @@ pub(super) async fn route_inbound_iq<H: InboundHost>(
     to: &str,
 ) -> Result<Option<String>> {
     let kind = root.attribute("type").unwrap_or("get");
+    let request = matches!(kind, "get" | "set");
+    let id = root.attribute("id").unwrap_or_default();
+    let unavailable = || request.then(|| s2s_iq_error(id, to, from, "service-unavailable"));
     let Ok(to_jid) = CanonicalJid::parse(to) else {
-        return Ok(Some(s2s_stanza_error(root, "modify", "jid-malformed")));
+        return Ok(request.then(|| s2s_stanza_error(root, "modify", "jid-malformed")));
     };
+    if matches!(kind, "result" | "error") {
+        // These authenticated return handlers own correlation and consume
+        // their replies before any user-resource gate.
+        if state
+            .handle_federated_caps_response(id, kind, root, raw)
+            .await
+            || state.handle_push_delivery_response(id, kind, from).await?
+        {
+            return Ok(None);
+        }
+        if to_jid.resourcepart().is_none() {
+            return Ok(None);
+        }
+    }
+
     let recipient_name = to_jid.localpart();
-    let recipient = match recipient_name {
-        Some(username) => state.find_enabled_presence_user(username).await?,
-        None => None,
+    let full_target = to_jid.resourcepart().is_some();
+    let child = root.children().find(roxmltree::Node::is_element);
+    let jingle_error = child
+        .filter(|child| {
+            kind == "set"
+                && child.has_tag_name((northstar_message_core::jingle::JINGLE_NS, "jingle"))
+        })
+        .and_then(|child| {
+            northstar_message_core::jingle::validate_jingle_iq(root, child, None).err()
+        });
+    let local_admission = if full_target {
+        state
+            .session_entries_for(to)
+            .into_iter()
+            .next()
+            .map(|(jid, target)| LocalIqAdmission::capture(jid, &target, from, request))
+            .transpose()?
+    } else {
+        None
     };
-    if let Some(recipient) = recipient.as_ref() {
+    let remote_route = if full_target && local_admission.is_none() && recipient_name.is_some() {
+        state.capture_remote_iq_route(to).await?
+    } else {
+        None
+    };
+    if let Some(admission) = local_admission.as_ref() {
+        if !state.authorize_iq_resource(admission).await? {
+            return Ok(unavailable());
+        }
+        if !request {
+            state.local_iq_handoff(admission, Some(raw));
+            return Ok(None);
+        }
+        if !state.local_iq_handoff(admission, None) {
+            return Ok(unavailable());
+        }
+    } else if let Some(route) = remote_route.as_ref() {
+        if !request || !answers_for_full_resource(child, kind, jingle_error.is_some()) {
+            return Ok(if state.remote_iq_handoff(route, raw, false).await {
+                None
+            } else {
+                unavailable()
+            });
+        }
+        if !state.remote_iq_handoff(route, raw, true).await {
+            return Ok(unavailable());
+        }
+    } else if full_target {
+        return Ok(unavailable());
+    } else if let Some(username) = recipient_name {
+        // Bare account IQ service policy remains account scoped.
+        let Some(recipient) = state.find_enabled_presence_user(username).await? else {
+            return Ok(unavailable());
+        };
         let recipient_bare = format!("{}@{}", recipient.username, state.local_domain());
         if state
             .is_blocked_for_account(recipient.id, &recipient_bare, from)
             .await?
         {
-            return if matches!(kind, "get" | "set") {
-                Ok(Some(s2s_iq_error(
-                    root.attribute("id").unwrap_or_default(),
-                    to,
-                    from,
-                    "service-unavailable",
-                )))
-            } else {
-                Ok(None)
-            };
+            return Ok(unavailable());
         }
-    }
-    if matches!(kind, "result" | "error") {
-        let id = root.attribute("id").unwrap_or_default();
-        if state
-            .handle_federated_caps_response(id, kind, root, raw)
-            .await
-        {
-            return Ok(None);
-        }
-        if state.handle_push_delivery_response(id, kind, from).await? {
-            return Ok(None);
-        }
-        // Never broadcast an uncorrelated response to every resource of an
-        // account. IQ responses belong to an exact originating resource.
-        if to_jid.resourcepart().is_none() {
-            return Ok(None);
-        }
-        let mut delivered = false;
-        for target in state.sessions_for(to) {
-            if state.privacy_allows_iq(&target, from).await?
-                && target.sender.try_send(raw.to_owned()).is_ok()
-            {
-                delivered = true;
-                break;
-            }
-        }
-        if !delivered {
-            state
-                .route_s2s_iq_response_to_remote_resource(to, raw)
-                .await;
-        }
-        return Ok(None);
     }
 
-    if to_jid.localpart().is_some() && recipient.is_none() {
-        // RFC 6121 section 8.5.1 is evaluated before any server-side IQ
-        // extension handler. A ping, vCard or other payload must not turn a
-        // nonexistent local account into an oracle that appears to exist.
-        return Ok(Some(s2s_iq_error(
-            root.attribute("id").unwrap_or_default(),
-            to,
+    let reply = answer_or_forward_iq(
+        state,
+        AdmittedIqRequest {
+            id,
+            kind,
+            raw,
             from,
-            "service-unavailable",
-        )));
-    }
-
-    if to_jid.resourcepart().is_some() {
-        let Some(recipient) = recipient.as_ref() else {
-            return Ok(Some(s2s_iq_error(
-                root.attribute("id").unwrap_or_default(),
-                to,
-                from,
-                "service-unavailable",
-            )));
+            to,
+            target: &to_jid,
+            child,
+            jingle_error,
+            local_admission: local_admission.as_ref(),
+        },
+    )
+    .await?;
+    if reply.is_some() {
+        let current = if let Some(admission) = local_admission.as_ref() {
+            state.local_iq_handoff(admission, None)
+        } else if let Some(route) = remote_route.as_ref() {
+            state.remote_iq_route_current(route).await?
+        } else {
+            true
         };
-        // RFC 6121 section 8.5.3.1 applies the presence-leak gate to every
-        // IQ get/set addressed to a matching full JID.  This includes Jingle
-        // and unknown extension IQs; capability discovery is not special.
-        if matches!(kind, "get" | "set") {
-            let requester_bare = northstar_xmpp_types::jid::canonical_bare_key(from)?;
-            let subscribed = state.allows_presence(recipient.id, &requester_bare).await?;
-            let directed = state
-                .session_entries_for(to)
-                .into_iter()
-                .any(|(_, session)| {
-                    session.directed_presence.iter().any(|authorized| {
-                        northstar_presence_core::directed_recipient_matches(authorized.key(), from)
-                    })
-                });
-            if !subscribed && !directed {
-                return Ok(Some(s2s_iq_error(
-                    root.attribute("id").unwrap_or_default(),
-                    to,
-                    from,
-                    "service-unavailable",
-                )));
-            }
-        }
-        // RFC 6121 section 8.5.3.2.3 requires service-unavailable before a
-        // server-side handler (including the XEP-0115 cache) can answer for
-        // an exact resource which is not connected on any cluster node.
-        let local_resource_matches = !state.session_entries_for(to).is_empty();
-        let remote_resource_matches = state.s2s_remote_recipient_route_exists(to).await;
-        if !local_resource_matches && !remote_resource_matches {
-            return Ok(Some(s2s_iq_error(
-                root.attribute("id").unwrap_or_default(),
-                to,
-                from,
-                "service-unavailable",
-            )));
-        }
-        let targets = state.sessions_for(to);
-        if !targets.is_empty() {
-            let mut allowed = false;
-            for target in &targets {
-                if state.privacy_allows_iq(target, from).await? {
-                    allowed = true;
-                    break;
-                }
-            }
-            if !allowed {
-                return if matches!(kind, "get" | "set") {
-                    Ok(Some(s2s_iq_error(
-                        root.attribute("id").unwrap_or_default(),
-                        to,
-                        from,
-                        "service-unavailable",
-                    )))
-                } else {
-                    Ok(None)
-                };
-            }
+        if !current {
+            return Ok(unavailable());
         }
     }
-    let id = root.attribute("id").unwrap_or_default();
-    let Some(child) = root.children().find(|node| node.is_element()) else {
+    Ok(reply)
+}
+
+struct AdmittedIqRequest<'a, 'input> {
+    id: &'a str,
+    kind: &'a str,
+    raw: &'a str,
+    from: &'a str,
+    to: &'a str,
+    target: &'a CanonicalJid,
+    child: Option<roxmltree::Node<'a, 'input>>,
+    jingle_error: Option<&'static str>,
+    local_admission: Option<&'a LocalIqAdmission<'a>>,
+}
+
+async fn answer_or_forward_iq<H: InboundHost>(
+    state: &H,
+    iq: AdmittedIqRequest<'_, '_>,
+) -> Result<Option<String>> {
+    let AdmittedIqRequest {
+        id,
+        kind,
+        raw,
+        from,
+        to,
+        target: to_jid,
+        child,
+        jingle_error,
+        local_admission,
+    } = iq;
+    let recipient_name = to_jid.localpart();
+    let Some(child) = child else {
         return Ok(Some(s2s_iq_error(id, to, from, "bad-request")));
     };
-    if kind == "set"
-        && child.tag_name().name() == "jingle"
-        && child.tag_name().namespace() == Some(northstar_message_core::jingle::JINGLE_NS)
-    {
-        if let Err(condition) =
-            northstar_message_core::jingle::validate_jingle_iq(root, child, None)
-        {
-            return Ok(Some(s2s_iq_error(id, to, from, condition)));
-        }
+    if let Some(condition) = jingle_error {
+        return Ok(Some(s2s_iq_error(id, to, from, condition)));
     }
     if kind == "get"
         && to.contains('/')
@@ -366,14 +363,16 @@ pub(super) async fn route_inbound_iq<H: InboundHost>(
             // Service may be represented by a bare account JID and processes
             // the IQ through one deterministic service resource.  Domain-only
             // Push Service JIDs are handled as server services above.
-            if bare_target && !bare_account_iq_may_route_to_service_resource(&to_jid, child) {
+            if bare_target && !bare_account_iq_may_route_to_service_resource(to_jid, child) {
                 return Ok(Some(s2s_iq_error(id, to, from, "service-unavailable")));
             }
             // Never spray the narrow service-resource exception across
             // resources: highest priority wins and the canonical full JID is
             // a deterministic tie-breaker.
-            let mut targets = state.session_entries_for(to);
-            if bare_target {
+            let delivered = if let Some(admission) = local_admission {
+                state.local_iq_handoff(admission, Some(raw))
+            } else if bare_target {
+                let mut targets = state.session_entries_for(to);
                 targets.retain(|(_, target)| {
                     target.available.load(Ordering::Acquire)
                         && target.priority.load(Ordering::Acquire) >= 0
@@ -385,28 +384,51 @@ pub(super) async fn route_inbound_iq<H: InboundHost>(
                         .cmp(&left.priority.load(Ordering::Acquire))
                         .then_with(|| left_jid.cmp(right_jid))
                 });
-            }
-            let mut delivered = false;
-            for (_, target) in targets {
-                if state.privacy_allows_iq(&target, from).await?
-                    && target.sender.try_send(raw.to_owned()).is_ok()
-                {
-                    delivered = true;
-                    if bare_target {
+                let mut delivered = false;
+                for (jid, target) in targets {
+                    // Push-service routing has no presence grant requirement.
+                    let admission = LocalIqAdmission::capture(jid, &target, from, false)?;
+                    if state.authorize_iq_resource(&admission).await?
+                        && state.local_iq_handoff(&admission, Some(raw))
+                    {
+                        delivered = true;
                         break;
                     }
                 }
-            }
-            if !delivered {
-                delivered = state
-                    .route_s2s_iq_request_remote(to, raw, bare_target)
-                    .await;
-            }
+                delivered || state.route_s2s_iq_request_remote(to, raw, true).await
+            } else {
+                false
+            };
             if !delivered {
                 return Ok(Some(s2s_iq_error(id, to, from, "service-unavailable")));
             }
             Ok(None)
         }
+    }
+}
+
+// Only these full-resource handlers can answer from the server. Forwarding
+// asks the resource owner for a single admission combined with queue handoff.
+fn answers_for_full_resource(
+    child: Option<roxmltree::Node<'_, '_>>,
+    kind: &str,
+    invalid_jingle: bool,
+) -> bool {
+    let Some(child) = child else {
+        return true;
+    };
+    if invalid_jingle {
+        return true;
+    }
+    match (child.tag_name().name(), child.tag_name().namespace(), kind) {
+        ("ping", Some(northstar_xep_0199::NAMESPACE), "get")
+        | ("vCard", Some("vcard-temp"), "get")
+        | ("pubsub", Some("http://jabber.org/protocol/pubsub"), "get")
+        | ("query", Some("http://jabber.org/protocol/disco#info"), "get") => true,
+        ("pubsub", Some("http://jabber.org/protocol/pubsub"), "set") => {
+            !is_xep0357_notification_publish(child)
+        }
+        _ => false,
     }
 }
 
@@ -428,3 +450,6 @@ fn pubsub_s2s_iq_error(id: &str, from: &str, to: &str, reply: &PubSubReply) -> S
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

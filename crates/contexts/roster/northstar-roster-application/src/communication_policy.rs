@@ -7,6 +7,8 @@ use uuid::Uuid;
 
 mod test_support;
 pub use test_support::InMemoryCommunicationPolicyReader;
+mod resource;
+pub use resource::ResourceCommunicationPolicyReader;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PolicyDirection {

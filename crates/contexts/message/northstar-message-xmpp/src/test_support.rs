@@ -940,3 +940,4 @@ pub(crate) fn poll_once<F: Future>(future: Pin<&mut F>) -> Poll<F::Output> {
 #[path = "test_support/exact_route_port.rs"]
 mod exact_route_port;
 mod prepared_history;
+mod resource_policy;

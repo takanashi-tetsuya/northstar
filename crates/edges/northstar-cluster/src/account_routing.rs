@@ -6,6 +6,9 @@ use anyhow::Result;
 mod blocking_presence;
 mod policy_push;
 
+#[cfg(test)]
+pub(crate) use blocking_presence::send_blocking_pages;
+
 pub struct RemoteRouteFailure {
     pub node_id: String,
     pub error: anyhow::Error,

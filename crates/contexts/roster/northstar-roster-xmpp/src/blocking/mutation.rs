@@ -2,7 +2,9 @@ use super::presence::notify_blocking_presence;
 use super::push::push_blocking_change;
 use super::BlockingSession;
 use anyhow::Result;
-use northstar_roster_application::blocking::{BlockUpdateOutcome, UnblockUpdateOutcome};
+use northstar_roster_application::blocking_mutation::{
+    BlockingMutation as Mutation, BlockingMutationOutcome,
+};
 use northstar_xep_0191::{BlockPattern, BlockingCommand, BlockingMutation};
 use northstar_xml_builder::stanza::{iq_error, iq_result};
 use roxmltree::Node;
@@ -13,33 +15,29 @@ pub async fn block<S: BlockingSession>(
     id: &str,
     root: Node<'_, '_>,
 ) -> Result<String> {
-    let Some(user) = session.session_account() else {
+    let (Some(user), Some(actor)) = (session.session_account(), session.roster_actor()) else {
         return Ok(iq_error(id, "not-authorized"));
     };
     let items = match northstar_xep_0191::parse_iq(root) {
         Ok(BlockingCommand::Mutate(BlockingMutation::Block(items))) => items,
         _ => return Ok(iq_error(id, "bad-request")),
     };
-    let items = patterns_to_strings(&items);
     if items.is_empty() {
         return Ok(iq_error(id, "bad-request"));
     }
-    // Resolve presence authorization before mutating the blocklist.  A
-    // post-commit roster failure must not turn a durable command into a
-    // transport error that the client may retry without receiving the
-    // required transition.
-    let roster = session.blocking_service().roster(user.id).await?;
-    let changed = match session.blocking_service().block(user.id, &items).await? {
-        BlockUpdateOutcome::Changed(changed) => changed,
-        BlockUpdateOutcome::QuotaExceeded => {
+    let mutation = Mutation::Block(items.into_iter().map(BlockPattern::into_jid).collect());
+    let change = match session.apply_blocking(actor, mutation).await? {
+        BlockingMutationOutcome::Committed(change) => change,
+        BlockingMutationOutcome::QuotaExceeded => {
             return Ok(iq_error(id, "resource-constraint"));
         }
-        BlockUpdateOutcome::Unavailable => {
+        BlockingMutationOutcome::Unavailable => {
             return Ok(iq_error(id, "not-authorized"));
         }
     };
-    if !changed.is_empty() {
-        notify_blocking_presence(session, &user, &roster, &changed, false).await;
+    if !change.delta.is_empty() {
+        let changed = change.delta.clone();
+        notify_blocking_presence(session, change).await;
         push_blocking_change(session, &user, "block", &changed).await;
     }
     Ok(iq_result(id, ""))
@@ -51,7 +49,7 @@ pub async fn unblock<S: BlockingSession>(
     id: &str,
     root: Node<'_, '_>,
 ) -> Result<String> {
-    let Some(user) = session.session_account() else {
+    let (Some(user), Some(actor)) = (session.session_account(), session.roster_actor()) else {
         return Ok(iq_error(id, "not-authorized"));
     };
     let mutation = match northstar_xep_0191::parse_iq(root) {
@@ -59,25 +57,24 @@ pub async fn unblock<S: BlockingSession>(
         | Ok(BlockingCommand::Mutate(mutation @ BlockingMutation::UnblockAll)) => mutation,
         _ => return Ok(iq_error(id, "bad-request")),
     };
-    let items = match &mutation {
-        BlockingMutation::Unblock(items) => patterns_to_strings(items),
-        BlockingMutation::UnblockAll => Vec::new(),
+    let mutation = match mutation {
+        BlockingMutation::Unblock(items) => {
+            Mutation::Unblock(items.into_iter().map(BlockPattern::into_jid).collect())
+        }
+        BlockingMutation::UnblockAll => Mutation::UnblockAll,
         BlockingMutation::Block(_) => unreachable!("unblock parser returned block mutation"),
     };
-    let roster = session.blocking_service().roster(user.id).await?;
-    let unblock_all = items.is_empty();
-    let changed = match session
-        .blocking_service()
-        .unblock(user.id, if unblock_all { None } else { Some(&items) })
-        .await?
-    {
-        UnblockUpdateOutcome::Changed(changed) => changed,
-        UnblockUpdateOutcome::Unavailable => {
+    let unblock_all = matches!(mutation, Mutation::UnblockAll);
+    let change = match session.apply_blocking(actor, mutation).await? {
+        BlockingMutationOutcome::Committed(change) => change,
+        BlockingMutationOutcome::QuotaExceeded => return Ok(iq_error(id, "resource-constraint")),
+        BlockingMutationOutcome::Unavailable => {
             return Ok(iq_error(id, "not-authorized"));
         }
     };
-    if !changed.is_empty() {
-        notify_blocking_presence(session, &user, &roster, &changed, true).await;
+    if !change.delta.is_empty() {
+        let changed = change.delta.clone();
+        notify_blocking_presence(session, change).await;
         push_blocking_change(
             session,
             &user,
@@ -92,12 +89,5 @@ pub async fn unblock<S: BlockingSession>(
 pub(super) fn patterns_from_jids(jids: &[String]) -> Result<Vec<BlockPattern>> {
     jids.iter()
         .map(|jid| northstar_xmpp_types::jid::CanonicalJid::parse(jid).map(BlockPattern::new))
-        .collect()
-}
-
-fn patterns_to_strings(patterns: &[BlockPattern]) -> Vec<String> {
-    patterns
-        .iter()
-        .map(|pattern| pattern.jid().to_string())
         .collect()
 }

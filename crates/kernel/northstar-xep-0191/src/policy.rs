@@ -6,6 +6,24 @@ use crate::model::{
 use northstar_xmpp_types::jid::CanonicalJid;
 use std::collections::BTreeSet;
 
+/// The other gates (reverse blocking and both applicable privacy decisions)
+/// are sampled with the coverage transition. Directed grants can require an
+/// explicit unavailable even when those gates would suppress normal status.
+pub fn effective_presence_transition(
+    covered_before: bool,
+    covered_after: bool,
+    other_policy_allows: bool,
+    directed_grant: bool,
+) -> Option<PresenceTransition> {
+    match (covered_before, covered_after) {
+        (false, true) if other_policy_allows || directed_grant => {
+            Some(PresenceTransition::SendUnavailable)
+        }
+        (true, false) if other_policy_allows => Some(PresenceTransition::RestoreCurrent),
+        _ => None,
+    }
+}
+
 pub fn plan_blocking_effects(
     mutation: BlockingMutation,
     changed: &[BlockPattern],
@@ -56,3 +74,6 @@ pub fn presence_targets(
     }
     targets.into_iter().collect()
 }
+
+#[cfg(test)]
+mod tests;

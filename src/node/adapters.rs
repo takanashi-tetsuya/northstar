@@ -46,6 +46,7 @@ pub(in crate::node) mod process_shutdown;
 pub(crate) mod pubsub_notification_delivery;
 pub(in crate::node) mod push_notification_delivery;
 pub(in crate::node) mod remote_route;
+mod roster_blocking_mutation;
 pub(crate) mod roster_fanout;
 pub(crate) mod roster_removal_presence;
 pub(in crate::node) mod runtime_control_refresh;

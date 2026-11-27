@@ -8,6 +8,8 @@ pub use northstar_auth_core::normalize_username;
 pub use northstar_federation_core::S2sOutboxPolicy;
 pub use northstar_roster_core::*;
 pub mod blocking;
+pub mod blocking_mutation;
+pub mod blocking_mutation_repository;
 pub mod communication_policy;
 mod events;
 pub mod notification_admission;

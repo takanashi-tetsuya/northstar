@@ -17,46 +17,22 @@ pub const BLOCKING_PUSH_TIMEOUT: Duration = Duration::from_secs(2);
 /// Node-owned routes for committed block-list, privacy-list and blocking-presence changes.
 pub trait RosterFanoutRoutes: Send + Sync {
     fn fanout_sessions(&self, jid: &str) -> Vec<(String, OnlineSession)>;
-    fn fanout_local_domain(&self) -> &str;
     fn record_fanout_failure(&self);
     fn remote_blocklist_push(
         &self,
         owner: &str,
         push: impl FnMut() -> String + Send,
     ) -> impl Future<Output = Result<Vec<RemoteRouteFailure>>> + Send;
-    fn remote_blocking_presence_change(
-        &self,
-        owner: &str,
-        targets: &[String],
-        changed_patterns: &[String],
-        available: bool,
-    ) -> impl Future<Output = Result<Vec<RemoteRouteFailure>>> + Send;
     fn remote_privacy_push(
         &self,
         account: &str,
         base: &str,
     ) -> impl Future<Output = Result<Vec<RemoteRouteFailure>>> + Send;
-    fn remote_resource_nodes(
-        &self,
-        target: &str,
-    ) -> impl Future<Output = Result<Vec<String>>> + Send;
-    fn send_available_presence_to_node(
-        &self,
-        node_id: &str,
-        target: &str,
-        delivery: &str,
-    ) -> impl Future<Output = ()> + Send;
-    fn external_presence_domain_allowed(&self, domain: &str) -> bool;
-    fn send_federated_presence(
-        &self,
-        domain: &str,
-        delivery: String,
-        from: String,
-    ) -> impl Future<Output = ()> + Send;
 }
 
 #[cfg(test)]
 mod tests {
+    use super::blocking_presence::tests::{change, contact};
     use super::*;
     use northstar_stream::local_routes::session::test_online_session;
     use northstar_xml_builder::rewrite::set_to;
@@ -67,12 +43,7 @@ mod tests {
     #[derive(Debug, PartialEq)]
     enum RemoteCall {
         Blocklist(String),
-        BlockingPresence(String, Vec<String>, Vec<String>, bool),
         Privacy(String, String),
-        ResourceNodes(String),
-        NodePresence(String, String, String),
-        DomainPolicy(String),
-        FederatedPresence(String, String, String),
     }
 
     #[derive(Default)]
@@ -82,8 +53,6 @@ mod tests {
         sessions: Vec<(String, OnlineSession)>,
         failures: AtomicU64,
         calls: Mutex<Vec<RemoteCall>>,
-        nodes: Vec<String>,
-        allowed_domains: Vec<String>,
     }
 
     impl RosterFanoutRoutes for Routes {
@@ -95,10 +64,6 @@ mod tests {
                 })
                 .cloned()
                 .collect()
-        }
-
-        fn fanout_local_domain(&self) -> &str {
-            "example.test"
         }
 
         fn record_fanout_failure(&self) {
@@ -121,25 +86,6 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn remote_blocking_presence_change(
-            &self,
-            owner: &str,
-            targets: &[String],
-            changed_patterns: &[String],
-            available: bool,
-        ) -> Result<Vec<RemoteRouteFailure>> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(RemoteCall::BlockingPresence(
-                    owner.to_owned(),
-                    targets.to_vec(),
-                    changed_patterns.to_vec(),
-                    available,
-                ));
-            Ok(Vec::new())
-        }
-
         async fn remote_privacy_push(
             &self,
             account: &str,
@@ -150,46 +96,6 @@ mod tests {
                 .unwrap()
                 .push(RemoteCall::Privacy(account.to_owned(), base.to_owned()));
             Ok(Vec::new())
-        }
-
-        async fn remote_resource_nodes(&self, target: &str) -> Result<Vec<String>> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(RemoteCall::ResourceNodes(target.to_owned()));
-            Ok(self.nodes.clone())
-        }
-
-        async fn send_available_presence_to_node(
-            &self,
-            node_id: &str,
-            target: &str,
-            delivery: &str,
-        ) {
-            self.calls.lock().unwrap().push(RemoteCall::NodePresence(
-                node_id.to_owned(),
-                target.to_owned(),
-                delivery.to_owned(),
-            ));
-        }
-
-        fn external_presence_domain_allowed(&self, domain: &str) -> bool {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(RemoteCall::DomainPolicy(domain.to_owned()));
-            self.allowed_domains.iter().any(|allowed| allowed == domain)
-        }
-
-        async fn send_federated_presence(&self, domain: &str, delivery: String, from: String) {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(RemoteCall::FederatedPresence(
-                    domain.to_owned(),
-                    delivery,
-                    from,
-                ));
         }
     }
 
@@ -399,134 +305,41 @@ mod tests {
     #[test]
     fn blocking_presence_unavailable_reaches_roster_and_matching_directed_targets() {
         run(async {
-            let (owner, _owner_rx) = session("source");
-            owner.available.store(true, Ordering::Release);
-            owner.directed_presence.insert("bob@example.test".into());
-            owner
-                .directed_presence
-                .insert("carol@example.test/Phone".into());
-            owner
-                .directed_presence
-                .insert("dave@example.test/Phone".into());
-            let (unavailable_owner, _unavailable_owner_rx) = session("unavailable-source");
-            unavailable_owner
-                .directed_presence
-                .insert("dave@example.test/Phone".into());
-            let (bob, mut bob_rx) = session("bob");
-            bob.available.store(true, Ordering::Release);
-            let (carol, mut carol_rx) = session("Phone");
-            let (dave, mut dave_rx) = session("Phone");
-            let routes = Routes {
-                sessions: vec![
-                    ("alice@example.test/source".into(), owner),
-                    (
-                        "alice@example.test/unavailable-source".into(),
-                        unavailable_owner,
-                    ),
-                    ("bob@example.test/Desktop".into(), bob),
-                    ("carol@example.test/Phone".into(), carol),
-                    ("dave@example.test/Phone".into(), dave),
-                ],
-                ..Routes::default()
-            };
-            let targets = vec!["bob@example.test".into()];
-            let patterns = vec!["bob@example.test".into(), "carol@example.test/Phone".into()];
+            let roster = contact("bob@example.test/Desktop", None, false, true, true);
+            let directed = contact("carol@example.test/Phone", None, false, true, false);
+            let unrelated = contact("dave@example.test/Phone", None, false, false, true);
+            let mut directed = directed;
+            directed.route.directed = Some("carol@example.test/Phone".into());
+            let mut pages = Vec::new();
             deliver_blocking_presence_change(
-                &routes,
-                "alice@example.test",
-                &targets,
-                &patterns,
-                false,
+                change(vec![roster.clone(), directed.clone(), unrelated]),
+                |page, available| {
+                    pages.push((page, available));
+                    std::future::ready(())
+                },
             )
             .await;
-            for (target, receiver) in [
-                ("bob@example.test", &mut bob_rx),
-                ("carol@example.test/Phone", &mut carol_rx),
-            ] {
-                let stanza = receiver.try_recv().unwrap().stanza;
-                let document = roxmltree::Document::parse(&stanza).unwrap();
-                let presence = document.root_element();
-                assert_eq!(presence.attribute("to"), Some(target));
-                assert_eq!(
-                    presence.attribute("from"),
-                    Some("alice@example.test/source")
-                );
-                assert_eq!(presence.attribute("type"), Some("unavailable"));
-                assert!(receiver.try_recv().is_err());
-            }
-            assert!(dave_rx.try_recv().is_err());
-            let calls = routes.calls.lock().unwrap();
-            assert_eq!(calls.len(), 3);
-            for target in ["bob@example.test", "carol@example.test/Phone"] {
-                assert!(calls.contains(&RemoteCall::ResourceNodes(target.into())));
-            }
-            assert_eq!(
-                calls.last(),
-                Some(&RemoteCall::BlockingPresence(
-                    "alice@example.test".into(),
-                    targets,
-                    patterns,
-                    false,
-                ))
-            );
-            assert_eq!(routes.failures.load(Ordering::Relaxed), 0);
+            assert_eq!(pages, vec![(vec![roster.route, directed.route], false)]);
         });
     }
 
     #[test]
     fn blocking_presence_local_bare_target_skips_unavailable_recipients_and_routes_remote_nodes() {
         run(async {
-            let (owner, _owner_rx) = session("source");
-            owner.available.store(true, Ordering::Release);
-            let base = "<presence from='alice@example.test/source'><show>away</show><status>Lunch</status></presence>";
-            *owner.last_presence.write().unwrap() = Some(base.into());
-            let (available, mut available_rx) = session("available");
-            available.available.store(true, Ordering::Release);
-            let (unavailable, mut unavailable_rx) = session("unavailable");
-            let routes = Routes {
-                sessions: vec![
-                    ("alice@example.test/source".into(), owner),
-                    ("bob@example.test/available".into(), available),
-                    ("bob@example.test/unavailable".into(), unavailable),
-                ],
-                nodes: vec!["node-a".into(), "node-b".into()],
-                ..Routes::default()
-            };
-            let targets = vec!["bob@example.test".into()];
-            let patterns = vec!["bob@example.test".into()];
+            let mut local = contact("bob@example.test/available", None, true, false, true);
+            local.route.address = "bob@example.test".into();
+            let mut remote = contact("bob@example.test/remote", Some("node-b"), true, false, true);
+            remote.route.address = "bob@example.test".into();
+            let mut pages = Vec::new();
             deliver_blocking_presence_change(
-                &routes,
-                "alice@example.test",
-                &targets,
-                &patterns,
-                true,
+                change(vec![local.clone(), remote.clone()]),
+                |page, available| {
+                    pages.push((page, available));
+                    std::future::ready(())
+                },
             )
             .await;
-            let delivery = set_to(base, "bob@example.test");
-            let queued = available_rx.try_recv().unwrap().stanza;
-            assert_eq!(queued, delivery);
-            assert_to(&queued, "bob@example.test");
-            assert!(available_rx.try_recv().is_err());
-            assert!(unavailable_rx.try_recv().is_err());
-            assert_eq!(
-                *routes.calls.lock().unwrap(),
-                vec![
-                    RemoteCall::ResourceNodes("bob@example.test".into()),
-                    RemoteCall::NodePresence(
-                        "node-a".into(),
-                        "bob@example.test".into(),
-                        delivery.clone(),
-                    ),
-                    RemoteCall::NodePresence("node-b".into(), "bob@example.test".into(), delivery,),
-                    RemoteCall::BlockingPresence(
-                        "alice@example.test".into(),
-                        targets,
-                        patterns,
-                        true,
-                    ),
-                ]
-            );
-            assert_eq!(routes.failures.load(Ordering::Relaxed), 0);
+            assert_eq!(pages, vec![(vec![local.route, remote.route], true)]);
         });
     }
 
@@ -534,52 +347,28 @@ mod tests {
     fn blocking_presence_remote_domain_requires_policy() {
         run(async {
             for allowed in [false, true] {
-                let (owner, _owner_rx) = session("source");
-                owner.available.store(true, Ordering::Release);
-                let base =
-                    "<presence from='alice@example.test/source'><status>Here</status></presence>";
-                *owner.last_presence.write().unwrap() = Some(base.into());
-                let routes = Routes {
-                    sessions: vec![("alice@example.test/source".into(), owner)],
-                    allowed_domains: if allowed {
-                        vec!["remote.test".into()]
-                    } else {
-                        Vec::new()
-                    },
-                    ..Routes::default()
-                };
-                let targets = vec!["bob@remote.test/Phone".into()];
-                let patterns = vec!["remote.test".into()];
+                let mut external = contact("bob@remote.test/Phone", None, true, false, allowed);
+                external.route.recipient = None;
+                let mut pages = Vec::new();
                 deliver_blocking_presence_change(
-                    &routes,
-                    "alice@example.test",
-                    &targets,
-                    &patterns,
-                    true,
+                    change(vec![external.clone()]),
+                    |page, available| {
+                        pages.push((page, available));
+                        std::future::ready(())
+                    },
                 )
                 .await;
-                let mut expected = vec![RemoteCall::DomainPolicy("remote.test".into())];
-                if allowed {
-                    let delivery = set_to(base, "bob@remote.test/Phone");
-                    assert_to(&delivery, "bob@remote.test/Phone");
-                    expected.push(RemoteCall::FederatedPresence(
-                        "remote.test".into(),
-                        delivery,
-                        "alice@example.test/source".into(),
-                    ));
-                }
-                expected.push(RemoteCall::BlockingPresence(
-                    "alice@example.test".into(),
-                    targets,
-                    patterns,
-                    true,
-                ));
-                assert_eq!(*routes.calls.lock().unwrap(), expected);
-                assert_eq!(routes.failures.load(Ordering::Relaxed), 0);
+                assert_eq!(
+                    pages,
+                    if allowed {
+                        vec![(vec![external.route], true)]
+                    } else {
+                        Vec::new()
+                    }
+                );
             }
         });
     }
-
     #[test]
     fn blocklist_push_builds_the_remote_stanza_only_when_asked() {
         tokio::runtime::Builder::new_current_thread()

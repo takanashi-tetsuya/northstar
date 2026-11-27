@@ -303,6 +303,8 @@ pub(super) enum ClusterControlOutcome {
     Matched,
     AuthoritativelyAbsent,
     WrongOwner,
+    BlockingSnapshot(Vec<crate::listener_blocking::wire::SnapshotEntry>),
+    BlockingPresence { failed: usize },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -13,10 +13,6 @@ impl RosterFanoutRoutes for ServerNode {
         self.session.live().sessions().session_entries_for(jid)
     }
 
-    fn fanout_local_domain(&self) -> &str {
-        &self.config.domain
-    }
-
     fn record_fanout_failure(&self) {
         PostAcceptFailureTelemetry::new(Arc::clone(
             &self.metrics.post_accept_side_effect_failures_total,
@@ -31,27 +27,6 @@ impl RosterFanoutRoutes for ServerNode {
     ) -> Result<Vec<RemoteRouteFailure>> {
         self.cluster
             .route_remote_blocklist_push(owner, push)
-            .await
-            .map(|failures| {
-                failures
-                    .into_iter()
-                    .map(|failure| RemoteRouteFailure {
-                        node_id: failure.node_id,
-                        error: failure.error,
-                    })
-                    .collect()
-            })
-    }
-
-    async fn remote_blocking_presence_change(
-        &self,
-        owner: &str,
-        targets: &[String],
-        changed_patterns: &[String],
-        available: bool,
-    ) -> Result<Vec<RemoteRouteFailure>> {
-        self.cluster
-            .route_remote_blocking_presence_change(owner, targets, changed_patterns, available)
             .await
             .map(|failures| {
                 failures
@@ -81,28 +56,5 @@ impl RosterFanoutRoutes for ServerNode {
                     })
                     .collect()
             })
-    }
-
-    async fn remote_resource_nodes(&self, target: &str) -> Result<Vec<String>> {
-        self.cluster.remote_resource_nodes(target).await
-    }
-
-    async fn send_available_presence_to_node(&self, node_id: &str, target: &str, delivery: &str) {
-        let _ = self
-            .cluster
-            .route_remote_available_presence_to_node(node_id, target, delivery)
-            .await;
-    }
-
-    fn external_presence_domain_allowed(&self, domain: &str) -> bool {
-        self.config.external_route_domain_allowed(domain)
-    }
-
-    async fn send_federated_presence(&self, domain: &str, delivery: String, from: String) {
-        let _ = self
-            .federation
-            .federation_outbox
-            .send(domain, delivery, Some(from))
-            .await;
     }
 }

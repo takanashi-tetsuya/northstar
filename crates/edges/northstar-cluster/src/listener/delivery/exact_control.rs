@@ -36,6 +36,7 @@ pub(super) fn validate_control_and_roster_push<'a>(
     if expected_user_id != Some(control.account_id)
         || expected_auth_generation != Some(control.auth_generation)
         || routes != control.expected_connections
+        || control.kind == ExactControlKind::BlockingPresence
         || !selectors_match(json, control.kind)
         || validate_exact_control(&control, target, document).is_err()
     {

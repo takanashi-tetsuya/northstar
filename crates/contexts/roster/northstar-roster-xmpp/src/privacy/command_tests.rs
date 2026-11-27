@@ -1,9 +1,13 @@
-use super::{privacy_get, privacy_set, PrivacySession};
-use crate::blocking::{blocklist, BlockingSession};
+use super::list_commands::{edit_list, select_default};
+use super::{privacy_get, PrivacySession};
+use crate::blocking::{blocklist, BlockingMutationHost, BlockingSession};
 use crate::SessionIdentity;
 use anyhow::Result;
 use northstar_roster_application::blocking::{
     BlockUpdateOutcome, BlockingRepository, BlockingService, RosterEntry, UnblockUpdateOutcome,
+};
+use northstar_roster_application::blocking_mutation::{
+    BlockingMutation, BlockingMutationOutcome, CommittedBlockingChange,
 };
 use northstar_roster_application::privacy::{
     commands::{
@@ -15,8 +19,9 @@ use northstar_roster_application::privacy::{
 };
 use northstar_roster_application::SystemRosterEvents;
 use northstar_roster_core::{PresenceAccount, RosterActor, RosterEventSource};
-use northstar_xml_builder::stanza::iq_error;
+use northstar_xml_builder::stanza::{iq_error, iq_result};
 use roxmltree::Document;
+use std::ops::ControlFlow;
 use uuid::Uuid;
 
 struct CommandSession {
@@ -49,9 +54,23 @@ impl CommandSession {
         if kind == "get" {
             privacy_get(self, "p", root, query).await.unwrap()
         } else {
-            let (reply, push) = privacy_set(self, "p", root, query).await.unwrap();
-            assert!(push.is_none());
-            reply
+            // The default and list leaves are generic over the session;
+            // active selection needs the protocol session and its host.
+            let control = query.first_element_child().unwrap();
+            let mut changed = None;
+            let result = match control.tag_name().name() {
+                "default" => select_default(self, "p", control).await.unwrap(),
+                "list" => edit_list(self, "p", control, &mut changed).await.unwrap(),
+                other => panic!("unsupported privacy control {other}"),
+            };
+            match result {
+                ControlFlow::Break((reply, push)) => {
+                    assert!(push.is_none());
+                    reply
+                }
+                ControlFlow::Continue(Ok(())) => iq_result("p", ""),
+                ControlFlow::Continue(Err(condition)) => iq_error("p", condition),
+            }
         }
     }
 }
@@ -104,10 +123,6 @@ impl PrivacySession for CommandSession {
         Some("expired".into())
     }
 
-    fn privacy_set_active_list(&self, _: Option<String>) {
-        unreachable!()
-    }
-
     fn privacy_local_resources(&self, _: &str) -> usize {
         unreachable!()
     }
@@ -140,7 +155,17 @@ impl BlockingSession for CommandSession {
         unreachable!()
     }
 
-    async fn blocking_presence_change(&self, _: &str, _: &[String], _: &[String], _: bool) {
+    async fn blocking_presence_change(&self, _: CommittedBlockingChange) {
+        unreachable!()
+    }
+}
+
+impl BlockingMutationHost for CommandSession {
+    async fn apply_blocking(
+        &self,
+        _: RosterActor,
+        _: BlockingMutation,
+    ) -> Result<BlockingMutationOutcome> {
         unreachable!()
     }
 }

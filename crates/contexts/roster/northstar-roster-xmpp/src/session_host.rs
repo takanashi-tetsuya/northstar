@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
+use northstar_roster_application::blocking_mutation::CommittedBlockingChange;
 use northstar_roster_application::privacy::commands::PolicyCommandRepository;
 use northstar_roster_application::{RosterRepository, RosterService, S2sOutboxPolicy};
 use northstar_roster_core::{
@@ -39,7 +40,7 @@ impl PostAcceptFailureTelemetry {
 
 /// What the node provides to the roster, blocking and privacy handlers of a client session, beyond the session
 /// core's host. The composition root implements it.
-pub trait RosterSessionHost: Send + Sync {
+pub trait RosterSessionHost: Send + Sync + crate::blocking::BlockingMutationHost {
     /// The node's gate for projecting the current avatar into cached presence.
     fn avatar_presence_gate(&self) -> &AvatarPresenceGate;
     /// The roster service, over the repository the composition root binds.
@@ -87,10 +88,7 @@ pub trait RosterSessionHost: Send + Sync {
     /// Delivers the polite-blocking presence transitions of a blocklist change, on every node.
     fn deliver_blocking_presence_change(
         &self,
-        owner: &str,
-        targets: &[String],
-        changed_patterns: &[String],
-        available: bool,
+        change: CommittedBlockingChange,
     ) -> impl Future<Output = ()> + Send;
     /// The number of local resources of `account`.
     fn local_resource_count(&self, account: &str) -> usize;

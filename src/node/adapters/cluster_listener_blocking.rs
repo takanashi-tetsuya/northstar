@@ -9,12 +9,27 @@ impl ServerNode {
         &self,
     ) -> ClusterListenerBlocking<crate::node::adapters::cluster_adapters::PostgresClusterAdapters>
     {
-        ClusterListenerBlocking {
-            sessions: Arc::clone(self.session.live().sessions()),
-            remote_routes: self.cluster.listener_presence_routes(),
-            local_domain: self.config.domain.clone(),
-            external_routes: self.config.external_route_domain_policy(),
-            federation: self.federation.federation_outbox.clone(),
-        }
+        let roster_pool = self.pool.clone();
+        let external_routes = self.config.external_route_domain_policy();
+        ClusterListenerBlocking::new(
+            Arc::clone(self.session.live().sessions()),
+            self.cluster.clone(),
+            self.config.domain.clone(),
+            Arc::new(move |domain| external_routes.external_route_domain_allowed(domain)),
+            self.federation.federation_outbox.clone(),
+            northstar_roster_postgres::privacy::PostgresPrivacyRepository::new(self.pool.clone()),
+            Arc::new(move |owner, contact| {
+                let pool = roster_pool.clone();
+                Box::pin(async move {
+                    Ok(
+                        northstar_roster_postgres::roster::roster_item(&pool, owner, &contact)
+                            .await?
+                            .is_some_and(|(_, _, subscription, _)| {
+                                matches!(subscription.as_str(), "from" | "both")
+                            }),
+                    )
+                })
+            }),
+        )
     }
 }

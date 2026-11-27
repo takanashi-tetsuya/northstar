@@ -28,6 +28,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 mod actor;
+mod blocking_mutation_host;
 mod presence_staging;
 mod roster_sync;
 
@@ -84,14 +85,9 @@ impl<H: SessionHost + RosterSessionHost> crate::blocking::BlockingSession for Pr
 
     async fn blocking_presence_change(
         &self,
-        owner: &str,
-        targets: &[String],
-        changed_patterns: &[String],
-        available: bool,
+        change: northstar_roster_application::blocking_mutation::CommittedBlockingChange,
     ) {
-        self.host()
-            .deliver_blocking_presence_change(owner, targets, changed_patterns, available)
-            .await;
+        self.host().deliver_blocking_presence_change(change).await;
     }
 }
 

@@ -1,7 +1,15 @@
-use super::{HashSet, MAX_BLOCKED_JIDS_PER_ACCOUNT};
+use super::{
+    blocked_jids, lock_block_policy_in_transaction, HashSet, MAX_BLOCKED_JIDS_PER_ACCOUNT,
+};
 use anyhow::Result;
+use northstar_roster_application::blocking_mutation::{
+    BlockingMutation, BlockingMutationOutcome, BlockingRouteCandidate, CommittedBlockingChange,
+};
+use northstar_roster_application::RosterActor;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
+
+mod presence_facts;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BlockJidsUpdate {
@@ -55,13 +63,24 @@ pub async fn block_jids(pool: &PgPool, owner_id: Uuid, jids: &[String]) -> Resul
         transaction.rollback().await?;
         return Ok(BlockJidsUpdate::Unavailable);
     }
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
-        .bind(owner_id)
-        .execute(&mut *transaction)
-        .await?;
+    lock_block_policy_in_transaction(&mut transaction, owner_id).await?;
+    let update = insert_blocks(&mut transaction, owner_id, &jids).await?;
+    if update == BlockJidsUpdate::QuotaExceeded {
+        transaction.rollback().await?;
+    } else {
+        transaction.commit().await?;
+    }
+    Ok(update)
+}
+
+async fn insert_blocks(
+    transaction: &mut Transaction<'_, Postgres>,
+    owner_id: Uuid,
+    jids: &[String],
+) -> Result<BlockJidsUpdate> {
     let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM blocked_jids WHERE owner_id = $1")
         .bind(owner_id)
-        .fetch_one(&mut *transaction)
+        .fetch_one(&mut **transaction)
         .await?;
     let mut changed: Vec<String> = sqlx::query_scalar(
         "INSERT INTO blocked_jids (owner_id, blocked_jid) \
@@ -69,8 +88,8 @@ pub async fn block_jids(pool: &PgPool, owner_id: Uuid, jids: &[String]) -> Resul
          ON CONFLICT DO NOTHING RETURNING blocked_jid",
     )
     .bind(owner_id)
-    .bind(&jids)
-    .fetch_all(&mut *transaction)
+    .bind(jids)
+    .fetch_all(&mut **transaction)
     .await?;
     if !changed.is_empty()
         && usize::try_from(existing)
@@ -78,11 +97,9 @@ pub async fn block_jids(pool: &PgPool, owner_id: Uuid, jids: &[String]) -> Resul
             .saturating_add(changed.len())
             > MAX_BLOCKED_JIDS_PER_ACCOUNT
     {
-        transaction.rollback().await?;
         return Ok(BlockJidsUpdate::QuotaExceeded);
     }
     changed.sort_unstable();
-    transaction.commit().await?;
     Ok(BlockJidsUpdate::Changed(changed))
 }
 
@@ -97,25 +114,106 @@ pub async fn unblock_jids(
         transaction.rollback().await?;
         return Ok(UnblockJidsUpdate::Unavailable);
     }
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
-        .bind(owner_id)
-        .execute(&mut *transaction)
-        .await?;
-    let mut changed: Vec<String> = if let Some(jids) = canonical_jids.as_deref() {
+    lock_block_policy_in_transaction(&mut transaction, owner_id).await?;
+    let changed = delete_blocks(&mut transaction, owner_id, canonical_jids.as_deref()).await?;
+    transaction.commit().await?;
+    Ok(UnblockJidsUpdate::Changed(changed))
+}
+
+async fn delete_blocks(
+    transaction: &mut Transaction<'_, Postgres>,
+    owner_id: Uuid,
+    jids: Option<&[String]>,
+) -> Result<Vec<String>> {
+    let mut changed: Vec<String> = if let Some(jids) = jids {
         sqlx::query_scalar(
             "DELETE FROM blocked_jids WHERE owner_id = $1 AND blocked_jid = ANY($2) RETURNING blocked_jid",
         )
             .bind(owner_id)
             .bind(jids)
-            .fetch_all(&mut *transaction)
+            .fetch_all(&mut **transaction)
             .await?
     } else {
         sqlx::query_scalar("DELETE FROM blocked_jids WHERE owner_id = $1 RETURNING blocked_jid")
             .bind(owner_id)
-            .fetch_all(&mut *transaction)
+            .fetch_all(&mut **transaction)
             .await?
     };
     changed.sort_unstable();
+    Ok(changed)
+}
+
+pub(in super::super) async fn apply_blocking(
+    pool: &PgPool,
+    actor: &RosterActor,
+    mutation: &BlockingMutation,
+    route_candidates: &[BlockingRouteCandidate],
+) -> Result<BlockingMutationOutcome> {
+    use BlockingMutationOutcome::*;
+
+    let Some(mut transaction) = super::super::begin_authorized_roster_mutation(
+        pool,
+        actor.account_id,
+        actor.auth_generation,
+    )
+    .await?
+    else {
+        return Ok(Unavailable);
+    };
+    let requested = mutation
+        .patterns()
+        .map(|patterns| patterns.iter().map(ToString::to_string).collect::<Vec<_>>());
+    let before = blocked_jids(&mut *transaction, actor.account_id).await?;
+    let existing = before.iter().map(String::as_str).collect::<HashSet<_>>();
+    // Check for a no-op under the owner lock before touching the roster.
+    let changes = match mutation {
+        BlockingMutation::Block(_) => requested
+            .iter()
+            .flatten()
+            .any(|jid| !existing.contains(jid.as_str())),
+        BlockingMutation::Unblock(_) => requested
+            .iter()
+            .flatten()
+            .any(|jid| existing.contains(jid.as_str())),
+        BlockingMutation::UnblockAll => !before.is_empty(),
+    };
+    if changes && !route_candidates.is_empty() {
+        sqlx::query(
+            "SELECT contact_jid FROM roster_items WHERE owner_id = $1
+             ORDER BY contact_jid FOR UPDATE",
+        )
+        .bind(actor.account_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
+    lock_block_policy_in_transaction(&mut transaction, actor.account_id).await?;
+    let delta = if !changes {
+        Vec::new()
+    } else if let BlockingMutation::Block(_) = mutation {
+        match insert_blocks(
+            &mut transaction,
+            actor.account_id,
+            requested.as_deref().unwrap_or_default(),
+        )
+        .await?
+        {
+            BlockJidsUpdate::Changed(delta) => delta,
+            BlockJidsUpdate::QuotaExceeded => {
+                transaction.rollback().await?;
+                return Ok(QuotaExceeded);
+            }
+            BlockJidsUpdate::Unavailable => unreachable!("owner already locked"),
+        }
+    } else {
+        delete_blocks(&mut transaction, actor.account_id, requested.as_deref()).await?
+    };
+    let contacts = if delta.is_empty() || route_candidates.is_empty() {
+        Vec::new()
+    } else {
+        presence_facts::capture(&mut transaction, actor, route_candidates, &before, &delta).await?
+    };
+    let change = CommittedBlockingChange { delta, contacts };
+    // WP-749 appends the revision journal here, before releasing these locks.
     transaction.commit().await?;
-    Ok(UnblockJidsUpdate::Changed(changed))
+    Ok(Committed(change))
 }

@@ -209,7 +209,8 @@ pub(super) async fn listen_once<A: ClusterAdapters>(
                 continue;
             }
         } else if is_blocking_presence_change {
-            presence::deliver_blocking_presence(&blocking, json, target, &mut turn).await?;
+            presence::deliver_blocking_presence(&blocking, &source_node, json, target, &mut turn)
+                .await;
         } else if is_sm_muc_teardown {
             session::teardown_sm_muc_session(&sm_muc_teardown, json, target, &mut turn).await;
         } else if is_muc_evict {

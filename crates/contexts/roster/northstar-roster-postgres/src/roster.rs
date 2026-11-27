@@ -650,6 +650,8 @@ mod application_repository {
     use northstar_roster_application::blocking::*;
     use sqlx::PgPool;
     use uuid::Uuid;
+
+    mod blocking_mutation;
     #[derive(Clone)]
     pub struct PostgresBlockingRepository {
         pool: PgPool,

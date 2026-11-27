@@ -61,14 +61,11 @@ pub async fn blocked_local_accounts_for_candidates(
 pub fn blocking_match_candidates(
     candidate: &northstar_xmpp_types::jid::CanonicalJid,
 ) -> Vec<String> {
-    let mut candidates = Vec::with_capacity(4);
-    if let Some(resource) = candidate.resourcepart() {
+    let mut candidates = Vec::with_capacity(3);
+    if candidate.resourcepart().is_some() {
         candidates.push(candidate.to_string());
-        if candidate.localpart().is_some() {
-            candidates.push(candidate.bare());
-        }
-        candidates.push(format!("{}/{}", candidate.domainpart(), resource));
-    } else if candidate.localpart().is_some() {
+    }
+    if candidate.localpart().is_some() {
         candidates.push(candidate.bare());
     }
     candidates.push(candidate.domainpart().to_owned());
@@ -80,3 +77,6 @@ pub fn blocking_match_candidates(
 pub fn blocked_jid_matches(pattern: &str, candidate: &str) -> bool {
     northstar_xmpp_types::jid_scope_matches(pattern, candidate)
 }
+
+#[cfg(test)]
+mod tests;

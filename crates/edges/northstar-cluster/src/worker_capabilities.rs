@@ -194,8 +194,16 @@ impl ClusterListenerSecurity {
     ) -> Result<northstar_security::cluster_bus::SignedClusterEnvelope> {
         let envelope = self.verify_current_envelope(raw, channel, expected_source)?;
         if envelope.kind == northstar_security::cluster_bus::ClusterCommandKind::Ack {
+            let snapshot = envelope.payload["control_outcome"]["blocking_snapshot"].as_array();
+            let byte_limit = if snapshot.is_some_and(|entries| {
+                entries.len() <= crate::listener_blocking::wire::SNAPSHOT_PAGE
+            }) {
+                MAX_CLUSTER_PAYLOAD_BYTES / 2
+            } else {
+                MAX_DELIVERY_ACK_BYTES
+            };
             anyhow::ensure!(
-                serde_json::to_vec(&envelope.payload)?.len() <= MAX_DELIVERY_ACK_BYTES,
+                serde_json::to_vec(&envelope.payload)?.len() <= byte_limit,
                 "cluster acknowledgement payload is oversized"
             );
         }

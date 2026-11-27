@@ -1041,3 +1041,6 @@ mod roster;
 
 #[cfg(test)]
 mod muc_render_receipts;
+
+#[path = "blocking_presence_exact.rs"]
+mod blocking_presence_exact;

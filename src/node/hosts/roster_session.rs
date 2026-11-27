@@ -6,6 +6,7 @@ use northstar_mix_xmpp::MixHandlers;
 use northstar_muc_xmpp::MucHandlers;
 use northstar_pubsub_xmpp::PubSubHandlers;
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
+use northstar_roster_application::blocking_mutation::CommittedBlockingChange;
 use northstar_roster_application::privacy::commands::PolicyCommandRepository;
 use northstar_roster_application::{RosterRepository, RosterService, S2sOutboxPolicy};
 use northstar_roster_core::{
@@ -134,15 +135,13 @@ impl RosterSessionHost for ServerNode {
         fanout::push_blocklist_change(self, owner, payload, || events.new_protocol_id()).await;
     }
 
-    async fn deliver_blocking_presence_change(
-        &self,
-        owner: &str,
-        targets: &[String],
-        changed_patterns: &[String],
-        available: bool,
-    ) {
-        fanout::deliver_blocking_presence_change(self, owner, targets, changed_patterns, available)
-            .await;
+    async fn deliver_blocking_presence_change(&self, change: CommittedBlockingChange) {
+        let presence = self.cluster_listener_blocking();
+        let presence = &presence;
+        fanout::deliver_blocking_presence_change(change, |targets, available| async move {
+            presence.deliver_slice(&targets, available).await;
+        })
+        .await;
     }
 
     fn local_resource_count(&self, account: &str) -> usize {

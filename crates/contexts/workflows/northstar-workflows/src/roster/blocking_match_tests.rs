@@ -62,9 +62,14 @@ fn blocking_preserves_opaque_resource_case() {
         [
             "alice@example.test",
             "alice@example.test/Phone",
-            "example.test",
-            "example.test/Phone"
+            "example.test"
         ]
+    );
+    let domain_route =
+        northstar_xmpp_types::jid::CanonicalJid::parse("example.test/Phone").unwrap();
+    assert_eq!(
+        blocking_match_candidates(&domain_route),
+        ["example.test", "example.test/Phone"]
     );
 }
 
@@ -162,6 +167,9 @@ async fn blocking_is_atomic_bounded_and_indexed_in_postgresql() {
         );
     }
     assert!(!is_blocked(&pool, owner_id, "gateway.test/phone")
+        .await
+        .unwrap());
+    assert!(!is_blocked(&pool, owner_id, "someone@gateway.test/Phone")
         .await
         .unwrap());
     assert!(!is_blocked_for_account(

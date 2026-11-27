@@ -1,17 +1,20 @@
 //! XEP-0191 blocking commands.
 
 use northstar_roster_application::blocking::{BlockingRepository, BlockingService};
+use northstar_roster_application::blocking_mutation::CommittedBlockingChange;
 
+mod command_host;
 mod mutation;
 mod presence;
 mod push;
 mod query;
 
+pub use command_host::BlockingMutationHost;
 pub use mutation::{block, unblock};
 pub use query::blocklist;
 
 /// What a client session provides to the XEP-0191 handlers.
-pub trait BlockingSession: crate::SessionIdentity {
+pub trait BlockingSession: crate::SessionIdentity + BlockingMutationHost {
     /// The blocking service, over the repository the composition root binds.
     fn blocking_service(&self) -> &BlockingService<impl BlockingRepository>;
     /// Records that this session asked for the blocklist, which makes it a target of later pushes.
@@ -23,15 +26,10 @@ pub trait BlockingSession: crate::SessionIdentity {
         owner: &str,
         payload: &str,
     ) -> impl std::future::Future<Output = ()> + Send;
-    /// Runs the polite-blocking presence transition of `owner`'s resources towards `targets` and
-    /// towards the directed-presence peers `changed_patterns` match, on this node and on the
-    /// others. `available` says whether the patterns were unblocked.
+    /// Delivers presence to the exact audience captured by the commit.
     fn blocking_presence_change(
         &self,
-        owner: &str,
-        targets: &[String],
-        changed_patterns: &[String],
-        available: bool,
+        change: CommittedBlockingChange,
     ) -> impl std::future::Future<Output = ()> + Send;
 }
 

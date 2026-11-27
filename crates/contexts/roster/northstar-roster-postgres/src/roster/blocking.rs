@@ -11,17 +11,21 @@ mod mutation;
 pub use candidates::{
     blocked_jid_matches, blocked_local_accounts_for_candidates, blocking_match_candidates,
 };
+pub(super) use mutation::apply_blocking;
 pub use mutation::{
     block_jids, canonical_blocking_jids, lock_enabled_block_owner_in_transaction, unblock_jids,
     BlockJidsUpdate, UnblockJidsUpdate,
 };
 
-pub async fn blocked_jids(pool: &PgPool, owner_id: Uuid) -> Result<Vec<String>> {
+pub async fn blocked_jids<'e>(
+    executor: impl sqlx::Executor<'e, Database = Postgres>,
+    owner_id: Uuid,
+) -> Result<Vec<String>> {
     let rows = sqlx::query(
         "SELECT blocked_jid FROM blocked_jids WHERE owner_id = $1 ORDER BY blocked_jid",
     )
     .bind(owner_id)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
     Ok(rows.iter().map(|row| row.get("blocked_jid")).collect())
 }
